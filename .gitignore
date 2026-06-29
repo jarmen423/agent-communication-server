@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target/
+
+# Cargo lock (uncomment if you don't want to lock for a library)
+# Cargo.lock
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment / local config
+.env
+.env.*
+
+# Logs
+*.log
