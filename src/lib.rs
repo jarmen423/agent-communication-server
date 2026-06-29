@@ -22,7 +22,11 @@
 pub mod client;
 pub mod protocol;
 pub mod router;
+pub mod storage;
 
 pub use client::HubClient;
 pub use protocol::{Envelope, MessageKind, Meta};
 pub use router::ControlPlane;
+
+#[cfg(feature = "storage-surreal")]
+pub use storage::{AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, Storage, SurrealStorage};

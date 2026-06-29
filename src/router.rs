@@ -14,6 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::{AgentInfo, AgentRegistry};
 use crate::protocol::{subjects, Envelope};
+use crate::storage::{AgentRecord, Storage};
 
 /// Routing rules — maps channel names to endpoint lists.
 /// In the base implementation routing is direct (channel → channel.<name>),
@@ -56,10 +57,15 @@ impl RoutingTable {
 /// 2. Routes each envelope to `channel.<channel>`.
 /// 3. Subscribes to `hub.register` — tracks agent registrations.
 /// 4. Optionally subscribes to `hub.presence` — tracks heartbeats.
+/// 5. Async mirrors envelopes + registrations to `Storage` (off the hot path).
 pub struct ControlPlane {
     nats: async_nats::Client,
     routing: RoutingTable,
     registry: AgentRegistry,
+    /// Optional persistence backend. When set, envelopes and agent
+    /// registrations are fire-and-forget mirrored to storage.
+    /// The hot path (NATS routing) never blocks on storage writes.
+    storage: Option<Arc<dyn Storage>>,
 }
 
 impl ControlPlane {
@@ -72,7 +78,15 @@ impl ControlPlane {
             nats,
             routing: RoutingTable::new(),
             registry: AgentRegistry::new(),
+            storage: None,
         })
+    }
+
+    /// Attach a storage backend for persistence (agent registry, message
+    /// history, conversation threading). Must be called before `run()`.
+    pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     /// Run the control plane event loop. Blocks until cancelled.
@@ -149,6 +163,17 @@ impl ControlPlane {
 
                 // Flush to ensure routed messages reach subscribers promptly
                 let _ = self.nats.flush().await;
+
+                // Async mirror to storage (off the hot path — fire and forget)
+                if let Some(storage) = &self.storage {
+                    let env_clone = env.clone();
+                    let storage = storage.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = storage.store_envelope(&env_clone).await {
+                            warn!(error = %e, "storage: failed to store envelope (non-fatal)");
+                        }
+                    });
+                }
             }
             Err(e) => {
                 warn!(%subject, error = %e, "failed to decode envelope, dropping");
@@ -180,6 +205,23 @@ impl ControlPlane {
                     for cap in &caps {
                         self.routing.add_subscriber(cap, ident).await;
                     }
+
+                    // Async mirror to storage (persisted agent registry)
+                    if let Some(storage) = &self.storage {
+                        let record = AgentRecord {
+                            identity: ident.to_string(),
+                            capabilities: caps.clone(),
+                            last_seen: chrono::Utc::now(),
+                            registered_at: chrono::Utc::now(),
+                            metadata: serde_json::json!({}),
+                        };
+                        let storage = storage.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = storage.register_agent(record).await {
+                                warn!(error = %e, "storage: failed to register agent (non-fatal)");
+                            }
+                        });
+                    }
                 }
             }
             Err(e) => {
@@ -195,6 +237,17 @@ impl ControlPlane {
                 if let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) {
                     debug!(identity = %ident, "heartbeat received");
                     self.registry.register(ident.to_string(), vec![]).await;
+
+                    // Async mirror: update agent liveness in storage
+                    if let Some(storage) = &self.storage {
+                        let storage = storage.clone();
+                        let ident = ident.to_string();
+                        tokio::spawn(async move {
+                            if let Err(e) = storage.touch_agent(&ident).await {
+                                warn!(error = %e, "storage: failed to touch agent (non-fatal)");
+                            }
+                        });
+                    }
                 }
             }
             Err(e) => {

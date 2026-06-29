@@ -36,3 +36,11 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
+async-trait = "0.1"
+
+# ── Storage backends (enable one via feature flag) ─────────────
+surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
+
+[features]
+default = ["storage-surreal"]
+storage-surreal = ["dep:surrealdb"]
