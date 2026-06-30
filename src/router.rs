@@ -14,6 +14,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::{AgentInfo, AgentRegistry};
 use crate::protocol::{subjects, Envelope};
+#[cfg(feature = "storage-surreal")]
+use crate::storage::AgentFilter;
 use crate::storage::{AgentRecord, Storage};
 
 /// Routing rules — maps channel names to endpoint lists.
@@ -89,9 +91,50 @@ impl ControlPlane {
         self
     }
 
+    /// Load all known agents from the attached `Storage` backend into the
+    /// in-memory `AgentRegistry`. The in-memory registry acts as a hot-path
+    /// cache; the DB is the source of truth across restarts.
+    ///
+    /// Returns the number of agents loaded. If no storage is attached,
+    /// this is a no-op that returns 0.
+    pub async fn load_agents_from_storage(&self) -> Result<usize> {
+        let Some(storage) = &self.storage else {
+            debug!("load_agents_from_storage: no storage attached, skipping");
+            return Ok(0);
+        };
+
+        // Build an unfiltered query — pull everything the DB knows about.
+        let records: Vec<AgentRecord> = storage.find_agents(&AgentFilter::new()).await?;
+        let count = records.len();
+
+        for r in records {
+            // Use touch() so we update last_seen from DB rather than overwriting
+            // it with Utc::now() (preserves the real liveness signal).
+            self.registry
+                .register(r.identity.clone(), r.capabilities.clone())
+                .await;
+            // The in-memory AgentInfo.last_seen is set to now() by register();
+            // patch it back to the DB-recorded value for accuracy.
+            self.registry
+                .force_last_seen(&r.identity, r.last_seen)
+                .await;
+        }
+
+        info!(count, "loaded agents from storage into in-memory registry");
+        Ok(count)
+    }
+
     /// Run the control plane event loop. Blocks until cancelled.
     pub async fn run(&self) -> Result<()> {
         info!("control plane router starting");
+
+        // 0. Warm the in-memory cache from the persistent storage backend
+        //    (if attached). Non-fatal: a failure to load does not stop the
+        //    router — the in-memory registry stays empty and fresh
+        //    registrations/heartbeats populate it as usual.
+        if let Err(e) = self.load_agents_from_storage().await {
+            warn!(error = %e, "failed to warm in-memory registry from storage (non-fatal)");
+        }
 
         // 1. Subscribe to all agent sends
         let mut send_sub = self

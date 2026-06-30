@@ -195,7 +195,72 @@ impl AgentRegistry {
         );
     }
 
+    /// Update an agent's liveness (called on heartbeat). Preserves capabilities
+    /// if the agent was already registered; otherwise seeds with empty caps.
+    pub async fn touch(&self, identity: &str) {
+        let mut map = self.agents.lock().await;
+        let now = chrono::Utc::now();
+        match map.get_mut(identity) {
+            Some(existing) => existing.last_seen = now,
+            None => {
+                map.insert(
+                    identity.to_string(),
+                    AgentInfo {
+                        identity: identity.to_string(),
+                        capabilities: vec![],
+                        last_seen: now,
+                    },
+                );
+            }
+        }
+    }
+
     pub async fn list(&self) -> Vec<AgentInfo> {
         self.agents.lock().await.values().cloned().collect()
+    }
+
+    /// In-memory: return agents that have ALL the given capabilities.
+    pub async fn find_by_capability(&self, caps: &[String]) -> Vec<AgentInfo> {
+        if caps.is_empty() {
+            return self.list().await;
+        }
+        self.agents
+            .lock()
+            .await
+            .values()
+            .filter(|a| caps.iter().all(|c| a.capabilities.contains(c)))
+            .cloned()
+            .collect()
+    }
+
+    /// In-memory: return agents whose `last_seen` is within the given window.
+    pub async fn find_alive(&self, within_secs: i64) -> Vec<AgentInfo> {
+        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(within_secs);
+        self.agents
+            .lock()
+            .await
+            .values()
+            .filter(|a| a.last_seen >= cutoff)
+            .cloned()
+            .collect()
+    }
+
+    /// In-memory: remove an agent. Returns true if it existed.
+    pub async fn deregister(&self, identity: &str) -> bool {
+        self.agents.lock().await.remove(identity).is_some()
+    }
+
+    /// In-memory: force-set an agent's `last_seen` (used when warming the
+    /// cache from storage, so we preserve the real DB-recorded liveness
+    /// instead of overwriting it with the current time).
+    pub async fn force_last_seen(
+        &self,
+        identity: &str,
+        last_seen: chrono::DateTime<chrono::Utc>,
+    ) {
+        let mut map = self.agents.lock().await;
+        if let Some(existing) = map.get_mut(identity) {
+            existing.last_seen = last_seen;
+        }
     }
 }
