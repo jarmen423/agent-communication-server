@@ -21,24 +21,32 @@ Agent Client → hub.send.<channel> → Control Plane Router → channel.<name> 
 
 ```
 src/
-├── lib.rs           — module root, re-exports HubClient, Envelope, MessageKind, ControlPlane
+├── lib.rs           — module root, re-exports HubClient, Envelope, MessageKind, ControlPlane, Storage types
 ├── protocol.rs      — Envelope, Meta, MessageKind, subject conventions
-├── client.rs        — HubClient (connect, send, subscribe, register, heartbeat) + AgentRegistry
-├── router.rs        — ControlPlane (the routing daemon)
+├── client.rs        — HubClient (connect, send, subscribe, register, heartbeat) + AgentRegistry (in-memory cache)
+├── router.rs        — ControlPlane (routing daemon, optional Storage async mirror)
+├── storage/
+│   ├── mod.rs       — Storage trait + query types (AgentFilter, HistoryQuery, AgentRecord, EnvelopeRecord)
+│   └── surreal.rs   — SurrealStorage impl (embedded RocksDB, graph-native threading)
 └── bin/
-    ├── hub_server.rs    — runs the control plane router (daemon)
+    ├── hub_server.rs    — runs the control plane router (daemon, with --db-path flag)
     ├── hub_publish.rs   — send a message on a channel
-    ├── hub_observe.rs   — watch messages on channels
+    ├── hub_observe.rs   — watch messages on channels (read-only)
     ├── hub_interact.rs  — interactive REPL for human messaging
-    └── hub_register.rs  — register an agent with capabilities
+    ├── hub_register.rs  — register an agent with capabilities
+    └── hub_agents.rs    — list/search registered agents from DB (--capability, --alive, --identity)
 ```
+
+See `docs/PRODUCT_VISION.md` for the full architecture vision and communication patterns.
 
 ## Key Types
 
 - **`Envelope`** — the wire unit. Contains `Meta` (id, from, channel, to, timestamp, kind, reply_to) + free-form JSON `payload`.
 - **`HubClient`** — wraps `async_nats::Client`. Carries an `identity: String` that is auto-stamped onto every envelope. Connect once, send many.
-- **`ControlPlane`** — the router. Subscribes to `hub.send.>`, re-publishes to `channel.<name>`.
-- **`AgentRegistry`** — in-memory registry of known agents (populated from registrations + presence). Not persisted.
+- **`ControlPlane`** — the router. Subscribes to `hub.send.>`, re-publishes to `channel.<name>`. Optionally mirrors all envelopes + agent registrations to `Storage` (async, fire-and-forget).
+- **`AgentRegistry`** — in-memory cache of known agents (populated from registrations + presence, and loaded from `Storage` on startup). Hot-path queries use this; cold-path queries go to `Storage`.
+- **`Storage`** — trait abstracting the persistence backend. Default impl: `SurrealStorage` (embedded RocksDB). Provides `store_envelope()`, `query_history()`, `find_agents()`, `get_thread()`, `list_pending()`, `migrate()`, `ping()`.
+- **`SurrealStorage`** — SurrealDB v2 embedded via RocksDB. Graph-native (conversation threading), document-native (free-form JSON payloads), zero-config. Always behind the `Storage` trait (BSL safeguard).
 
 ## Build & Run
 
@@ -60,7 +68,7 @@ nats-server -c config/nats-server.conf         # start NATS server (prerequisite
 - **Wire format**: all messages are JSON `Envelope` structs. Payloads are free-form JSON — agents decide their own schemas per channel.
 - **Subject conventions**: defined in `protocol::subjects`. `hub.send.<channel>` for publishing, `channel.<name>` for routed delivery, `hub.register` / `hub.presence` for control.
 - **Message kinds**: `message`, `control`, `human`, `status` (see `MessageKind` enum).
-- **No persistence**: identities and the agent registry are in-memory only. Nothing survives a restart.
+- **Persistence**: SurrealDB (embedded RocksDB) via the `Storage` trait. All envelopes + agent registrations are async-mirrored to the DB. Agent registry persists across restarts. Message history is queryable.
 - **File size**: keep files under ~400 LOC. Split into focused modules if growing.
 
 ## Testing
