@@ -15,8 +15,7 @@ use tracing::{debug, error, info, warn};
 use crate::client::{AgentInfo, AgentRegistry};
 use crate::protocol::{subjects, Envelope};
 #[cfg(feature = "storage-surreal")]
-use crate::storage::AgentFilter;
-use crate::storage::{AgentRecord, Storage};
+use crate::storage::{AgentFilter, AgentRecord, Storage};
 
 /// Routing rules — maps channel names to endpoint lists.
 /// In the base implementation routing is direct (channel → channel.<name>),
@@ -67,6 +66,7 @@ pub struct ControlPlane {
     /// Optional persistence backend. When set, envelopes and agent
     /// registrations are fire-and-forget mirrored to storage.
     /// The hot path (NATS routing) never blocks on storage writes.
+    #[cfg(feature = "storage-surreal")]
     storage: Option<Arc<dyn Storage>>,
 }
 
@@ -80,12 +80,14 @@ impl ControlPlane {
             nats,
             routing: RoutingTable::new(),
             registry: AgentRegistry::new(),
+            #[cfg(feature = "storage-surreal")]
             storage: None,
         })
     }
 
     /// Attach a storage backend for persistence (agent registry, message
     /// history, conversation threading). Must be called before `run()`.
+    #[cfg(feature = "storage-surreal")]
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
         self.storage = Some(storage);
         self
@@ -97,6 +99,7 @@ impl ControlPlane {
     ///
     /// Returns the number of agents loaded. If no storage is attached,
     /// this is a no-op that returns 0.
+    #[cfg(feature = "storage-surreal")]
     pub async fn load_agents_from_storage(&self) -> Result<usize> {
         let Some(storage) = &self.storage else {
             debug!("load_agents_from_storage: no storage attached, skipping");
@@ -132,6 +135,7 @@ impl ControlPlane {
         //    (if attached). Non-fatal: a failure to load does not stop the
         //    router — the in-memory registry stays empty and fresh
         //    registrations/heartbeats populate it as usual.
+        #[cfg(feature = "storage-surreal")]
         if let Err(e) = self.load_agents_from_storage().await {
             warn!(error = %e, "failed to warm in-memory registry from storage (non-fatal)");
         }
@@ -224,6 +228,7 @@ impl ControlPlane {
                 let _ = self.nats.flush().await;
 
                 // Async mirror to storage (off the hot path — fire and forget)
+                #[cfg(feature = "storage-surreal")]
                 if let Some(storage) = &self.storage {
                     let env_clone = env.clone();
                     let storage = storage.clone();
@@ -266,6 +271,7 @@ impl ControlPlane {
                     }
 
                     // Async mirror to storage (persisted agent registry)
+                    #[cfg(feature = "storage-surreal")]
                     if let Some(storage) = &self.storage {
                         let record = AgentRecord {
                             identity: ident.to_string(),
@@ -298,6 +304,7 @@ impl ControlPlane {
                     self.registry.register(ident.to_string(), vec![]).await;
 
                     // Async mirror: update agent liveness in storage
+                    #[cfg(feature = "storage-surreal")]
                     if let Some(storage) = &self.storage {
                         let storage = storage.clone();
                         let ident = ident.to_string();

@@ -2,11 +2,20 @@
 name = "nats-hub"
 version = "0.1.0"
 edition = "2021"
-description = "NATS-based communication layer with control plane router for agent + human messaging"
+description = "NATS-based communication layer with control plane routing for agent + human messaging"
+license = "BSL-1.1"
+repository = "https://github.com/jarmen423/nats-hub"
+keywords = ["nats", "agent", "messaging", "communication", "surrealdb"]
+categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "nats_hub"
+path = "src/lib.rs"
 
 [[bin]]
 name = "hub-server"
 path = "src/bin/hub_server.rs"
+required-features = ["storage-surreal"]
 
 [[bin]]
 name = "hub-publish"
@@ -27,6 +36,7 @@ path = "src/bin/hub_register.rs"
 [[bin]]
 name = "hub-agents"
 path = "src/bin/hub_agents.rs"
+required-features = ["storage-surreal"]
 
 [[bin]]
 name = "hub-worker"
@@ -35,28 +45,36 @@ path = "src/bin/hub_worker.rs"
 [[bin]]
 name = "hub-history"
 path = "src/bin/hub_history.rs"
+required-features = ["storage-surreal"]
 
 [[bin]]
 name = "hub-delegate"
 path = "src/bin/hub_delegate.rs"
 
+# ── Library dependencies (what downstream crates pull in) ──────
 [dependencies]
 async-nats = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 async-trait = "0.1"
 
-# ── Storage backends (enable one via feature flag) ─────────────
+# Binaries also need clap + tracing-subscriber (not needed by library consumers)
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
 
 [features]
 default = ["storage-surreal"]
 storage-surreal = ["dep:surrealdb"]
+# No-storage mode: pure NATS transport, no persistence layer.
+# Use this when embedding nats-hub as a messaging dependency
+# without needing SurrealDB (e.g. ephemeral agents, testing).
+no-storage = []
