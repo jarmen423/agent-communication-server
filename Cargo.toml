@@ -28,6 +28,14 @@ path = "src/bin/hub_register.rs"
 name = "hub-agents"
 path = "src/bin/hub_agents.rs"
 
+[[bin]]
+name = "hub-worker"
+path = "src/bin/hub_worker.rs"
+
+[[bin]]
+name = "hub-history"
+path = "src/bin/hub_history.rs"
+
 [dependencies]
 async-nats = "0.38"
 tokio = { version = "1", features = ["full"] }

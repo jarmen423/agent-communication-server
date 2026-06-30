@@ -120,4 +120,11 @@ pub mod subjects {
     pub fn channel(name: &str) -> String {
         format!("{CHANNEL_PREFIX}.{name}")
     }
+
+    /// Build an inbox subject for direct messaging: `channel.inbox.<identity>`.
+    /// Used when `Envelope.meta.to` is set — the router routes to this subject
+    /// instead of the broadcast channel.
+    pub fn inbox(identity: &str) -> String {
+        format!("{CHANNEL_PREFIX}.inbox.{identity}")
+    }
 }

@@ -174,7 +174,11 @@ impl ControlPlane {
         }
     }
 
-    /// Handle a message on `hub.send.<channel>` — route it to `channel.<channel>`.
+    /// Handle a message on `hub.send.<channel>` — route it.
+    ///
+    /// Routing logic:
+    /// - If `meta.to` is set → route to `channel.inbox.<to>` (private DM)
+    /// - If `meta.to` is null → route to `channel.<channel>` (broadcast)
     async fn handle_send(&self, msg: &async_nats::Message) {
         // Extract channel from subject: hub.send.<channel>
         let subject = msg.subject.as_str();
@@ -184,16 +188,28 @@ impl ControlPlane {
 
         match Envelope::from_json_bytes(&msg.payload) {
             Ok(env) => {
-                debug!(
-                    id = %env.meta.id,
-                    %channel,
-                    from = %env.meta.from,
-                    kind = ?env.meta.kind,
-                    "routing envelope"
-                );
+                // Determine routing destination: inbox (DM) or broadcast
+                let dest = if let Some(ref to) = env.meta.to {
+                    debug!(
+                        id = %env.meta.id,
+                        %channel,
+                        from = %env.meta.from,
+                        to = %to,
+                        kind = ?env.meta.kind,
+                        "routing envelope to inbox (DM)"
+                    );
+                    subjects::inbox(to)
+                } else {
+                    debug!(
+                        id = %env.meta.id,
+                        %channel,
+                        from = %env.meta.from,
+                        kind = ?env.meta.kind,
+                        "routing envelope to broadcast"
+                    );
+                    subjects::channel(channel)
+                };
 
-                // Publish to channel.<channel> for subscribers
-                let dest = subjects::channel(channel);
                 if let Err(e) = self
                     .nats
                     .publish(dest.clone(), msg.payload.clone().into())

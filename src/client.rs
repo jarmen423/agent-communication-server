@@ -80,6 +80,49 @@ impl HubClient {
         Ok(id)
     }
 
+    /// Send a direct message to a specific agent (DM).
+    /// Sets `meta.to` so the router routes to `channel.inbox.<to>`.
+    pub async fn send_to(
+        &self,
+        to: &str,
+        channel: &str,
+        payload: serde_json::Value,
+    ) -> Result<String> {
+        let env = Envelope::new(self.identity.clone(), channel, MessageKind::Message, payload)
+            .to(to);
+        let id = env.meta.id.clone();
+        self.send(&env).await?;
+        Ok(id)
+    }
+
+    /// Send a reply to a specific envelope.
+    /// Sets `meta.to` (routes to sender's inbox) and `meta.reply_to`
+    /// (correlation ID for threading).
+    pub async fn send_reply(
+        &self,
+        original: &Envelope,
+        payload: serde_json::Value,
+    ) -> Result<String> {
+        let env = Envelope::new(
+            self.identity.clone(),
+            original.meta.channel.clone(),
+            MessageKind::Message,
+            payload,
+        )
+        .to(&original.meta.from)
+        .reply_to(&original.meta.id);
+        let id = env.meta.id.clone();
+        self.send(&env).await?;
+        Ok(id)
+    }
+
+    /// Subscribe to this agent's inbox (DM channel).
+    /// Returns a stream of envelopes addressed directly to this identity.
+    pub async fn subscribe_inbox(&self) -> Result<tokio::sync::mpsc::UnboundedReceiver<Envelope>> {
+        let subject = crate::protocol::subjects::inbox(&self.identity);
+        self.subscribe_subject(&subject).await
+    }
+
     // ── Subscription API ─────────────────────────────────────────────
 
     /// Subscribe to a channel subject (e.g. `channel.agents.worker1`).
