@@ -89,10 +89,17 @@ async function main() {
       return;
     }
 
+    // Extract task channel (for hub-delegate pattern) or fall back to sender inbox
+    const taskChannel = envelope.payload?.task_channel || envelope.meta.reply_to || null;
+    if (taskChannel) {
+      console.log(`[worker] task channel: ${taskChannel}`);
+    }
+
     console.log(`[worker] received task from ${envelope.meta.from}: ${prompt.slice(0, 80)}...`);
 
-    // Publish status: working
-    publishStatus(nc, args.identity, envelope.meta.channel, "working", envelope.meta.from);
+    // Publish status: working (to task channel if available, otherwise to original channel)
+    const statusChannel = taskChannel || envelope.meta.channel;
+    publishStatus(nc, args.identity, statusChannel, "working", envelope.meta.from);
 
     try {
       // Create Cline agent and run
@@ -121,26 +128,37 @@ async function main() {
 
       console.log(`[worker] task completed (${resultText.length} chars)`);
 
-      // Publish result back to sender's inbox
-      publishReply(nc, args.identity, envelope, {
+      // Publish result to task channel (for hub-delegate) AND sender's inbox (for DM pattern)
+      const resultPayload = {
         result: resultText,
         task_id: envelope.meta.id,
         status: "done",
-      });
+      };
+
+      if (taskChannel) {
+        // Publish to task channel: channel.task.<uuid>
+        publishToChannel(nc, args.identity, taskChannel, resultPayload, envelope.meta.id);
+      }
+      // Also send reply to sender's inbox (DM pattern)
+      publishReply(nc, args.identity, envelope, resultPayload);
 
       // Publish status: done
-      publishStatus(nc, args.identity, envelope.meta.channel, "done", envelope.meta.from);
+      publishStatus(nc, args.identity, statusChannel, "done", envelope.meta.from);
 
     } catch (err) {
       console.error(`[worker] task failed:`, err.message);
 
-      publishReply(nc, args.identity, envelope, {
+      const errorPayload = {
         error: err.message,
         task_id: envelope.meta.id,
         status: "error",
-      });
+      };
 
-      publishStatus(nc, args.identity, envelope.meta.channel, "error", envelope.meta.from);
+      if (taskChannel) {
+        publishToChannel(nc, args.identity, taskChannel, errorPayload, envelope.meta.id);
+      }
+      publishReply(nc, args.identity, envelope, errorPayload);
+      publishStatus(nc, args.identity, statusChannel, "error", envelope.meta.from);
     }
   };
 
@@ -181,6 +199,27 @@ function publishReply(nc, fromIdentity, originalEnvelope, payload) {
   };
   // Publish to hub.send (router will route to sender's inbox via meta.to)
   nc.publish(`hub.send.${originalEnvelope.meta.channel}`, jc.encode(reply));
+}
+
+/// Publish a message to a task channel (e.g. channel.task.<uuid>).
+/// This is a broadcast on the task channel — hub-delegate is subscribed there.
+/// Do NOT set meta.to — if set, the router would route it as a DM instead
+/// of broadcasting to channel.task.<uuid>.
+function publishToChannel(nc, fromIdentity, channel, payload, replyTo) {
+  const env = {
+    meta: {
+      id: crypto.randomUUID(),
+      from: fromIdentity,
+      // No meta.to — broadcast on the task channel
+      channel,
+      kind: "message",
+      timestamp: new Date().toISOString(),
+      reply_to: replyTo,
+    },
+    payload,
+  };
+  // Broadcast on the task channel (no meta.to = router broadcasts to channel.<name>)
+  nc.publish(`hub.send.${channel}`, jc.encode(env));
 }
 
 function publishStatus(nc, fromIdentity, channel, status, to) {
