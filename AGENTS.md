@@ -103,7 +103,7 @@ node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
 
 | Script | Backend |
 |---|---|
-| `cursor_worker.py` | Cursor SDK (sessions via agent resume) |
+| `cursor_worker.py` | Cursor SDK (`Agent.create` / `Agent.resume` via `agent_id` in ctx) |
 | `hermes_worker.py` | `hermes chat -q` + `--resume` |
 | `agy_worker.py` | `agy -p` + `--continue` per session cwd |
 | `hub-worker` (Rust) | Arbitrary `--execute` (stdin); one-shot only unless command is session-aware |

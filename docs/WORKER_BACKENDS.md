@@ -16,4 +16,4 @@ await run_worker(WorkerConfig(identity="my-worker-1", backend=MyBackend(), log_p
 
 `worker_runtime` handles: inbox routing, hub-delegate one-shot, hub-session start/send/close, status/message envelopes, heartbeat.
 
-See `agy_worker.py` (agy `--continue` per session cwd) and `hermes_worker.py` (`hermes chat --resume`).
+See `agy_worker.py`, `hermes_worker.py`, and `cursor_worker.py`.
