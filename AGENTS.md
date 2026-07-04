@@ -97,16 +97,16 @@ node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
 | `hub-delegate --to AGENT --prompt MSG [--timeout SECS] [--verbose]` | Delegate a task |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 
-## Python workers (CLI backends)
+## Python workers (typed backends)
 
-`worker_runtime.run_worker()` provides **hub-delegate + hub-session** for any backend implementing `async def run(prompt, ctx) -> (text, ctx)`. See `docs/WORKER_BACKENDS.md`.
+`worker_runtime` + **`worker_backends/`** types. See `docs/WORKER_BACKENDS.md`.
 
-| Script | Backend |
-|---|---|
-| `cursor_worker.py` | Cursor SDK (`Agent.create` / `Agent.resume` via `agent_id` in ctx) |
-| `hermes_worker.py` | `hermes chat -q` + `--resume` |
-| `agy_worker.py` | `agy -p` + `--continue` per session cwd |
-| `hub-worker` (Rust) | Arbitrary `--execute` (stdin); one-shot only unless command is session-aware |
+| Type | Examples |
+|------|----------|
+| **HeadlessCli** | `agy_worker.py`, `hermes_worker.py` (`HeadlessCliSpec` in `presets.py`) |
+| **SdkAgent** | `cursor_worker.py` |
+| **AcpAgent** | stub in `acp_agent.py` (future); Cline today = `worker.js` |
+| **StdinCli** | Rust `hub-worker --execute` |
 
 ## Communication Patterns
 
