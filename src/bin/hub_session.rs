@@ -140,7 +140,10 @@ async fn run(args: Args) -> Result<()> {
         } => {
             let client = HubClient::connect(&args.nats_url, &from).await?;
             client
-                .send_to_session(&session_id, serde_json::json!({"message": message}))
+                .send_to_session(
+                    &session_id,
+                    serde_json::json!({"action": "session_send", "message": message}),
+                )
                 .await?;
             println!("{session_id}");
             client.drain().await?;
@@ -148,12 +151,18 @@ async fn run(args: Args) -> Result<()> {
         }
         Command::Close { session_id, from } => {
             let client = HubClient::connect(&args.nats_url, &from).await?;
-            client.close_session(&session_id).await?;
-            // Update DB status
+            client
+                .send_to_session(
+                    &session_id,
+                    serde_json::json!({"action": "session_close"}),
+                )
+                .await?;
+            // Best-effort DB update — may fail if hub-server holds the lock
             #[cfg(feature = "storage-surreal")]
             {
-                let storage = SurrealStorage::connect(&args.db_path).await?;
-                storage.update_session_status(&session_id, "closed").await?;
+                if let Ok(storage) = SurrealStorage::connect(&args.db_path).await {
+                    let _ = storage.update_session_status(&session_id, "closed").await;
+                }
             }
             println!("[hub-session] closed {session_id}");
             client.drain().await?;
@@ -225,26 +234,28 @@ async fn create_session(
     .to(worker);
     client.send(&env).await?;
 
-    // Persist session to DB
+    // Persist session to DB (best-effort — if DB is locked by hub-server,
+    // we skip persistence since the router will mirror the envelope anyway)
     #[cfg(feature = "storage-surreal")]
     {
-        let storage = SurrealStorage::connect(db_path).await?;
-        storage.migrate().await?;
-        let now = chrono::Utc::now();
-        let record = SessionRecord {
-            session_id: session_id.clone(),
-            orchestrator: from.to_string(),
-            worker: worker.to_string(),
-            status: "active".to_string(),
-            cwd: cwd.clone(),
-            model: model.clone(),
-            provider: provider.clone(),
-            created_at: now,
-            updated_at: now,
-            closed_at: None,
-            metadata: serde_json::json!({}),
-        };
-        storage.create_session(record).await?;
+        if let Ok(storage) = SurrealStorage::connect(db_path).await {
+            let _ = storage.migrate().await;
+            let now = chrono::Utc::now();
+            let record = SessionRecord {
+                session_id: session_id.clone(),
+                orchestrator: from.to_string(),
+                worker: worker.to_string(),
+                status: "active".to_string(),
+                cwd: cwd.clone(),
+                model: model.clone(),
+                provider: provider.clone(),
+                created_at: now,
+                updated_at: now,
+                closed_at: None,
+                metadata: serde_json::json!({}),
+            };
+            let _ = storage.create_session(record).await;
+        }
     }
 
     // Wait for worker's "ready" status on the session channel

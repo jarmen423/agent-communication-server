@@ -4,8 +4,10 @@ nats-hub Cursor worker — subscribes to a NATS inbox channel, dispatches
 tasks to a Cursor Composer 2.5 agent via the Cursor Python SDK, and
 publishes results back via NATS.
 
-This is a drop-in alternative to worker.js (Cline SDK). It uses the same
-nats-hub envelope protocol, so hub-delegate can route to either worker.
+Supports two modes:
+  1. One-shot (hub-delegate): receive task → execute → reply on task channel
+  2. Stateful sessions (hub-session): receive session_start → subscribe to
+     session channel → handle multiple send/close → stay alive
 
 Usage:
     python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
@@ -35,7 +37,6 @@ if _env_path.exists():
             key, _, val = line.partition("=")
             key = key.strip()
             val = val.strip().strip('"').strip("'")
-            # Take first key if comma-separated
             if "," in val:
                 val = val.split(",")[0].strip().strip('"').strip("'")
             if key not in os.environ:
@@ -93,51 +94,50 @@ async def main():
 
     # Import Cursor SDK lazily (after env is loaded)
     from cursor_sdk import Agent, LocalAgentOptions
+    from cursor_sdk.types import AgentOptions
 
-    inbox_subject = f"channel.inbox.{args.identity}"
-    print(f"[cursor-worker] subscribed to {inbox_subject}")
+    # Track active sessions: session_id -> subscription + agent context
+    # Each session gets its own Cursor agent that maintains conversation state
+    active_sessions: dict[str, dict] = {}
 
-    # Subscribe to inbox (callback pattern — nats-py Subscription doesn't
-    # support async for directly)
-    async def inbox_callback(msg: Msg):
-        await process_message(msg)
+    def make_call_cursor_fn(prompt: str, agent_ctx: dict | None = None):
+        """Create a sync function that runs the Cursor SDK in a thread.
 
-    await nc.subscribe(inbox_subject, cb=inbox_callback)
+        If agent_ctx is provided with an existing agent_id, resumes that
+        session. Otherwise creates a new agent.
 
-    # Optionally subscribe to a broadcast channel
-    if args.channel:
-        async def broadcast_callback(msg: Msg):
-            await process_message(msg)
+        Returns a callable that returns (result_text, agent_id).
+        """
+        def _run() -> tuple:
+            opts = LocalAgentOptions(cwd=args.repo)
+            existing_agent_id = agent_ctx.get("agent_id") if agent_ctx else None
 
-        await nc.subscribe(f"channel.{args.channel}", cb=broadcast_callback)
-        print(f"[cursor-worker] also subscribed to channel.{args.channel}")
+            if existing_agent_id:
+                resume_opts = AgentOptions(
+                    model=args.model,
+                    local=opts,
+                    api_key=api_key,
+                )
+                agent = Agent.resume(existing_agent_id, options=resume_opts)
+            else:
+                agent = Agent.create(model=args.model, api_key=api_key, local=opts)
 
-    # Heartbeat
-    async def heartbeat():
-        while True:
-            await asyncio.sleep(30)
-            data = make_envelope(args.identity, None, "hub.presence", "status",
-                                 {"identity": args.identity})
-            await nc.publish("hub.presence", data)
+            with agent as a:
+                run = a.send(prompt)
+                return run.text(), a.agent_id
 
-    asyncio.create_task(heartbeat())
+        return _run
 
-    async def call_cursor(prompt: str, repo: str) -> str:
-        """Run the sync Cursor SDK in a thread executor so we don't block
-        the asyncio event loop while the agent is working."""
-        def _run():
-            with Agent.create(
-                model=args.model,
-                api_key=api_key,
-                local=LocalAgentOptions(cwd=repo),
-            ) as agent:
-                run = agent.send(prompt)
-                return run.text()
-
+    async def call_cursor(prompt: str, agent_ctx: dict | None = None) -> tuple[str, str]:
+        """Run Cursor SDK in a thread executor. Returns (result_text, agent_id)."""
+        fn = make_call_cursor_fn(prompt, agent_ctx)
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _run)
+        return await loop.run_in_executor(None, fn)
 
-    async def process_message(msg: Msg):
+    # ── One-shot task handling (hub-delegate) ──────────────────
+
+    async def process_oneshot(msg: Msg):
+        """Handle a one-shot task from hub-delegate."""
         try:
             envelope = json.loads(msg.data.decode())
         except Exception as e:
@@ -147,72 +147,191 @@ async def main():
         meta = envelope.get("meta", {})
         payload = envelope.get("payload", {})
 
-        prompt = payload.get("prompt") or payload.get("text") or payload.get("command")
-        if not prompt:
-            print("[cursor-worker] no prompt found in payload, skipping")
+        # Skip session messages — handled by session logic
+        action = payload.get("action")
+        if action in ("session_start", "session_send", "session_close"):
+            await process_session_msg(msg)
             return
 
-        # Extract task channel (for hub-delegate pattern).
-        # hub-delegate sets both payload.task_channel and meta.reply_to to
-        # the same task.<uuid> value.
+        prompt = payload.get("prompt") or payload.get("text") or payload.get("command")
+        if not prompt:
+            return
+
         task_channel = payload.get("task_channel") or meta.get("reply_to")
         if not task_channel:
-            print("[cursor-worker] no task_channel in payload, skipping")
             return
 
         sender = meta.get("from", "unknown")
         task_id = meta.get("id")
-        print(f"[cursor-worker] received task from {sender} on {task_channel}: {prompt[:80]}...")
+        print(f"[cursor-worker] oneshot from {sender} on {task_channel}: {prompt[:80]}...")
 
-        # Publish status: working
-        # IMPORTANT: meta.to=None so router broadcasts to channel.task.<uuid>.
-        # hub-delegate listens on channel.task.<uuid>.
-        status_data = make_envelope(args.identity, None, task_channel, "status",
-                                    {"status": "working"})
-        await nc.publish(f"hub.send.{task_channel}", status_data)
+        # Status: working
+        await nc.publish(f"hub.send.{task_channel}",
+                         make_envelope(args.identity, None, task_channel, "status",
+                                       {"status": "working"}))
 
         try:
-            print(f"[cursor-worker] calling Cursor {args.model}...")
-            result_text = await call_cursor(prompt, args.repo)
-            print(f"[cursor-worker] task completed ({len(result_text)} chars)")
+            result_text, _ = await call_cursor(prompt)
+            print(f"[cursor-worker] oneshot done ({len(result_text)} chars)")
+            await nc.publish(f"hub.send.{task_channel}",
+                             make_envelope(args.identity, None, task_channel, "message",
+                                           {"result": result_text, "task_id": task_id, "status": "done"},
+                                           reply_to=task_id))
+            await nc.publish(f"hub.send.{task_channel}",
+                             make_envelope(args.identity, None, task_channel, "status",
+                                           {"status": "done"}))
+        except Exception as err:
+            print(f"[cursor-worker] oneshot failed: {err}")
+            await nc.publish(f"hub.send.{task_channel}",
+                             make_envelope(args.identity, None, task_channel, "message",
+                                           {"error": str(err), "task_id": task_id, "status": "error"},
+                                           reply_to=task_id))
 
-            result_payload = {
-                "result": result_text,
-                "task_id": task_id,
-                "status": "done",
+    # ── Stateful session handling (hub-session) ────────────────
+
+    async def process_session_msg(msg: Msg):
+        """Handle session_start, session_send, session_close messages."""
+        try:
+            envelope = json.loads(msg.data.decode())
+        except Exception as e:
+            print(f"[cursor-worker] failed to decode envelope: {e}")
+            return
+
+        meta = envelope.get("meta", {})
+        payload = envelope.get("payload", {})
+        action = payload.get("action")
+        session_id = payload.get("session_id") or meta.get("channel", "").replace("session.", "")
+
+        if action == "session_start":
+            session_channel = payload.get("session_channel", f"session.{session_id}")
+            sender = meta.get("from", "unknown")
+            prompt = payload.get("prompt")
+            print(f"[cursor-worker] session_start: {session_id} from {sender}")
+
+            # Subscribe to the session channel for follow-up messages
+            async def session_callback(smsg: Msg):
+                await process_session_msg(smsg)
+
+            sub = await nc.subscribe(f"channel.{session_channel}", cb=session_callback)
+            active_sessions[session_id] = {
+                "channel": session_channel,
+                "subscription": sub,
+                "agent_id": None,
+                "sender": sender,
             }
 
-            # Publish result to task channel (broadcast, no meta.to).
-            # Router routes to channel.task.<uuid> where hub-delegate listens.
-            task_data = make_envelope(args.identity, None, task_channel, "message",
-                                      result_payload, reply_to=task_id)
-            await nc.publish(f"hub.send.{task_channel}", task_data)
+            # Publish status: ready
+            await nc.publish(f"hub.send.{session_channel}",
+                             make_envelope(args.identity, None, session_channel, "status",
+                                           {"status": "ready"}))
 
-            # Publish status: done
-            done_data = make_envelope(args.identity, None, task_channel, "status",
-                                      {"status": "done"})
-            await nc.publish(f"hub.send.{task_channel}", done_data)
+            # If there's an initial prompt, process it
+            if prompt:
+                await run_session_task(session_id, session_channel, prompt, meta.get("id"))
+
+        elif action == "session_send":
+            if session_id not in active_sessions:
+                print(f"[cursor-worker] session_send for unknown session {session_id}, ignoring")
+                return
+
+            session = active_sessions[session_id]
+            session_channel = session["channel"]
+            message = payload.get("message") or payload.get("prompt") or payload.get("text")
+            if not message:
+                return
+
+            print(f"[cursor-worker] session_send: {session_id} message: {message[:80]}...")
+            await run_session_task(session_id, session_channel, message, meta.get("id"))
+
+        elif action == "session_close":
+            if session_id not in active_sessions:
+                return
+
+            session = active_sessions.pop(session_id)
+            session_channel = session["channel"]
+            print(f"[cursor-worker] session_close: {session_id}")
+
+            # Unsubscribe from session channel
+            await session["subscription"].unsubscribe()
+
+            # Publish status: closed
+            await nc.publish(f"hub.send.{session_channel}",
+                             make_envelope(args.identity, None, session_channel, "status",
+                                           {"status": "closed"}))
+
+    async def run_session_task(session_id: str, session_channel: str, prompt: str, task_id: str | None):
+        """Execute a prompt within a session and publish the result."""
+        session = active_sessions.get(session_id)
+        if not session:
+            return
+
+        # Status: working
+        await nc.publish(f"hub.send.{session_channel}",
+                         make_envelope(args.identity, None, session_channel, "status",
+                                       {"status": "working"}))
+
+        try:
+            print(f"[cursor-worker] calling Cursor {args.model} for session {session_id}...")
+            result_text, agent_id = await call_cursor(prompt, session)
+            session["agent_id"] = agent_id
+            print(f"[cursor-worker] session task done ({len(result_text)} chars), agent_id={agent_id[:12]}...")
+
+            await nc.publish(f"hub.send.{session_channel}",
+                             make_envelope(args.identity, None, session_channel, "message",
+                                           {"result": result_text, "task_id": task_id, "status": "done"},
+                                           reply_to=task_id))
+            await nc.publish(f"hub.send.{session_channel}",
+                             make_envelope(args.identity, None, session_channel, "status",
+                                           {"status": "idle"}))
 
         except Exception as err:
-            print(f"[cursor-worker] task failed: {err}")
+            print(f"[cursor-worker] session task failed: {err}")
+            await nc.publish(f"hub.send.{session_channel}",
+                             make_envelope(args.identity, None, session_channel, "message",
+                                           {"error": str(err), "task_id": task_id, "status": "error"},
+                                           reply_to=task_id))
+            await nc.publish(f"hub.send.{session_channel}",
+                             make_envelope(args.identity, None, session_channel, "status",
+                                           {"status": "error"}))
 
-            error_payload = {
-                "error": str(err),
-                "task_id": task_id,
-                "status": "error",
-            }
+    # ── Unified message handler ────────────────────────────────
 
-            task_data = make_envelope(args.identity, None, task_channel, "message",
-                                      error_payload, reply_to=task_id)
-            await nc.publish(f"hub.send.{task_channel}", task_data)
+    async def inbox_callback(msg: Msg):
+        """Route incoming messages to oneshot or session handlers."""
+        try:
+            envelope = json.loads(msg.data.decode())
+            payload = envelope.get("payload", {})
+            action = payload.get("action")
+            if action in ("session_start", "session_send", "session_close"):
+                await process_session_msg(msg)
+            else:
+                await process_oneshot(msg)
+        except Exception as e:
+            print(f"[cursor-worker] error handling message: {e}")
 
-            err_data = make_envelope(args.identity, None, task_channel, "status",
-                                     {"status": "error"})
-            await nc.publish(f"hub.send.{task_channel}", err_data)
+    # Subscribe to inbox
+    inbox_subject = f"channel.inbox.{args.identity}"
+    await nc.subscribe(inbox_subject, cb=inbox_callback)
+    print(f"[cursor-worker] subscribed to {inbox_subject}")
 
-    # Messages are handled by callbacks registered above.
+    # Optionally subscribe to a broadcast channel
+    if args.channel:
+        async def broadcast_callback(msg: Msg):
+            await inbox_callback(msg)
+        await nc.subscribe(f"channel.{args.channel}", cb=broadcast_callback)
+        print(f"[cursor-worker] also subscribed to channel.{args.channel}")
 
-    print(f"[cursor-worker] ready, waiting for tasks...")
+    # Heartbeat
+    async def heartbeat():
+        while True:
+            await asyncio.sleep(30)
+            await nc.publish("hub.presence",
+                             make_envelope(args.identity, None, "hub.presence", "status",
+                                           {"identity": args.identity}))
+
+    asyncio.create_task(heartbeat())
+
+    print(f"[cursor-worker] ready, waiting for tasks and sessions...")
 
     # Keep alive
     try:
