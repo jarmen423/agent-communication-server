@@ -170,6 +170,74 @@ impl HubClient {
         self.subscribe_subject("channel.>").await
     }
 
+    // ── Session API ────────────────────────────────────────────────
+
+    /// Start a session with a worker. Generates a session UUID, DMs the
+    /// worker on their inbox with `action = "session_start"`, and returns
+    /// the session UUID.
+    ///
+    /// The caller should `subscribe_session(uuid)` to receive the
+    /// worker's `status: ready` reply and subsequent messages.
+    pub async fn start_session(
+        &self,
+        worker: &str,
+        payload: serde_json::Value,
+    ) -> Result<String> {
+        let session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let session_channel = format!("session.{session_id}");
+
+        let mut full_payload = payload.clone();
+        if let serde_json::Value::Object(ref mut map) = full_payload {
+            map.insert("action".to_string(), serde_json::json!("session_start"));
+            map.insert("session_id".to_string(), serde_json::json!(session_id));
+            map.insert("session_channel".to_string(), serde_json::json!(session_channel));
+        } else {
+            full_payload = serde_json::json!({
+                "action": "session_start",
+                "session_id": session_id,
+                "session_channel": session_channel,
+                "data": payload,
+            });
+        }
+
+        let env = Envelope::new(
+            self.identity.clone(),
+            &session_channel,
+            MessageKind::Message,
+            full_payload,
+        )
+        .to(worker);
+        self.send(&env).await?;
+        Ok(session_id)
+    }
+
+    /// Send a follow-up message on an existing session channel.
+    pub async fn send_to_session(
+        &self,
+        session_id: &str,
+        payload: serde_json::Value,
+    ) -> Result<String> {
+        let channel = format!("session.{session_id}");
+        self.send_message(&channel, payload).await
+    }
+
+    /// Close a session (sends `action = "session_close"` on the session channel).
+    pub async fn close_session(&self, session_id: &str) -> Result<()> {
+        let channel = format!("session.{session_id}");
+        let payload = serde_json::json!({"action": "session_close"});
+        self.send_message(&channel, payload).await?;
+        Ok(())
+    }
+
+    /// Subscribe to a session channel to receive events + messages.
+    pub async fn subscribe_session(
+        &self,
+        session_id: &str,
+    ) -> Result<tokio::sync::mpsc::UnboundedReceiver<Envelope>> {
+        let channel = format!("session.{session_id}");
+        self.subscribe_channel(&channel).await
+    }
+
     // ── Registration ──────────────────────────────────────────────────
 
     /// Announce this client on the registration subject.

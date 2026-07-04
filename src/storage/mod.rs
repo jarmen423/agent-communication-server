@@ -136,6 +136,65 @@ impl EnvelopeRecord {
     }
 }
 
+// ── Session Types ────────────────────────────────────────────
+
+/// A persisted session record — a multi-turn conversation between
+/// an orchestrator and a worker on `channel.session.<uuid>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub session_id: String,
+    pub orchestrator: String,
+    pub worker: String,
+    pub status: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub closed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// Filter for session queries.
+#[derive(Debug, Clone, Default)]
+pub struct SessionFilter {
+    pub status: Option<String>,
+    pub worker: Option<String>,
+    pub orchestrator: Option<String>,
+    pub limit: Option<usize>,
+}
+
+impl SessionFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn status(mut self, s: impl Into<String>) -> Self {
+        self.status = Some(s.into());
+        self
+    }
+
+    pub fn worker(mut self, w: impl Into<String>) -> Self {
+        self.worker = Some(w.into());
+        self
+    }
+
+    pub fn orchestrator(mut self, o: impl Into<String>) -> Self {
+        self.orchestrator = Some(o.into());
+        self
+    }
+
+    pub fn limit(mut self, n: usize) -> Self {
+        self.limit = Some(n);
+        self
+    }
+}
+
 // ── Storage Trait ────────────────────────────────────────────
 
 /// Persistence backend for nats-hub.
@@ -188,6 +247,20 @@ pub trait Storage: Send + Sync {
     /// List pending (unanswered) messages for an agent.
     async fn list_pending(&self, identity: &str) -> Result<Vec<EnvelopeRecord>>;
 
+    // ── Sessions ─────────────────────────────────────────────
+
+    /// Create a new session record.
+    async fn create_session(&self, session: SessionRecord) -> Result<()>;
+
+    /// Update a session's status (and optionally set closed_at when closing).
+    async fn update_session_status(&self, session_id: &str, status: &str) -> Result<()>;
+
+    /// Get a single session by ID.
+    async fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>>;
+
+    /// List sessions matching a filter.
+    async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionRecord>>;
+
     // ── Lifecycle ───────────────────────────────────────────
 
     /// Initialize the schema (create tables, indexes, etc.).
@@ -198,6 +271,9 @@ pub trait Storage: Send + Sync {
 }
 
 // ── Module wiring ────────────────────────────────────────────
+
+#[cfg(feature = "storage-surreal")]
+pub mod session;
 
 #[cfg(feature = "storage-surreal")]
 pub mod surreal;

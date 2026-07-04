@@ -17,8 +17,9 @@ use surrealdb::Surreal;
 use tracing::{debug, info, warn};
 
 use crate::protocol::Envelope;
+use crate::storage::session;
 use crate::storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, Storage,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
 };
 
 /// SurrealDB-backed storage. Embedded RocksDB, zero-config.
@@ -452,6 +453,24 @@ impl Storage for SurrealStorage {
             .collect())
     }
 
+    // ── Sessions ─────────────────────────────────────────────
+
+    async fn create_session(&self, sess: SessionRecord) -> Result<()> {
+        session::create_session(&self.db, sess).await
+    }
+
+    async fn update_session_status(&self, session_id: &str, status: &str) -> Result<()> {
+        session::update_session_status(&self.db, session_id, status).await
+    }
+
+    async fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
+        session::get_session(&self.db, session_id).await
+    }
+
+    async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionRecord>> {
+        session::list_sessions(&self.db, filter).await
+    }
+
     // ── Lifecycle ───────────────────────────────────────────
 
     async fn migrate(&self) -> Result<()> {
@@ -478,6 +497,21 @@ impl Storage for SurrealStorage {
             "DEFINE INDEX idx_env_from_time    ON TABLE envelopes COLUMNS from_identity, timestamp",
             "DEFINE INDEX idx_env_kind_time    ON TABLE envelopes COLUMNS kind, timestamp",
             "DEFINE TABLE reply_to SCHEMALESS TYPE RELATION FROM envelopes TO envelopes",
+            // Sessions table
+            "DEFINE TABLE sessions SCHEMALESS",
+            "DEFINE FIELD session_id    AT sessions TYPE string",
+            "DEFINE FIELD orchestrator  AT sessions TYPE string",
+            "DEFINE FIELD worker        AT sessions TYPE string",
+            "DEFINE FIELD status        AT sessions TYPE string",
+            "DEFINE FIELD cwd           AT sessions TYPE option<string>",
+            "DEFINE FIELD model         AT sessions TYPE option<string>",
+            "DEFINE FIELD provider      AT sessions TYPE option<string>",
+            "DEFINE FIELD created_at    AT sessions TYPE datetime",
+            "DEFINE FIELD updated_at    AT sessions TYPE datetime",
+            "DEFINE FIELD closed_at     AT sessions TYPE option<datetime>",
+            "DEFINE FIELD metadata      AT sessions TYPE object",
+            "DEFINE INDEX idx_sessions_status ON TABLE sessions COLUMNS status",
+            "DEFINE INDEX idx_sessions_worker ON TABLE sessions COLUMNS worker, status",
         ];
 
         for q in &queries {

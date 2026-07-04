@@ -77,5 +77,6 @@ pub use router::{ControlPlane, RoutingTable};
 
 #[cfg(feature = "storage-surreal")]
 pub use storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, Storage, SurrealStorage,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
+    SurrealStorage,
 };

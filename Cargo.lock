@@ -2435,6 +2435,7 @@ dependencies = [
  "serde",
  "serde_json",
  "surrealdb",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
