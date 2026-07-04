@@ -95,6 +95,18 @@ node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
 | `hub-worker --identity ID --execute CMD` | Universal worker |
 | `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
 | `hub-delegate --to AGENT --prompt MSG [--timeout SECS] [--verbose]` | Delegate a task |
+| `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
+
+## Python workers (CLI backends)
+
+`worker_runtime.run_worker()` provides **hub-delegate + hub-session** for any backend implementing `async def run(prompt, ctx) -> (text, ctx)`. See `docs/WORKER_BACKENDS.md`.
+
+| Script | Backend |
+|---|---|
+| `cursor_worker.py` | Cursor SDK (sessions via agent resume) |
+| `hermes_worker.py` | `hermes chat -q` + `--resume` |
+| `agy_worker.py` | `agy -p` + `--continue` per session cwd |
+| `hub-worker` (Rust) | Arbitrary `--execute` (stdin); one-shot only unless command is session-aware |
 
 ## Communication Patterns
 
