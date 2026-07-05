@@ -1,32 +1,58 @@
 """
-ACP / protocol agents (placeholder).
+AcpAgent backend — wired when an ACP server exists in this environment.
 
-When an Agent Client Protocol transport lands (stdio, HTTP, WebSocket), implement
-AcpAgentBackend here: same WorkerBackend.run(prompt, ctx) contract, different wire.
+Current status:
+- Hermes: real stdio JSON-RPC verified in worker_backends/hermes_acp.py
+- Cursor: not yet an available stdio/HTTP endpoint here; blocked until
+  a Cursor ACP process/transport is exposed in this environment.
 
-Today: Cline uses worker.js (Node + @cline/sdk); not yet on worker_runtime.
+This module avoids placeholder success paths. If no transport is
+reachable, it fails fast with a clear error instead of pretending to work.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+import logging
+from typing import Any
+
+from worker_runtime import WorkerBackend
+
+logger = logging.getLogger(__name__)
 
 
-class AcpTransport(Protocol):
+class AcpAgentTransport:
     async def send_turn(
         self, prompt: str, session_handle: str | None
-    ) -> tuple[str, str]: ...
+    ) -> tuple[str, str]:
+        """Return (assistant_text, new_or_existing_session_handle)."""
+        raise NotImplementedError
 
 
-class AcpAgentBackend:
-    """Stub — wire AcpTransport when ACP endpoint is defined."""
+class AcpAgentBackend(WorkerBackend):
+    """
+    ACP backend for any agent client that exposes a stdio/HTTP/WebSocket
+    JSON-RPC 2.0 transport.
 
-    def __init__(self, transport: AcpTransport, log_label: str = "acp-agent") -> None:
+    Example for Hermes today:
+        from worker_backends.hermes_acp import HermesAcpBackend
+        backend = HermesAcpBackend(model="claude-sonnet-4")
+    """
+
+    def __init__(self, transport: AcpAgentTransport, label: str = "acp-agent") -> None:
         self.transport = transport
-        self.log_label = log_label
+        self.label = label
 
     async def run(self, prompt: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        handle = ctx.get("acp_session")
-        text, new_handle = await self.transport.send_turn(prompt, handle)
-        ctx["acp_session"] = new_handle
+        session_handle = ctx.get("acp_session_handle")
+        try:
+            text, session_handle = await self.transport.send_turn(prompt, session_handle)
+        except NotImplementedError as e:
+            raise RuntimeError(
+                "No ACP transport wired. Use a concrete backend like "
+                "`worker_backends.hermes_acp.HermesAcpBackend`. "
+                f"Label={self.label} detail={e}"
+            ) from e
+
+        ctx = dict(ctx or {})
+        ctx["acp_session_handle"] = session_handle
         return text, ctx

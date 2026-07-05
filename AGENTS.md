@@ -71,7 +71,13 @@ nats-server -p 4222 --jetstream
 ./target/debug/hub-server --db-path nats_hub.db
 
 # Start a Cline worker (Node.js + Cline SDK)
-node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
+node hub_worker.js --type cline --identity cline-worker-1 --model "cline-pass/minimax-m3"
+
+# Start a Hermes ACP worker (JSON-RPC 2.0)
+python3 hermes_acp_worker.py --identity hermes-acp-1
+
+# Start a Cursor worker (Cursor SDK)
+python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 
 # Delegate a task
 ./target/debug/hub-delegate --to worker-1 --prompt "What is 2+2?" --verbose
@@ -96,6 +102,7 @@ node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
 | `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
 | `hub-delegate --to AGENT --prompt MSG [--timeout SECS] [--verbose]` | Delegate a task |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
+| `hub-worker.js --type <cline|agy|hermes|cursor> --identity <name>` | Universal worker (single CLI, all backend types) |
 
 ## Python workers (typed backends)
 
@@ -103,10 +110,10 @@ node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
 
 | Type | Examples |
 |------|----------|
-| **HeadlessCli** | `agy_worker.py`, `hermes_worker.py` (`HeadlessCliSpec` in `presets.py`) |
+| **HeadlessCli** | `agy_worker.py` (`HeadlessCliSpec` in `presets.py`) |
 | **SdkAgent** | `cursor_worker.py` |
-| **AcpAgent** | stub in `acp_agent.py` (future); Cline today = `worker.js` |
-| **StdinCli** | Rust `hub-worker --execute` |
+| **AcpAgent** | `hermes_acp_worker.py` (`HermesAcpBackend`); Cursor blocked until upstream ACP transport is exposed here |
+| **$ExecCli** | Rust `hub-worker --execute` |
 
 ## Communication Patterns
 

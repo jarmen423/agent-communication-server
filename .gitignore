@@ -23,3 +23,7 @@ Thumbs.db
 *.log
 *.pyc
 __pycache__/
+.env
+nats_hub.db/
+.cline/
+.cursor/
