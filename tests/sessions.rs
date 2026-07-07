@@ -76,7 +76,10 @@ async fn test_session_filter() {
     storage.create_session(r3).await.unwrap();
 
     // Close one
-    storage.update_session_status("sess-002", "closed").await.unwrap();
+    storage
+        .update_session_status("sess-002", "closed")
+        .await
+        .unwrap();
 
     // Filter: all active
     let active = storage

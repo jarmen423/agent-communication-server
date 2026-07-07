@@ -87,13 +87,14 @@ async fn main() -> Result<()> {
     info!(identity = %args.identity, "subscribed to inbox");
 
     // Optionally subscribe to a broadcast channel too
-    let mut broadcast_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Envelope>> = if let Some(ref ch) = args.channel {
-        let rx = client.subscribe_channel(ch).await?;
-        info!(channel = %ch, "also subscribed to broadcast channel");
-        Some(rx)
-    } else {
-        None
-    };
+    let mut broadcast_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Envelope>> =
+        if let Some(ref ch) = args.channel {
+            let rx = client.subscribe_channel(ch).await?;
+            info!(channel = %ch, "also subscribed to broadcast channel");
+            Some(rx)
+        } else {
+            None
+        };
 
     info!("hub-worker ready, waiting for tasks...");
 
@@ -129,9 +130,7 @@ async fn main() -> Result<()> {
         }
 
         // Send status: working
-        let _ = client
-            .send_status(&env.meta.channel, "working")
-            .await;
+        let _ = client.send_status(&env.meta.channel, "working").await;
 
         // Execute the command
         match execute_command(&args.execute, &prompt).await {
@@ -150,9 +149,7 @@ async fn main() -> Result<()> {
                 }
 
                 // Send status: done
-                let _ = client
-                    .send_status(&env.meta.channel, "done")
-                    .await;
+                let _ = client.send_status(&env.meta.channel, "done").await;
             }
             Err(e) => {
                 error!(id = %env.meta.id, error = %e, "task failed");
@@ -169,9 +166,7 @@ async fn main() -> Result<()> {
                 }
 
                 // Send status: error
-                let _ = client
-                    .send_status(&env.meta.channel, "error")
-                    .await;
+                let _ = client.send_status(&env.meta.channel, "error").await;
             }
         }
     }
@@ -232,11 +227,7 @@ async fn execute_command(command: &str, prompt: &str) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "command exited with {}: {}",
-            output.status,
-            stderr.trim()
-        );
+        anyhow::bail!("command exited with {}: {}", output.status, stderr.trim());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();

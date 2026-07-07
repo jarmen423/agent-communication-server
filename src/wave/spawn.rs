@@ -42,9 +42,7 @@ pub async fn spawn_wave<S: Storage>(
         .subscribe_subject(&format!("channel.{wave_prefix}.>"))
         .await?;
     // Also listen on the wave-level channel for dual-published events.
-    let mut wave_rx = client
-        .subscribe_channel(&wave_prefix)
-        .await?;
+    let mut wave_rx = client.subscribe_channel(&wave_prefix).await?;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
@@ -54,7 +52,9 @@ pub async fn spawn_wave<S: Storage>(
             return Ok(SpawnOutcome::Failed);
         }
 
-        let all_terminal = task_map.values().all(|t| t.status == "done" || t.status == "failed");
+        let all_terminal = task_map
+            .values()
+            .all(|t| t.status == "done" || t.status == "failed");
         if all_terminal {
             let any_failed = task_map.values().any(|t| t.status == "failed");
             let final_status = if any_failed { "failed" } else { "completed" };
@@ -143,7 +143,10 @@ async fn start_task(client: &HubClient, wave_id: &str, task: &WaveTaskRecord) ->
         payload,
     )
     .to(&task.worker);
-    client.send(&env).await.context("failed to start wave task")?;
+    client
+        .send(&env)
+        .await
+        .context("failed to start wave task")?;
     Ok(())
 }
 

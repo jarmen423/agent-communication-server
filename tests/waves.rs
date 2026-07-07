@@ -45,14 +45,23 @@ fn make_task(wave_id: &str, task_id: &str, worker: &str) -> WaveTaskRecord {
 async fn test_wave_create_and_status() {
     let storage = setup().await;
 
-    storage.create_wave(make_wave("wave-001", "test goal")).await.unwrap();
+    storage
+        .create_wave(make_wave("wave-001", "test goal"))
+        .await
+        .unwrap();
 
     let wave = storage.get_wave("wave-001").await.unwrap();
     assert!(wave.is_some());
     assert_eq!(wave.unwrap().status, "pending");
 
-    storage.update_wave_status("wave-001", "running").await.unwrap();
-    storage.update_wave_status("wave-001", "completed").await.unwrap();
+    storage
+        .update_wave_status("wave-001", "running")
+        .await
+        .unwrap();
+    storage
+        .update_wave_status("wave-001", "completed")
+        .await
+        .unwrap();
 
     let wave = storage.get_wave("wave-001").await.unwrap().unwrap();
     assert_eq!(wave.status, "completed");
@@ -63,7 +72,10 @@ async fn test_wave_create_and_status() {
 async fn test_wave_task_lifecycle() {
     let storage = setup().await;
 
-    storage.create_wave(make_wave("wave-002", "parallel work")).await.unwrap();
+    storage
+        .create_wave(make_wave("wave-002", "parallel work"))
+        .await
+        .unwrap();
     storage
         .create_wave_task(make_task("wave-002", "task-a", "worker-1"))
         .await
@@ -99,9 +111,18 @@ async fn test_wave_task_lifecycle() {
 async fn test_wave_list_by_status() {
     let storage = setup().await;
 
-    storage.create_wave(make_wave("wave-a", "one")).await.unwrap();
-    storage.create_wave(make_wave("wave-b", "two")).await.unwrap();
-    storage.update_wave_status("wave-a", "completed").await.unwrap();
+    storage
+        .create_wave(make_wave("wave-a", "one"))
+        .await
+        .unwrap();
+    storage
+        .create_wave(make_wave("wave-b", "two"))
+        .await
+        .unwrap();
+    storage
+        .update_wave_status("wave-a", "completed")
+        .await
+        .unwrap();
 
     let completed = storage.list_waves(Some("completed")).await.unwrap();
     assert_eq!(completed.len(), 1);

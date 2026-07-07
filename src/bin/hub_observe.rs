@@ -45,7 +45,10 @@ async fn main() -> Result<()> {
         client.subscribe_all().await?
     };
 
-    eprintln!("[hub-observe] listening on {}…", args.channel.as_deref().unwrap_or("all channels"));
+    eprintln!(
+        "[hub-observe] listening on {}…",
+        args.channel.as_deref().unwrap_or("all channels")
+    );
     eprintln!("[hub-observe] press Ctrl+C to stop\n");
 
     while let Some(env) = rx.recv().await {
@@ -66,7 +69,10 @@ async fn main() -> Result<()> {
             } else {
                 serde_json::to_string_pretty(&env.payload).unwrap_or_default()
             };
-            println!("{ts} [{kind}] {} → {dest} @{}", env.meta.from, env.meta.channel);
+            println!(
+                "{ts} [{kind}] {} → {dest} @{}",
+                env.meta.from, env.meta.channel
+            );
             println!("  {payload_str}");
             println!();
         }

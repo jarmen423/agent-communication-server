@@ -116,11 +116,14 @@ async fn test_delegate_round_trip() {
 
     // Worker publishes result to the task channel (broadcast, no meta.to)
     worker
-        .send_message(task_channel, json!({
-            "result": "echo test done",
-            "task_id": task_id,
-            "status": "done",
-        }))
+        .send_message(
+            task_channel,
+            json!({
+                "result": "echo test done",
+                "task_id": task_id,
+                "status": "done",
+            }),
+        )
         .await
         .unwrap();
 
@@ -164,7 +167,11 @@ async fn test_list_pending_storage() {
 
     // List pending for a different agent should be empty
     let pending_other = storage.list_pending("agent-y").await.unwrap();
-    assert_eq!(pending_other.len(), 0, "agent-y should have no pending messages");
+    assert_eq!(
+        pending_other.len(),
+        0,
+        "agent-y should have no pending messages"
+    );
 
     // Now store a reply from agent-x
     let reply = Envelope::new(

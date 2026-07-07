@@ -13,7 +13,10 @@ use std::io::{self, BufRead, Write};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "hub-interact", about = "Interactive human messaging on nats-hub")]
+#[command(
+    name = "hub-interact",
+    about = "Interactive human messaging on nats-hub"
+)]
 struct Args {
     /// Sender identity (your name)
     #[arg(long)]

@@ -90,19 +90,13 @@ mod tests {
 
     #[test]
     fn accepts_disjoint_scopes() {
-        let tasks = vec![
-            task("a", &["src/foo"], &[]),
-            task("b", &["src/bar"], &[]),
-        ];
+        let tasks = vec![task("a", &["src/foo"], &[]), task("b", &["src/bar"], &[])];
         assert!(validate_tasks(&tasks).is_ok());
     }
 
     #[test]
     fn rejects_overlapping_scopes() {
-        let tasks = vec![
-            task("a", &["src"], &[]),
-            task("b", &["src/lib"], &[]),
-        ];
+        let tasks = vec![task("a", &["src"], &[]), task("b", &["src/lib"], &[])];
         assert!(validate_tasks(&tasks).is_err());
     }
 

@@ -9,13 +9,16 @@
 //!   hub-history --tail                    # live follow (subscribe to all channels)
 
 use anyhow::Result;
-use clap::Parser;
 use chrono::Utc;
-use nats_hub::{HistoryQuery, SurrealStorage, Storage};
+use clap::Parser;
+use nats_hub::{HistoryQuery, Storage, SurrealStorage};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "hub-history", about = "Query message history from nats-hub's SurrealDB backend")]
+#[command(
+    name = "hub-history",
+    about = "Query message history from nats-hub's SurrealDB backend"
+)]
 struct Args {
     /// Path to the SurrealDB database file
     #[arg(long, default_value = "nats_hub.db")]

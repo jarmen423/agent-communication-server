@@ -33,6 +33,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let client = HubClient::connect(&args.nats_url, &args.identity).await?;
     client.register(args.capabilities.clone()).await?;
-    println!("registered agent '{}' with capabilities: {:?}", args.identity, args.capabilities);
+    println!(
+        "registered agent '{}' with capabilities: {:?}",
+        args.identity, args.capabilities
+    );
     Ok(())
 }

@@ -1,7 +1,9 @@
 //! Unit tests for structured progress event helpers.
 
 use chrono::Utc;
-use nats_hub::events::{event_summary, event_type, format_event_line, resolve_watch_target, WatchQuery};
+use nats_hub::events::{
+    event_summary, event_type, format_event_line, resolve_watch_target, WatchQuery,
+};
 use nats_hub::{Envelope, MessageKind, Meta};
 
 fn sample_event(event_type_str: &str, data: serde_json::Value) -> Envelope {
@@ -56,10 +58,7 @@ fn test_resolve_watch_target_wave() {
     })
     .unwrap();
     assert_eq!(target.subject, "channel.>");
-    assert_eq!(
-        target.channel_prefix.as_deref(),
-        Some("wave.wave-001")
-    );
+    assert_eq!(target.channel_prefix.as_deref(), Some("wave.wave-001"));
 }
 
 #[test]

@@ -152,10 +152,7 @@ async fn run(args: Args) -> Result<()> {
         Command::Close { session_id, from } => {
             let client = HubClient::connect(&args.nats_url, &from).await?;
             client
-                .send_to_session(
-                    &session_id,
-                    serde_json::json!({"action": "session_close"}),
-                )
+                .send_to_session(&session_id, serde_json::json!({"action": "session_close"}))
                 .await?;
             // Best-effort DB update — may fail if hub-server holds the lock
             #[cfg(feature = "storage-surreal")]
@@ -339,7 +336,10 @@ async fn show_session(db_path: &str, session_id: &str) -> Result<()> {
             if let Some(provider) = s.provider {
                 println!("provider:     {provider}");
             }
-            println!("created_at:   {}", s.created_at.format("%Y-%m-%d %H:%M:%SZ"));
+            println!(
+                "created_at:   {}",
+                s.created_at.format("%Y-%m-%d %H:%M:%SZ")
+            );
             if let Some(closed) = s.closed_at {
                 println!("closed_at:    {}", closed.format("%Y-%m-%d %H:%M:%SZ"));
             }
@@ -382,10 +382,7 @@ fn print_session_table(sessions: &[SessionRecord]) {
         "{:<id_w$}  {:<worker_w$}  {:<status_w$}  CREATED",
         "SESSION_ID", "WORKER", "STATUS"
     );
-    println!(
-        "{}",
-        "-".repeat(id_w + worker_w + status_w + 16)
-    );
+    println!("{}", "-".repeat(id_w + worker_w + status_w + 16));
 
     for s in sessions {
         let created = s.created_at.format("%Y-%m-%d %H:%M");

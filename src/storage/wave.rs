@@ -215,9 +215,7 @@ pub async fn update_wave_status(
 
     if status == "completed" || status == "failed" {
         let _: Option<WaveRow> = db
-            .query(
-                "UPDATE type::thing('waves', $id) SET status = $status, closed_at = $now",
-            )
+            .query("UPDATE type::thing('waves', $id) SET status = $status, closed_at = $now")
             .bind(("id", wave_id.to_string()))
             .bind(("status", status.to_string()))
             .bind(("now", now))

@@ -6,9 +6,7 @@
 
 use chrono::Utc;
 use nats_hub::client::AgentRegistry;
-use nats_hub::{
-    AgentFilter, AgentRecord, Storage, SurrealStorage,
-};
+use nats_hub::{AgentFilter, AgentRecord, Storage, SurrealStorage};
 use serde_json::json;
 use std::time::Duration;
 
@@ -34,9 +32,18 @@ fn record(identity: &str, caps: &[&str]) -> AgentRecord {
 async fn test_find_agents_by_capability() {
     let storage = setup_storage().await;
 
-    storage.register_agent(record("alpha", &["compute", "observe"])).await.unwrap();
-    storage.register_agent(record("beta",  &["compute"])).await.unwrap();
-    storage.register_agent(record("gamma", &["observe"])).await.unwrap();
+    storage
+        .register_agent(record("alpha", &["compute", "observe"]))
+        .await
+        .unwrap();
+    storage
+        .register_agent(record("beta", &["compute"]))
+        .await
+        .unwrap();
+    storage
+        .register_agent(record("gamma", &["observe"]))
+        .await
+        .unwrap();
 
     // Single capability filter
     let only_compute = storage
@@ -50,10 +57,7 @@ async fn test_find_agents_by_capability() {
 
     // Both capabilities (AND)
     let both = storage
-        .find_agents(
-            &AgentFilter::new()
-                .capabilities(vec!["compute".into(), "observe".into()]),
-        )
+        .find_agents(&AgentFilter::new().capabilities(vec!["compute".into(), "observe".into()]))
         .await
         .unwrap();
     let ids: Vec<&str> = both.iter().map(|a| a.identity.as_str()).collect();
@@ -175,8 +179,10 @@ async fn test_deregister_agent() {
 #[tokio::test]
 async fn test_inmem_register_and_list() {
     let reg = AgentRegistry::new();
-    reg.register("alpha".to_string(), vec!["compute".into()]).await;
-    reg.register("beta".to_string(), vec!["observe".into()]).await;
+    reg.register("alpha".to_string(), vec!["compute".into()])
+        .await;
+    reg.register("beta".to_string(), vec!["observe".into()])
+        .await;
 
     let agents = reg.list().await;
     assert_eq!(agents.len(), 2);
@@ -188,13 +194,17 @@ async fn test_inmem_register_and_list() {
 #[tokio::test]
 async fn test_inmem_find_by_capability() {
     let reg = AgentRegistry::new();
-    reg.register("alpha".to_string(), vec!["compute".into(), "observe".into()]).await;
-    reg.register("beta".to_string(),  vec!["compute".into()]).await;
-    reg.register("gamma".to_string(), vec!["observe".into()]).await;
-
-    let compute_only = reg
-        .find_by_capability(&["compute".to_string()])
+    reg.register(
+        "alpha".to_string(),
+        vec!["compute".into(), "observe".into()],
+    )
+    .await;
+    reg.register("beta".to_string(), vec!["compute".into()])
         .await;
+    reg.register("gamma".to_string(), vec!["observe".into()])
+        .await;
+
+    let compute_only = reg.find_by_capability(&["compute".to_string()]).await;
     let ids: Vec<&str> = compute_only.iter().map(|a| a.identity.as_str()).collect();
     assert_eq!(compute_only.len(), 2);
     assert!(ids.contains(&"alpha"));
@@ -215,7 +225,8 @@ async fn test_inmem_find_by_capability() {
 #[tokio::test]
 async fn test_inmem_find_alive() {
     let reg = AgentRegistry::new();
-    reg.register("alpha".to_string(), vec!["compute".into()]).await;
+    reg.register("alpha".to_string(), vec!["compute".into()])
+        .await;
 
     // Within 60s — should appear
     let fresh = reg.find_alive(60).await;
@@ -224,7 +235,10 @@ async fn test_inmem_find_alive() {
     // Wait 2 seconds, then within 1s window — should not appear
     tokio::time::sleep(Duration::from_secs(2)).await;
     let stale = reg.find_alive(1).await;
-    assert!(stale.is_empty(), "alpha should fall out of 1s window after 2s");
+    assert!(
+        stale.is_empty(),
+        "alpha should fall out of 1s window after 2s"
+    );
 
     // Still appears in 5s window
     let still_fresh = reg.find_alive(5).await;
@@ -234,7 +248,8 @@ async fn test_inmem_find_alive() {
 #[tokio::test]
 async fn test_inmem_touch_updates_liveness() {
     let reg = AgentRegistry::new();
-    reg.register("alpha".to_string(), vec!["compute".into()]).await;
+    reg.register("alpha".to_string(), vec!["compute".into()])
+        .await;
 
     // Wait, then touch
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -249,7 +264,8 @@ async fn test_inmem_touch_updates_liveness() {
 #[tokio::test]
 async fn test_inmem_deregister() {
     let reg = AgentRegistry::new();
-    reg.register("alpha".to_string(), vec!["compute".into()]).await;
+    reg.register("alpha".to_string(), vec!["compute".into()])
+        .await;
 
     assert!(reg.deregister("alpha").await);
     let all = reg.list().await;

@@ -5,8 +5,8 @@
 
 use chrono::Utc;
 use nats_hub::{
-    AgentFilter, AgentRecord, Envelope, EnvelopeRecord, HistoryQuery,
-    MessageKind, Storage, SurrealStorage,
+    AgentFilter, AgentRecord, Envelope, EnvelopeRecord, HistoryQuery, MessageKind, Storage,
+    SurrealStorage,
 };
 use serde_json::json;
 

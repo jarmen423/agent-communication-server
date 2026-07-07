@@ -7,7 +7,7 @@ mod display;
 mod watch;
 
 pub use display::{event_summary, format_event_line};
-pub use watch::{WatchQuery, WatchTarget, resolve_watch_target};
+pub use watch::{resolve_watch_target, WatchQuery, WatchTarget};
 
 use crate::protocol::Envelope;
 
@@ -31,9 +31,7 @@ pub fn event_payload(event_type: &str, data: serde_json::Value) -> serde_json::V
 
 /// Return the `event_type` field from an event envelope, if present.
 pub fn event_type(env: &Envelope) -> Option<&str> {
-    env.payload
-        .get("event_type")
-        .and_then(|v| v.as_str())
+    env.payload.get("event_type").and_then(|v| v.as_str())
 }
 
 /// Return the nested `data` object, falling back to the full payload.

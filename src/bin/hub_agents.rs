@@ -46,9 +46,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive("nats_hub=info".parse()?),
-        )
+        .with_env_filter(EnvFilter::from_default_env().add_directive("nats_hub=info".parse()?))
         .init();
 
     let args = Args::parse();
@@ -98,10 +96,7 @@ async fn run(args: Args) -> Result<()> {
 }
 
 #[cfg(feature = "storage-surreal")]
-async fn show_one(
-    storage: &SurrealStorage,
-    identity: &str,
-) -> Result<()> {
+async fn show_one(storage: &SurrealStorage, identity: &str) -> Result<()> {
     match storage.get_agent(identity).await? {
         Some(record) => {
             print_table(&[record]);

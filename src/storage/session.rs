@@ -57,17 +57,28 @@ pub struct SessionRowWithId {
 impl SessionRowWithId {
     /// Convert a DB row into a public `SessionRecord`.
     pub fn to_record(self) -> SessionRecord {
-        let parse_or_now = |s: &str| -> chrono::DateTime<chrono::Utc> {
-            s.parse().unwrap_or_else(|_| Utc::now())
-        };
+        let parse_or_now =
+            |s: &str| -> chrono::DateTime<chrono::Utc> { s.parse().unwrap_or_else(|_| Utc::now()) };
         SessionRecord {
             session_id: self.session_id,
             orchestrator: self.orchestrator,
             worker: self.worker,
             status: self.status,
-            cwd: if self.cwd.is_empty() { None } else { Some(self.cwd) },
-            model: if self.model.is_empty() { None } else { Some(self.model) },
-            provider: if self.provider.is_empty() { None } else { Some(self.provider) },
+            cwd: if self.cwd.is_empty() {
+                None
+            } else {
+                Some(self.cwd)
+            },
+            model: if self.model.is_empty() {
+                None
+            } else {
+                Some(self.model)
+            },
+            provider: if self.provider.is_empty() {
+                None
+            } else {
+                Some(self.provider)
+            },
             created_at: parse_or_now(&self.created_at),
             updated_at: parse_or_now(&self.updated_at),
             closed_at: if self.closed_at.is_empty() {
@@ -97,7 +108,10 @@ pub fn session_to_row(record: &SessionRecord) -> SessionRow {
         provider: record.provider.clone().unwrap_or_default(),
         created_at: record.created_at.to_rfc3339(),
         updated_at: record.updated_at.to_rfc3339(),
-        closed_at: record.closed_at.map(|dt| dt.to_rfc3339()).unwrap_or_default(),
+        closed_at: record
+            .closed_at
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default(),
     }
 }
 

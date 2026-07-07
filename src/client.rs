@@ -51,28 +51,28 @@ impl HubClient {
             .publish(subject.clone(), bytes.into())
             .await
             .with_context(|| format!("publish to {subject} failed"))?;
-        self.nats.flush().await.context("flush after publish failed")?;
+        self.nats
+            .flush()
+            .await
+            .context("flush after publish failed")?;
         Ok(())
     }
 
     /// Convenience: build + send a message envelope in one call.
-    pub async fn send_message(
-        &self,
-        channel: &str,
-        payload: serde_json::Value,
-    ) -> Result<String> {
-        let env = Envelope::new(self.identity.clone(), channel, MessageKind::Message, payload);
+    pub async fn send_message(&self, channel: &str, payload: serde_json::Value) -> Result<String> {
+        let env = Envelope::new(
+            self.identity.clone(),
+            channel,
+            MessageKind::Message,
+            payload,
+        );
         let id = env.meta.id.clone();
         self.send(&env).await?;
         Ok(id)
     }
 
     /// Convenience: build + send a status envelope.
-    pub async fn send_status(
-        &self,
-        channel: &str,
-        status: impl Into<String>,
-    ) -> Result<String> {
+    pub async fn send_status(&self, channel: &str, status: impl Into<String>) -> Result<String> {
         let payload = serde_json::json!({ "status": status.into() });
         let env = Envelope::new(self.identity.clone(), channel, MessageKind::Status, payload);
         let id = env.meta.id.clone();
@@ -88,8 +88,13 @@ impl HubClient {
         channel: &str,
         payload: serde_json::Value,
     ) -> Result<String> {
-        let env = Envelope::new(self.identity.clone(), channel, MessageKind::Message, payload)
-            .to(to);
+        let env = Envelope::new(
+            self.identity.clone(),
+            channel,
+            MessageKind::Message,
+            payload,
+        )
+        .to(to);
         let id = env.meta.id.clone();
         self.send(&env).await?;
         Ok(id)
@@ -178,11 +183,7 @@ impl HubClient {
     ///
     /// The caller should `subscribe_session(uuid)` to receive the
     /// worker's `status: ready` reply and subsequent messages.
-    pub async fn start_session(
-        &self,
-        worker: &str,
-        payload: serde_json::Value,
-    ) -> Result<String> {
+    pub async fn start_session(&self, worker: &str, payload: serde_json::Value) -> Result<String> {
         let session_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let session_channel = format!("session.{session_id}");
 
@@ -190,7 +191,10 @@ impl HubClient {
         if let serde_json::Value::Object(ref mut map) = full_payload {
             map.insert("action".to_string(), serde_json::json!("session_start"));
             map.insert("session_id".to_string(), serde_json::json!(session_id));
-            map.insert("session_channel".to_string(), serde_json::json!(session_channel));
+            map.insert(
+                "session_channel".to_string(),
+                serde_json::json!(session_channel),
+            );
         } else {
             full_payload = serde_json::json!({
                 "action": "session_start",
@@ -246,11 +250,14 @@ impl HubClient {
             "identity": self.identity,
             "capabilities": capabilities,
         });
-        let env = Envelope::new(self.identity.clone(), "system", MessageKind::Control, payload);
+        let env = Envelope::new(
+            self.identity.clone(),
+            "system",
+            MessageKind::Control,
+            payload,
+        );
         let bytes = env.to_json_bytes()?;
-        self.nats
-            .publish(subjects::REGISTER, bytes.into())
-            .await?;
+        self.nats.publish(subjects::REGISTER, bytes.into()).await?;
         self.nats.flush().await?;
         Ok(())
     }
@@ -261,11 +268,14 @@ impl HubClient {
             "identity": self.identity,
             "alive": true,
         });
-        let env = Envelope::new(self.identity.clone(), "system", MessageKind::Control, payload);
+        let env = Envelope::new(
+            self.identity.clone(),
+            "system",
+            MessageKind::Control,
+            payload,
+        );
         let bytes = env.to_json_bytes()?;
-        self.nats
-            .publish(subjects::PRESENCE, bytes.into())
-            .await?;
+        self.nats.publish(subjects::PRESENCE, bytes.into()).await?;
         self.nats.flush().await?;
         Ok(())
     }
@@ -364,11 +374,7 @@ impl AgentRegistry {
     /// In-memory: force-set an agent's `last_seen` (used when warming the
     /// cache from storage, so we preserve the real DB-recorded liveness
     /// instead of overwriting it with the current time).
-    pub async fn force_last_seen(
-        &self,
-        identity: &str,
-        last_seen: chrono::DateTime<chrono::Utc>,
-    ) {
+    pub async fn force_last_seen(&self, identity: &str, last_seen: chrono::DateTime<chrono::Utc>) {
         let mut map = self.agents.lock().await;
         if let Some(existing) = map.get_mut(identity) {
             existing.last_seen = last_seen;
