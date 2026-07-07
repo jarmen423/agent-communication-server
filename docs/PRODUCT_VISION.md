@@ -104,8 +104,9 @@ the router routes to `channel.inbox.<to>`. If `meta.to` is null, broadcast to
 `channel.<channel>` as normal.
 
 **Use cases**: Task delegation, private 1:1 communication, steering an agent.
-**Current status**: ⚠️ Protocol supports it (`meta.to` exists), router doesn't
-route on it yet. Needs ~30 lines in `router.rs`.
+**Current status**: ✅ Implemented. The router routes on `meta.to` to
+`channel.inbox.<to>` (see `Decision 1`); `hub-delegate` and `hub-publish --to`
+both exercise this path.
 
 ---
 
@@ -132,8 +133,10 @@ channel.task.a3f7b2c1
 
 **Use cases**: Isolated task execution, parallel workstreams, conversation
 tracking, offline evaluation of agent trajectories.
-**Current status**: ❌ Not built. Needs `hub-delegate` CLI + worker support for
-reply channel subscription.
+**Current status**: ✅ Implemented. `hub-delegate` creates `task.<uuid>` channels,
+routes the task to the worker's inbox (`meta.to`), and subscribes to the task
+channel for status + reply. Workers reply via `meta.to = <sender>` so results
+land in the sender's inbox.
 
 ### Pattern comparison
 
@@ -377,13 +380,24 @@ Implemented per [`docs/PHASE3_PLAN.md`](PHASE3_PLAN.md). nats-hub now supports:
 | Parallel wave execution | `hub-wave`, `src/wave/`, `src/storage/wave.rs` |
 
 **Remaining from original vision:**
-- `hub-thread` CLI for reply-graph visualization (storage APIs exist; CLI not built)
-- Analytics / `hub-stats` (Phase 4 below)
+- Human bridges (Phase 5 below)
+- Multi-project portability / crate packaging (Phase 6 below)
 
-### Phase 4: Analytics trait + observability
+### Phase 4: Analytics trait + observability ✅
 
-Already planned. Message rates, latency stats, agent activity, channel hotspots.
-`hub-stats` CLI for observability dashboard.
+Implemented across three deliverables:
+
+| Sub-phase | Deliverable | Status |
+|---|---|---|
+| **4a** | `Analytics` trait + `SurrealAnalytics` (reads from `envelopes` history) + `hub-stats` CLI | ✅ |
+| **4b** | `MetricsCollector` (atomic, hot-path-safe) + `hub-server --metrics-addr` Prometheus-compatible endpoint | ✅ |
+| **4c** | DuckDB OLAP backend (optional/stretch) | 📋 Deferred — trait is backend-agnostic; add when heavy analytical workloads appear |
+
+`hub-stats` answers message rates, latency, agent activity, channel hotspots, and
+error rate against the persisted history. `hub-server --metrics-addr <addr>`
+serves a zero-dependency Prometheus exposition format (`natshub_messages_total`,
+`natshub_messages_by_kind`, `natshub_messages_by_channel_class`,
+`natshub_errors_total`) with bounded labels — safe on the routing hot path.
 
 ### Phase 5: Human bridges
 
@@ -423,12 +437,13 @@ src/
 │   ├── surreal.rs            — SurrealStorage impl (embedded RocksDB)
 │   ├── session.rs            — session CRUD (Phase 3a)
 │   └── wave.rs               — wave + wave_tasks CRUD (Phase 3c)
-├── analytics/                — (planned, Phase 4)
-│   ├── mod.rs                — Analytics trait
-│   └── surreal.rs            — SurrealAnalytics impl
+├── analytics/                — Phase 4 observability
+│   ├── mod.rs                — Analytics trait (read-side peer to Storage)
+│   ├── surreal.rs            — SurrealAnalytics impl (reads envelopes history)
+│   └── metrics.rs            — MetricsCollector (atomic, hot-path-safe)
 └── bin/
     ├── hub_server.rs         — runs the control plane router (daemon)
-    ├── hub_publish.rs        — send a message on a channel
+    ├── hub_publish.rs        — send a message on a channel (broadcast or --to DM)
     ├── hub_observe.rs        — watch messages on channels (read-only)
     ├── hub_interact.rs       — interactive REPL for human messaging
     ├── hub_register.rs       — register an agent with capabilities
@@ -439,8 +454,8 @@ src/
     ├── hub_session.rs        — stateful multi-turn sessions (Phase 3a)
     ├── hub_watch.rs          — watch structured progress events (Phase 3b)
     ├── hub_wave.rs           — parallel wave orchestration (Phase 3c)
-    ├── hub_thread.rs         — (planned) view conversation threads
-    └── hub_stats.rs          — (planned) observability / analytics
+    ├── hub_thread.rs         — view conversation threads + pending messages
+    └── hub_stats.rs          — observability / analytics CLI (Phase 4a)
 
 worker_runtime.py             — shared Python worker (oneshot + session + wave)
 worker_events.py              — structured event publishing

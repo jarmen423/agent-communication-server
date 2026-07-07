@@ -293,11 +293,11 @@ DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status;
 - [x] `find_agents()` with capability + liveness filters
 - [x] Add `hub-agents` CLI tool to list/search agents
 
-### Phase 3: Conversation threading (graph) — partial
+### Phase 3: Conversation threading (graph) ✅
 - [x] Parse `reply_to` on envelopes and call `link_reply()`
 - [x] `get_thread()` uses SurrealDB graph traversal
 - [x] `list_pending()` finds messages with no reply addressed to an agent
-- [ ] Add `hub-thread` CLI tool to view conversation threads
+- [x] Add `hub-thread` CLI tool to view conversation threads
 
 ### Phase 3 (orchestration): Sessions + events + waves ✅
 
@@ -307,12 +307,12 @@ DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status;
 - [x] **3b** `MessageKind::Event` + `hub-watch` + `worker_events.py`
 - [x] **3c** `waves` / `wave_tasks` tables + `hub-wave` CLI + spawn orchestration
 
-### Phase 4: Analytics trait + impl
-- [ ] Define `Analytics` trait in `src/analytics/mod.rs`
-- [ ] Implement `SurrealAnalytics` using SurrealQL aggregations
-- [ ] Optional: `DuckdbAnalytics` for heavy OLAP (exports via Arrow/Parquet)
-- [ ] Add `hub-stats` CLI tool for observability queries
-- [ ] Optional: Prometheus-style metrics exporter
+### Phase 4: Analytics trait + impl ✅
+- [x] Define `Analytics` trait in `src/analytics/mod.rs`
+- [x] Implement `SurrealAnalytics` — derives metrics from persisted `envelopes` (fetch-then-aggregate in Rust; no SurrealQL aggregation needed for our volume)
+- [x] Add `hub-stats` CLI tool for observability queries (rates, latency, agent activity, channel hotspots, error rate)
+- [x] `MetricsCollector` (atomic, hot-path-safe) + `hub-server --metrics-addr` Prometheus-compatible `/metrics` endpoint (Phase 4b; always compiled, works in `--features no-storage`)
+- [ ] Optional: `DuckdbAnalytics` for heavy OLAP (exports via Arrow/Parquet) — **deferred**; the `Analytics` trait is backend-agnostic so it drops in behind an `analytics-duckdb` feature when needed.
 
 ### Phase 5: Postgres + libSQL implementations
 - [ ] `PostgresStorage` impl via `sqlx`

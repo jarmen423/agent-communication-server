@@ -42,8 +42,8 @@ src/
 │   ├── session.rs            — session CRUD (split from surreal.rs)
 │   └── wave.rs               — wave + wave_tasks CRUD
 └── bin/
-    ├── hub_server.rs         — runs the control plane router (daemon, --db-path flag)
-    ├── hub_publish.rs        — send a message on a channel
+    ├── hub_server.rs         — runs the control plane router (daemon, --db-path + --metrics-addr flags)
+    ├── hub_publish.rs        — send a message on a channel (broadcast or --to DM; --kind sets MessageKind)
     ├── hub_observe.rs        — watch messages on channels (read-only)
     ├── hub_interact.rs       — interactive REPL for human messaging
     ├── hub_register.rs       — register an agent with capabilities
@@ -53,7 +53,9 @@ src/
     ├── hub_delegate.rs       — one-command task delegation with task channels
     ├── hub_session.rs        — stateful multi-turn sessions
     ├── hub_watch.rs          — watch structured progress events (real-time)
-    └── hub_wave.rs           — parallel wave orchestration with merge gates
+    ├── hub_wave.rs           — parallel wave orchestration with merge gates
+    └── hub_thread.rs         — view conversation threads and pending messages
+    └── hub_stats.rs          — observability/analytics CLI (Phase 4a: rates, latency, activity, hotspots, error rate)
 ```
 
 Python workers: `worker_runtime.py`, `worker_events.py`, `worker_backends/`, `hub_worker.js`.
@@ -113,8 +115,8 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 
 | Command | Description |
 |---|---|
-| `hub-server [--db-path PATH]` | Run the control plane router |
-| `hub-publish --channel CH [--to AGENT] --from ID --message MSG` | Send a message |
+| `hub-server [--db-path PATH] [--metrics-addr ADDR]` | Run the control plane router (optional Prometheus `/metrics` endpoint) |
+| `hub-publish --channel CH [--to AGENT] [--kind KIND] --from ID --message MSG` | Send a message (broadcast or DM) |
 | `hub-observe [--channel CH]` | Watch messages (read-only, live) |
 | `hub-interact --from ID --channel CH` | Interactive REPL |
 | `hub-register --identity ID --capabilities CAP1,CAP2` | Register an agent |
@@ -125,6 +127,8 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
 | `hub-wave create/spawn/status/close/list` | Parallel wave orchestration |
+| `hub-thread show/pending` | View reply chains and unanswered messages |
+| `hub-stats [--db-path PATH] [--since DUR] [--agent ID] [--top-channels N] [--json]` | Analytics: rates, latency, activity, hotspots, error rate (Phase 4a) |
 | `hub-worker.js --type <cline\|agy\|hermes\|cursor> --identity <name>` | Universal worker (single CLI, all backend types) |
 
 ## Python workers (typed backends)
@@ -137,6 +141,10 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 | **SdkAgent** | `cursor_worker.py` |
 | **AcpAgent** | `hermes_acp_worker.py` (`HermesAcpBackend`); Cursor blocked until upstream ACP transport is exposed here |
 | **$ExecCli** | Rust `hub-worker --execute` |
+
+**Human bridges** (Phase 5): `telegram_bridge.py` is the reference adapter
+(`docs/BRIDGES.md`). A bridge subscribes to `channel.inbox.<identity>`, forwards
+NATS→human, and publishes human→NATS. Runs standalone (not via `hub-worker`).
 
 ## Communication Patterns
 
@@ -173,6 +181,7 @@ CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 - `tests/sessions.rs` (4): session lifecycle, filters, persistence, channel isolation
 - `tests/events.rs` (5): event formatting, watch target resolution
 - `tests/waves.rs` (5): wave lifecycle, task status, validation, merge gate
+- `tests/threads.rs` (2): conversation thread queries for hub-thread
 
 **Note**: Tests that require NATS server will skip gracefully if it's not running.
 
@@ -181,8 +190,10 @@ CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 | Flag | Description |
 |---|---|
 | `default` (includes `storage-surreal`) | SurrealDB persistence |
-| `storage-surreal` | SurrealDB with embedded RocksDB |
-| `no-storage` | Pure NATS transport, no persistence |
+| `storage-surreal` | SurrealDB with embedded RocksDB; also enables the `Analytics` trait + `hub-stats` (Phase 4a) |
+| `no-storage` | Pure NATS transport, no persistence; `hub-server --metrics-addr` (Phase 4b `MetricsCollector`) still available |
+
+**Analytics layering**: the live `MetricsCollector` (Phase 4b) is always compiled and has no storage dependency — it works in `--features no-storage`. The historical `Analytics`/`SurrealAnalytics` trait (Phase 4a, `hub-stats`) lives behind `storage-surreal` since it reads persisted `envelopes`.
 
 ## Common Tasks
 
