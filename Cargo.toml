@@ -2,9 +2,12 @@
 name = "nats-hub"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.74"
 description = "NATS-based communication layer with control plane routing for agent + human messaging"
 license = "BSL-1.1"
 repository = "https://github.com/jarmen423/nats-hub"
+readme = "README.md"
+authors = ["Agent Memory Labs <josh@agentmemorylabs.com>"]
 keywords = ["nats", "agent", "messaging", "communication", "surrealdb"]
 categories = ["network-programming", "asynchronous"]
 
@@ -63,6 +66,16 @@ path = "src/bin/hub_watch.rs"
 [[bin]]
 name = "hub-wave"
 path = "src/bin/hub_wave.rs"
+required-features = ["storage-surreal"]
+
+[[bin]]
+name = "hub-thread"
+path = "src/bin/hub_thread.rs"
+required-features = ["storage-surreal"]
+
+[[bin]]
+name = "hub-stats"
+path = "src/bin/hub_stats.rs"
 required-features = ["storage-surreal"]
 
 # ── Library dependencies (what downstream crates pull in) ──────
