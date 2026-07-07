@@ -516,7 +516,6 @@ Total estimated: ~1,586 LOC across 3 sub-phases. **All three sub-phases complete
 
 ## Next (not in Phase 3 scope)
 
-- `hub-thread` CLI for conversation graph visualization (see `docs/DATABASE_PLAN.md`)
 - Analytics / `hub-stats` (Phase 4 in `DATABASE_PLAN.md`)
 - Dashboard / TUI consuming `hub-watch` event streams
 

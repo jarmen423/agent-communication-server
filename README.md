@@ -134,6 +134,16 @@ hub-watch --wave <wave-id>
 hub-wave close <wave-id> --from orch
 ```
 
+### Conversation Thread
+
+View reply chains and unanswered messages from SurrealDB.
+
+```bash
+hub-thread show <root-message-id>
+hub-thread show <any-message-id> --resolve   # walk reply_to to find root
+hub-thread pending --agent worker-1
+```
+
 ## CLI Tools
 
 | Command | Description |
@@ -150,6 +160,7 @@ hub-wave close <wave-id> --from orch
 | `hub-session` | Stateful multi-turn sessions |
 | `hub-watch` | Watch structured progress events in real time |
 | `hub-wave` | Parallel wave orchestration with merge gates |
+| `hub-thread` | View conversation threads and pending messages |
 
 ## Embedding in Your Project
 
