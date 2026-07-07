@@ -295,16 +295,14 @@ COLD PATH (query from DB):
 
 ### Decision 1: Router respects `meta.to` (inbox routing)
 
-**Status**: Not yet implemented. ~30 lines in `router.rs`.
+**Status**: ✅ Implemented in `router.rs`.
 
 If `meta.to` is set, route to `channel.inbox.<to>` instead of `channel.<channel>`.
 If `meta.to` is null, broadcast to `channel.<channel>` as we do now.
 
-This single change unlocks DMs, task delegation, and private agent communication.
-
 ### Decision 2: Workers subscribe to their inbox by default
 
-**Status**: Will be implemented in `hub-worker`.
+**Status**: ✅ Implemented in `hub-worker`, `worker_runtime.py`, and typed Python workers.
 
 A worker subscribes to `channel.inbox.<identity>` (private messages addressed to
 it) and optionally to one or more broadcast channels. It does not receive
@@ -350,18 +348,16 @@ a service.
 
 ## Build Plan
 
-### Phase 2.5: Inbox routing + universal worker (dogfooding unlock)
+### Phase 2.5: Inbox routing + universal worker (dogfooding unlock) ✅
 
-This is the minimal build to make nats-hub actually usable for agent orchestration.
-
-| Component | LOC (est.) | Description |
-|---|---|---|
-| Router `meta.to` routing | ~30 | If `meta.to` is set, route to `channel.inbox.<to>` |
-| `hub-worker` binary | ~150 | Subscribe, execute, publish result + status |
-| `hub-history` CLI | ~80 | Query message history from SurrealDB |
-| `HubClient` reply helpers | ~40 | `send_reply()` that sets `meta.to` and `meta.reply_to` |
-| Tests | ~100 | Inbox routing, worker lifecycle, reply correlation |
-| **Total** | **~400** | |
+| Component | Status |
+|---|---|
+| Router `meta.to` routing | ✅ |
+| `hub-worker` binary | ✅ |
+| `hub-history` CLI | ✅ |
+| `HubClient` reply helpers | ✅ |
+| `hub-delegate` + task channels | ✅ |
+| Tests | ✅ |
 
 After this phase:
 - I can delegate tasks to workers via NATS (not Hermes delegate_task)
@@ -370,10 +366,19 @@ After this phase:
 - I can steer workers mid-task via inbox messages
 - Everything is persisted to SurrealDB for observability
 
-### Phase 3: Conversation threading + `hub-thread` CLI
+### Phase 3: Stateful orchestration (sessions, events, waves) ✅
 
-Already planned in DATABASE_PLAN.md. Uses `reply_to` graph edges for threaded
-conversations. `hub-thread` CLI to view conversation trees.
+Implemented per [`docs/PHASE3_PLAN.md`](PHASE3_PLAN.md). nats-hub now supports:
+
+| Capability | CLI / module |
+|---|---|
+| Multi-turn sessions | `hub-session`, `worker_runtime` session mode |
+| Structured event streams | `hub-watch`, `src/events/`, `worker_events.py` |
+| Parallel wave execution | `hub-wave`, `src/wave/`, `src/storage/wave.rs` |
+
+**Remaining from original vision:**
+- `hub-thread` CLI for reply-graph visualization (storage APIs exist; CLI not built)
+- Analytics / `hub-stats` (Phase 4 below)
 
 ### Phase 4: Analytics trait + observability
 
@@ -410,10 +415,14 @@ src/
 ├── lib.rs                    — module root, re-exports
 ├── protocol.rs               — Envelope, Meta, MessageKind, subjects
 ├── client.rs                 — HubClient + AgentRegistry (in-memory cache)
+├── events/                   — structured progress events (Phase 3b)
+├── wave/                     — wave validation + spawn orchestration (Phase 3c)
 ├── router.rs                 — ControlPlane (routing daemon, async DB mirror)
 ├── storage/
 │   ├── mod.rs                — Storage trait + query types
-│   └── surreal.rs            — SurrealStorage impl (embedded RocksDB)
+│   ├── surreal.rs            — SurrealStorage impl (embedded RocksDB)
+│   ├── session.rs            — session CRUD (Phase 3a)
+│   └── wave.rs               — wave + wave_tasks CRUD (Phase 3c)
 ├── analytics/                — (planned, Phase 4)
 │   ├── mod.rs                — Analytics trait
 │   └── surreal.rs            — SurrealAnalytics impl
@@ -423,10 +432,17 @@ src/
     ├── hub_observe.rs        — watch messages on channels (read-only)
     ├── hub_interact.rs       — interactive REPL for human messaging
     ├── hub_register.rs       — register an agent with capabilities
-    ├── hub_agents.rs         — list/search registered agents (Phase 2)
-    ├── hub_worker.rs         — (planned) universal worker: subscribe, execute, reply
-    ├── hub_history.rs        — (planned) query message history from DB
+    ├── hub_agents.rs         — list/search registered agents
+    ├── hub_worker.rs         — universal worker: subscribe, execute, reply
+    ├── hub_history.rs        — query message history from DB
+    ├── hub_delegate.rs       — task channel + delegate to a worker
+    ├── hub_session.rs        — stateful multi-turn sessions (Phase 3a)
+    ├── hub_watch.rs          — watch structured progress events (Phase 3b)
+    ├── hub_wave.rs           — parallel wave orchestration (Phase 3c)
     ├── hub_thread.rs         — (planned) view conversation threads
-    ├── hub_stats.rs          — (planned) observability / analytics
-    └── hub_delegate.rs       — (planned) create a task channel + delegate to a worker
+    └── hub_stats.rs          — (planned) observability / analytics
+
+worker_runtime.py             — shared Python worker (oneshot + session + wave)
+worker_events.py              — structured event publishing
+worker_backends/              — HeadlessCli, SdkAgent, AcpAgent backends
 ```

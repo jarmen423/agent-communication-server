@@ -18,8 +18,10 @@ use tracing::{debug, info, warn};
 
 use crate::protocol::Envelope;
 use crate::storage::session;
+use crate::storage::wave;
 use crate::storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord,
+    WaveRecord, WaveTaskRecord, Storage,
 };
 
 /// SurrealDB-backed storage. Embedded RocksDB, zero-config.
@@ -471,6 +473,50 @@ impl Storage for SurrealStorage {
         session::list_sessions(&self.db, filter).await
     }
 
+    // ── Waves ────────────────────────────────────────────────
+
+    async fn create_wave(&self, wave: WaveRecord) -> Result<()> {
+        wave::create_wave(&self.db, wave).await
+    }
+
+    async fn update_wave_status(&self, wave_id: &str, status: &str) -> Result<()> {
+        wave::update_wave_status(&self.db, wave_id, status).await
+    }
+
+    async fn get_wave(&self, wave_id: &str) -> Result<Option<WaveRecord>> {
+        wave::get_wave(&self.db, wave_id).await
+    }
+
+    async fn list_waves(&self, status: Option<&str>) -> Result<Vec<WaveRecord>> {
+        wave::list_waves(&self.db, status).await
+    }
+
+    async fn create_wave_task(&self, task: WaveTaskRecord) -> Result<()> {
+        wave::create_wave_task(&self.db, task).await
+    }
+
+    async fn update_wave_task_status(
+        &self,
+        wave_id: &str,
+        task_id: &str,
+        status: &str,
+        result: Option<&str>,
+    ) -> Result<()> {
+        wave::update_wave_task_status(&self.db, wave_id, task_id, status, result).await
+    }
+
+    async fn get_wave_task(
+        &self,
+        wave_id: &str,
+        task_id: &str,
+    ) -> Result<Option<WaveTaskRecord>> {
+        wave::get_wave_task(&self.db, wave_id, task_id).await
+    }
+
+    async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>> {
+        wave::list_wave_tasks(&self.db, wave_id).await
+    }
+
     // ── Lifecycle ───────────────────────────────────────────
 
     async fn migrate(&self) -> Result<()> {
@@ -512,6 +558,31 @@ impl Storage for SurrealStorage {
             "DEFINE FIELD metadata      AT sessions TYPE object",
             "DEFINE INDEX idx_sessions_status ON TABLE sessions COLUMNS status",
             "DEFINE INDEX idx_sessions_worker ON TABLE sessions COLUMNS worker, status",
+            // Waves
+            "DEFINE TABLE waves SCHEMALESS",
+            "DEFINE FIELD wave_id      AT waves TYPE string",
+            "DEFINE FIELD goal         AT waves TYPE string",
+            "DEFINE FIELD status       AT waves TYPE string",
+            "DEFINE FIELD orchestrator AT waves TYPE string",
+            "DEFINE FIELD created_at   AT waves TYPE datetime",
+            "DEFINE FIELD closed_at    AT waves TYPE option<datetime>",
+            "DEFINE FIELD metadata     AT waves TYPE object",
+            "DEFINE INDEX idx_waves_status ON TABLE waves COLUMNS status",
+            "DEFINE TABLE wave_tasks SCHEMALESS",
+            "DEFINE FIELD wave_id      AT wave_tasks TYPE string",
+            "DEFINE FIELD task_id      AT wave_tasks TYPE string",
+            "DEFINE FIELD worker       AT wave_tasks TYPE string",
+            "DEFINE FIELD goal         AT wave_tasks TYPE string",
+            "DEFINE FIELD status       AT wave_tasks TYPE string",
+            "DEFINE FIELD write_scope  AT wave_tasks TYPE array<string>",
+            "DEFINE FIELD dependencies AT wave_tasks TYPE array<string>",
+            "DEFINE FIELD handoff_path AT wave_tasks TYPE option<string>",
+            "DEFINE FIELD verify_cmd   AT wave_tasks TYPE option<string>",
+            "DEFINE FIELD created_at   AT wave_tasks TYPE datetime",
+            "DEFINE FIELD started_at   AT wave_tasks TYPE option<datetime>",
+            "DEFINE FIELD completed_at AT wave_tasks TYPE option<datetime>",
+            "DEFINE FIELD result       AT wave_tasks TYPE option<string>",
+            "DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status",
         ];
 
         for q in &queries {

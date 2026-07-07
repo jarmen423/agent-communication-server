@@ -20,6 +20,8 @@ pub enum MessageKind {
     Human,
     /// An agent status update (e.g. "thinking", "idle", "working").
     Status,
+    /// A typed progress event during worker execution (see `event_type` in payload).
+    Event,
 }
 
 /// Metadata attached to every envelope — identifies sender, intended
@@ -126,5 +128,25 @@ pub mod subjects {
     /// instead of the broadcast channel.
     pub fn inbox(identity: &str) -> String {
         format!("{CHANNEL_PREFIX}.inbox.{identity}")
+    }
+
+    /// Wave-level broadcast channel: `channel.wave.<wave-id>`.
+    pub fn wave(wave_id: &str) -> String {
+        format!("{CHANNEL_PREFIX}.wave.{wave_id}")
+    }
+
+    /// Per-task channel within a wave: `channel.wave.<wave-id>.task.<task-id>`.
+    pub fn wave_task(wave_id: &str, task_id: &str) -> String {
+        format!("{CHANNEL_PREFIX}.wave.{wave_id}.task.{task_id}")
+    }
+
+    /// Hub send channel name for a wave (no `channel.` prefix).
+    pub fn wave_channel_name(wave_id: &str) -> String {
+        format!("wave.{wave_id}")
+    }
+
+    /// Hub send channel name for a wave task.
+    pub fn wave_task_channel_name(wave_id: &str, task_id: &str) -> String {
+        format!("wave.{wave_id}.task.{task_id}")
     }
 }

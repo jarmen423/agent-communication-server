@@ -23,6 +23,8 @@ from typing import Any, Protocol, runtime_checkable
 from nats.aio.client import Client as NATSClient
 from nats.aio.msg import Msg
 
+from worker_events import execute_with_events, publish_event as emit_event
+
 
 def make_envelope(
     from_id: str,
@@ -78,6 +80,9 @@ async def run_worker(cfg: WorkerConfig) -> None:
             make_envelope(cfg.identity, None, channel, kind, payload, reply_to=reply_to),
         )
 
+    async def publish_event(channel: str, event_type: str, data: dict) -> None:
+        await emit_event(publish, channel, event_type, data)
+
     # ── One-shot (hub-delegate) ─────────────────────────────────
 
     async def process_oneshot(msg: Msg) -> None:
@@ -102,25 +107,17 @@ async def run_worker(cfg: WorkerConfig) -> None:
         task_id = meta.get("id")
         print(f"[{log}] oneshot on {task_channel}: {prompt[:80]}...")
 
-        await publish(task_channel, "status", {"status": "working"})
-        try:
-            result_text, _ = await cfg.backend.run(prompt, {})
-            await publish(
-                task_channel,
-                "message",
-                {"result": result_text, "task_id": task_id, "status": "done"},
-                reply_to=task_id,
-            )
-            await publish(task_channel, "status", {"status": "done"})
-        except Exception as err:
-            print(f"[{log}] oneshot failed: {err}")
-            await publish(
-                task_channel,
-                "message",
-                {"error": str(err), "task_id": task_id, "status": "error"},
-                reply_to=task_id,
-            )
-            await publish(task_channel, "status", {"status": "error"})
+        await execute_with_events(
+            publish=publish,
+            publish_event_fn=publish_event,
+            backend=cfg.backend,
+            channel=task_channel,
+            prompt=prompt,
+            ctx={},
+            task_id=task_id,
+            working_status="working",
+            done_status="done",
+        )
 
     # ── Stateful sessions (hub-session) ─────────────────────────
 
@@ -134,27 +131,25 @@ async def run_worker(cfg: WorkerConfig) -> None:
         if not session:
             return
 
-        await publish(session_channel, "status", {"status": "working"})
-        try:
-            backend_ctx = session.get("backend_ctx") or {}
-            result_text, new_ctx = await cfg.backend.run(prompt, backend_ctx)
+        backend_ctx = session.get("backend_ctx") or {}
+        outcome = await execute_with_events(
+            publish=publish,
+            publish_event_fn=publish_event,
+            backend=cfg.backend,
+            channel=session_channel,
+            prompt=prompt,
+            ctx=backend_ctx,
+            task_id=task_id,
+            working_status="working",
+            done_status="idle",
+            wave_channel=session.get("wave_channel"),
+            verify_cmd=session.get("verify_cmd"),
+        )
+        if outcome is not None:
+            _, new_ctx = outcome
             session["backend_ctx"] = new_ctx
-            await publish(
-                session_channel,
-                "message",
-                {"result": result_text, "task_id": task_id, "status": "done"},
-                reply_to=task_id,
-            )
-            await publish(session_channel, "status", {"status": "idle"})
-        except Exception as err:
-            print(f"[{log}] session {session_id} failed: {err}")
-            await publish(
-                session_channel,
-                "message",
-                {"error": str(err), "task_id": task_id, "status": "error"},
-                reply_to=task_id,
-            )
-            await publish(session_channel, "status", {"status": "error"})
+        else:
+            print(f"[{log}] session {session_id} failed")
 
     async def process_session_msg(msg: Msg) -> None:
         try:
@@ -166,21 +161,45 @@ async def run_worker(cfg: WorkerConfig) -> None:
         meta = envelope.get("meta", {})
         payload = envelope.get("payload", {})
         action = payload.get("action")
-        session_id = payload.get("session_id") or meta.get("channel", "").replace("session.", "")
+        session_id = payload.get("session_id")
+        if not session_id:
+            ch = meta.get("channel", "")
+            if ".task." in ch:
+                session_id = ch.rsplit(".task.", 1)[-1]
+            elif ch.startswith("session."):
+                session_id = ch[len("session.") :]
 
         if action == "session_start":
-            session_channel = payload.get("session_channel", f"session.{session_id}")
+            session_channel = (
+                payload.get("session_channel")
+                or payload.get("channel")
+                or f"session.{session_id}"
+            )
+            wave_id = payload.get("wave_id")
+            wave_channel = f"wave.{wave_id}" if wave_id else None
             sender = meta.get("from", "unknown")
             prompt = payload.get("prompt")
-            print(f"[{log}] session_start: {session_id} from {sender}")
+            print(f"[{log}] session_start: {session_id} from {sender} on {session_channel}")
 
             async def session_callback(smsg: Msg) -> None:
                 await process_session_msg(smsg)
 
             sub = await nc.subscribe(f"channel.{session_channel}", cb=session_callback)
+            wave_sub = None
+            if wave_channel:
+                async def wave_callback(_msg: Msg) -> None:
+                    pass
+
+                wave_sub = await nc.subscribe(f"channel.{wave_channel}", cb=wave_callback)
+                print(f"[{log}] subscribed to wave channel {wave_channel}")
+
             active_sessions[session_id] = {
                 "channel": session_channel,
                 "subscription": sub,
+                "wave_subscription": wave_sub,
+                "wave_channel": wave_channel,
+                "verify_cmd": payload.get("verify_cmd"),
+                "write_scope": payload.get("write_scope"),
                 "backend_ctx": {"_session_id": session_id},
                 "sender": sender,
             }
@@ -205,6 +224,8 @@ async def run_worker(cfg: WorkerConfig) -> None:
             session = active_sessions.pop(session_id)
             print(f"[{log}] session_close: {session_id}")
             await session["subscription"].unsubscribe()
+            if session.get("wave_subscription"):
+                await session["wave_subscription"].unsubscribe()
             await publish(session["channel"], "status", {"status": "closed"})
 
     # ── Inbox router ────────────────────────────────────────────

@@ -56,6 +56,15 @@ name = "hub-session"
 path = "src/bin/hub_session.rs"
 required-features = ["storage-surreal"]
 
+[[bin]]
+name = "hub-watch"
+path = "src/bin/hub_watch.rs"
+
+[[bin]]
+name = "hub-wave"
+path = "src/bin/hub_wave.rs"
+required-features = ["storage-surreal"]
+
 # ── Library dependencies (what downstream crates pull in) ──────
 [dependencies]
 async-nats = "0.38"

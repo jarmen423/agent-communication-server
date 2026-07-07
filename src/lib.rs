@@ -63,13 +63,16 @@
 //! - `list_pending()` — unanswered messages for an agent
 
 pub mod client;
+pub mod events;
 pub mod protocol;
 pub mod router;
 pub mod storage;
+pub mod wave;
 
 // ── Public API: core types ────────────────────────────────────
 
 pub use client::{AgentInfo, AgentRegistry, HubClient};
+pub use events::{event_payload, event_summary, format_event_line, resolve_watch_target, WatchQuery, WatchTarget};
 pub use protocol::{subjects, Envelope, MessageKind, Meta};
 pub use router::{ControlPlane, RoutingTable};
 
@@ -77,6 +80,8 @@ pub use router::{ControlPlane, RoutingTable};
 
 #[cfg(feature = "storage-surreal")]
 pub use storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
-    SurrealStorage,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord,
+    Storage, SurrealStorage, WaveRecord, WaveTaskRecord,
 };
+
+pub use wave::{evaluate_merge_gate, spawn_wave, validate_tasks, SpawnOutcome, WaveTaskInput};

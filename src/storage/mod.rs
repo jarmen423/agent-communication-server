@@ -195,6 +195,47 @@ impl SessionFilter {
     }
 }
 
+// ── Wave Types ───────────────────────────────────────────────
+
+/// A persisted wave record — parallel tasks with disjoint write scopes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaveRecord {
+    pub wave_id: String,
+    pub goal: String,
+    pub status: String,
+    pub orchestrator: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub closed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+}
+
+/// A single task within a wave.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaveTaskRecord {
+    pub wave_id: String,
+    pub task_id: String,
+    pub worker: String,
+    pub goal: String,
+    pub status: String,
+    #[serde(default)]
+    pub write_scope: Vec<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub handoff_path: Option<String>,
+    #[serde(default)]
+    pub verify_cmd: Option<String>,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub result: Option<String>,
+}
+
 // ── Storage Trait ────────────────────────────────────────────
 
 /// Persistence backend for nats-hub.
@@ -261,6 +302,42 @@ pub trait Storage: Send + Sync {
     /// List sessions matching a filter.
     async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionRecord>>;
 
+    // ── Waves ────────────────────────────────────────────────
+
+    /// Create a new wave record.
+    async fn create_wave(&self, wave: WaveRecord) -> Result<()>;
+
+    /// Update a wave's status (sets closed_at when completed/failed).
+    async fn update_wave_status(&self, wave_id: &str, status: &str) -> Result<()>;
+
+    /// Get a single wave by ID.
+    async fn get_wave(&self, wave_id: &str) -> Result<Option<WaveRecord>>;
+
+    /// List waves, optionally filtered by status.
+    async fn list_waves(&self, status: Option<&str>) -> Result<Vec<WaveRecord>>;
+
+    /// Create a wave task record.
+    async fn create_wave_task(&self, task: WaveTaskRecord) -> Result<()>;
+
+    /// Update a wave task's status and optional result.
+    async fn update_wave_task_status(
+        &self,
+        wave_id: &str,
+        task_id: &str,
+        status: &str,
+        result: Option<&str>,
+    ) -> Result<()>;
+
+    /// Get a single wave task.
+    async fn get_wave_task(
+        &self,
+        wave_id: &str,
+        task_id: &str,
+    ) -> Result<Option<WaveTaskRecord>>;
+
+    /// List all tasks for a wave.
+    async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>>;
+
     // ── Lifecycle ───────────────────────────────────────────
 
     /// Initialize the schema (create tables, indexes, etc.).
@@ -274,6 +351,9 @@ pub trait Storage: Send + Sync {
 
 #[cfg(feature = "storage-surreal")]
 pub mod session;
+
+#[cfg(feature = "storage-surreal")]
+pub mod wave;
 
 #[cfg(feature = "storage-surreal")]
 pub mod surreal;

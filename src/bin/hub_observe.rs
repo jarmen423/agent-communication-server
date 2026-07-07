@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
                 nats_hub::MessageKind::Control => "CTL",
                 nats_hub::MessageKind::Human => "HUM",
                 nats_hub::MessageKind::Status => "STS",
+                nats_hub::MessageKind::Event => "EVT",
             };
             let dest = env.meta.to.as_deref().unwrap_or("*");
             let payload_str = if let Some(text) = env.payload.get("text").and_then(|v| v.as_str()) {

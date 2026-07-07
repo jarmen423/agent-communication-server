@@ -245,33 +245,67 @@ DEFINE TABLE reply_to SCHEMALESS TYPE RELATION FROM envelopes TO envelopes;
 -- Graph traversal query example:
 -- SELECT *, ->reply_to->envelope.* FROM envelopes:⟨root-id⟩;
 -- Deep traversal, any depth, one query — no recursive CTE needed.
+
+-- Sessions (Phase 3a — multi-turn orchestration)
+DEFINE TABLE sessions SCHEMALESS;
+DEFINE FIELD session_id    AT sessions TYPE string;
+DEFINE FIELD orchestrator  AT sessions TYPE string;
+DEFINE FIELD worker        AT sessions TYPE string;
+DEFINE FIELD status        AT sessions TYPE string;
+DEFINE INDEX idx_sessions_status ON TABLE sessions COLUMNS status;
+DEFINE INDEX idx_sessions_worker ON TABLE sessions COLUMNS worker, status;
+
+-- Waves (Phase 3c — parallel task orchestration)
+DEFINE TABLE waves SCHEMALESS;
+DEFINE FIELD wave_id      AT waves TYPE string;
+DEFINE FIELD goal         AT waves TYPE string;
+DEFINE FIELD status       AT waves TYPE string;
+DEFINE FIELD orchestrator AT waves TYPE string;
+DEFINE INDEX idx_waves_status ON TABLE waves COLUMNS status;
+
+DEFINE TABLE wave_tasks SCHEMALESS;
+DEFINE FIELD wave_id      AT wave_tasks TYPE string;
+DEFINE FIELD task_id      AT wave_tasks TYPE string;
+DEFINE FIELD worker       AT wave_tasks TYPE string;
+DEFINE FIELD status       AT wave_tasks TYPE string;
+DEFINE FIELD write_scope  AT wave_tasks TYPE array<string>;
+DEFINE FIELD dependencies AT wave_tasks TYPE array<string>;
+DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status;
 ```
 
 ## Implementation Plan
 
-### Phase 1: Storage trait + SurrealDB impl (MVP)
-- [ ] Define `Storage` trait in `src/storage/mod.rs`
-- [ ] Define query types: `AgentFilter`, `HistoryQuery`, `AgentRecord`, `EnvelopeRecord`
-- [ ] Implement `SurrealStorage` in `src/storage/surreal.rs`
-- [ ] Add `surrealdb` dependency with `kv-rocksdb` feature
-- [ ] Schema migration on init (DEFINE TABLE / INDEX statements)
-- [ ] Wire async mirror into `ControlPlane` (fire-and-forget `store_envelope` after routing)
-- [ ] Wire `register()` and `heartbeat()` to also call `Storage`
-- [ ] Unit tests for each `Storage` method
-- [ ] Integration test: start hub-server with storage, publish messages, query history
+### Phase 1: Storage trait + SurrealDB impl (MVP) ✅
+- [x] Define `Storage` trait in `src/storage/mod.rs`
+- [x] Define query types: `AgentFilter`, `HistoryQuery`, `AgentRecord`, `EnvelopeRecord`
+- [x] Implement `SurrealStorage` in `src/storage/surreal.rs`
+- [x] Add `surrealdb` dependency with `kv-rocksdb` feature
+- [x] Schema migration on init (DEFINE TABLE / INDEX statements)
+- [x] Wire async mirror into `ControlPlane` (fire-and-forget `store_envelope` after routing)
+- [x] Wire `register()` and `heartbeat()` to also call `Storage`
+- [x] Unit tests for each `Storage` method
+- [x] Integration test: start hub-server with storage, publish messages, query history
 
-### Phase 2: Agent registry persistence
-- [ ] Replace in-memory `AgentRegistry` with `Storage`-backed registry
-- [ ] On startup, load known agents from DB
-- [ ] On register/heartbeat, write to DB (async, non-blocking)
-- [ ] `find_agents()` with capability + liveness filters
-- [ ] Add `hub-agents` CLI tool to list/search agents
+### Phase 2: Agent registry persistence ✅
+- [x] Replace in-memory `AgentRegistry` with `Storage`-backed registry
+- [x] On startup, load known agents from DB
+- [x] On register/heartbeat, write to DB (async, non-blocking)
+- [x] `find_agents()` with capability + liveness filters
+- [x] Add `hub-agents` CLI tool to list/search agents
 
-### Phase 3: Conversation threading (graph)
-- [ ] Parse `reply_to` on envelopes and call `link_reply()`
-- [ ] `get_thread()` uses SurrealDB graph traversal
-- [ ] `list_pending()` finds messages with no reply addressed to an agent
+### Phase 3: Conversation threading (graph) — partial
+- [x] Parse `reply_to` on envelopes and call `link_reply()`
+- [x] `get_thread()` uses SurrealDB graph traversal
+- [x] `list_pending()` finds messages with no reply addressed to an agent
 - [ ] Add `hub-thread` CLI tool to view conversation threads
+
+### Phase 3 (orchestration): Sessions + events + waves ✅
+
+> Distinct from conversation-threading Phase 3 above. Full plan in [`PHASE3_PLAN.md`](PHASE3_PLAN.md).
+
+- [x] **3a** `sessions` table + `hub-session` CLI + worker session mode
+- [x] **3b** `MessageKind::Event` + `hub-watch` + `worker_events.py`
+- [x] **3c** `waves` / `wave_tasks` tables + `hub-wave` CLI + spawn orchestration
 
 ### Phase 4: Analytics trait + impl
 - [ ] Define `Analytics` trait in `src/analytics/mod.rs`

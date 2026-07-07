@@ -97,6 +97,43 @@ The flow:
 
 Multiple parallel tasks run on separate channels — no cross-talk.
 
+### Stateful Session (multi-turn)
+
+Persistent conversation between orchestrator and worker on `channel.session.<uuid>`.
+
+```bash
+hub-session create --worker cursor-worker-1 --from josh --prompt "Refactor foo.rs"
+hub-session send <session-id> --from josh --message "Also add tests"
+hub-session close <session-id> --from josh
+hub-session list --status active
+```
+
+Workers stay alive via `worker_runtime.py` — they handle `session_start`, `session_send`, and `session_close` on their inbox.
+
+### Progress Events (real-time observation)
+
+Workers publish typed events (`started`, `progress`, `completed`, `error`, etc.) as `MessageKind::Event`.
+
+```bash
+hub-watch --session <session-id>     # watch one session
+hub-watch --wave <wave-id>           # watch a wave (tasks + wave channel)
+hub-watch --agent hermes-worker-1    # watch all events from an agent
+hub-watch --all                      # watch everything
+```
+
+### Wave Orchestration (parallel tasks)
+
+Run parallel tasks with disjoint write scopes, dependencies, and merge gates.
+
+```bash
+# tasks.json: [{ task_id, worker, goal, write_scope, dependencies, verify_cmd }]
+hub-wave create --goal "Parallel refactor" --from orch --tasks tasks.json
+hub-wave spawn <wave-id> --from orch
+hub-wave status <wave-id>
+hub-watch --wave <wave-id>
+hub-wave close <wave-id> --from orch
+```
+
 ## CLI Tools
 
 | Command | Description |
@@ -110,6 +147,9 @@ Multiple parallel tasks run on separate channels — no cross-talk.
 | `hub-worker` | Universal worker: subscribe, execute, reply |
 | `hub-history` | Query message history from SurrealDB |
 | `hub-delegate` | Delegate a task to a worker (one command) |
+| `hub-session` | Stateful multi-turn sessions |
+| `hub-watch` | Watch structured progress events in real time |
+| `hub-wave` | Parallel wave orchestration with merge gates |
 
 ## Embedding in Your Project
 
@@ -228,6 +268,12 @@ pub trait Storage: Send + Sync {
     async fn get_thread(&self, root_id: &str) -> Result<Vec<EnvelopeRecord>>;
     async fn list_pending(&self, identity: &str) -> Result<Vec<EnvelopeRecord>>;
 
+    // Sessions + waves (Phase 3)
+    async fn create_session(&self, session: SessionRecord) -> Result<()>;
+    async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionRecord>>;
+    async fn create_wave(&self, wave: WaveRecord) -> Result<()>;
+    async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>>;
+
     // Lifecycle
     async fn migrate(&self) -> Result<()>;
     async fn ping(&self) -> Result<()>;
@@ -253,10 +299,10 @@ Swap `--execute` or `--model` to change what the worker does. The bus doesn't ca
 ## Testing
 
 ```bash
-cargo test
+CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 ```
 
-21 tests covering: storage (SurrealDB), agent registry, inbox routing, task channel isolation, delegate round-trip, conversation threading, list_pending.
+39 tests covering: storage (SurrealDB), agent registry, inbox routing, task channels, sessions, events, waves, delegate round-trip, conversation threading, list_pending.
 
 ## License
 
@@ -264,6 +310,8 @@ BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apac
 
 ## Documentation
 
+- [`docs/PHASE3_PLAN.md`](docs/PHASE3_PLAN.md) — Phase 3 plan (sessions, events, waves) — **complete**
 - [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) — Full product vision and architecture
 - [`docs/DATABASE_PLAN.md`](docs/DATABASE_PLAN.md) — Database and persistence design
+- [`docs/WORKER_BACKENDS.md`](docs/WORKER_BACKENDS.md) — Python worker backend types
 - [`AGENTS.md`](AGENTS.md) — Guidance for AI agents working on this codebase

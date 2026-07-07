@@ -33,10 +33,14 @@ src/
 ├── lib.rs                    — module root, public API exports, doc comments
 ├── protocol.rs               — Envelope, Meta, MessageKind, subject conventions
 ├── client.rs                 — HubClient + AgentRegistry (in-memory cache)
+├── events/                   — structured progress events (MessageKind::Event)
+├── wave/                     — wave validation + spawn orchestration
 ├── router.rs                 — ControlPlane (routing daemon, async DB mirror)
 ├── storage/
-│   ├── mod.rs                — Storage trait + query types (AgentFilter, HistoryQuery, etc.)
-│   └── surreal.rs            — SurrealStorage impl (embedded RocksDB)
+│   ├── mod.rs                — Storage trait + query types
+│   ├── surreal.rs            — SurrealStorage impl (embedded RocksDB)
+│   ├── session.rs            — session CRUD (split from surreal.rs)
+│   └── wave.rs               — wave + wave_tasks CRUD
 └── bin/
     ├── hub_server.rs         — runs the control plane router (daemon, --db-path flag)
     ├── hub_publish.rs        — send a message on a channel
@@ -46,16 +50,21 @@ src/
     ├── hub_agents.rs         — list/search registered agents from DB
     ├── hub_worker.rs         — universal worker: subscribe, execute command, reply
     ├── hub_history.rs        — query message history from SurrealDB
-    └── hub_delegate.rs       — one-command task delegation with task channels
+    ├── hub_delegate.rs       — one-command task delegation with task channels
+    ├── hub_session.rs        — stateful multi-turn sessions
+    ├── hub_watch.rs          — watch structured progress events (real-time)
+    └── hub_wave.rs           — parallel wave orchestration with merge gates
 ```
+
+Python workers: `worker_runtime.py`, `worker_events.py`, `worker_backends/`, `hub_worker.js`.
 
 ## Key Types
 
 - **`Envelope`** — the wire unit. Contains `Meta` (id, from, to, channel, timestamp, kind, reply_to) + free-form JSON `payload`.
-- **`HubClient`** — wraps `async_nats::Client`. Carries an `identity: String` auto-stamped on every envelope. Methods: `send_message()`, `send_to()` (DM), `send_reply()`, `subscribe_inbox()`, `subscribe_channel()`, `register()`, `heartbeat()`.
+- **`HubClient`** — wraps `async_nats::Client`. Carries an `identity: String` auto-stamped on every envelope. Methods: `send_message()`, `send_to()` (DM), `send_reply()`, `subscribe_inbox()`, `subscribe_channel()`, `subscribe_subject()`, `start_session()`, `send_to_session()`, `close_session()`, `subscribe_session()`, `register()`, `heartbeat()`.
 - **`ControlPlane`** — the router. Subscribes to `hub.send.>`, routes by `meta.to`. Optionally mirrors to `Storage` (async, fire-and-forget). Loads agents from DB on startup.
 - **`AgentRegistry`** — in-memory cache of known agents. Hot-path queries use this; cold-path queries go to `Storage`. Methods: `register()`, `find_by_capability()`, `find_alive()`, `touch()`, `deregister()`.
-- **`Storage`** — trait abstracting the persistence backend. Default impl: `SurrealStorage` (embedded RocksDB). Provides `store_envelope()`, `query_history()`, `find_agents()`, `get_thread()`, `list_pending()`, `migrate()`, `ping()`.
+- **`Storage`** — trait abstracting the persistence backend. Default impl: `SurrealStorage` (embedded RocksDB). Provides `store_envelope()`, `query_history()`, `find_agents()`, `get_thread()`, `list_pending()`, session CRUD, wave CRUD, `migrate()`, `ping()`.
 - **`SurrealStorage`** — SurrealDB v2 embedded via RocksDB. Graph-native (conversation threading), document-native (free-form JSON), zero-config. Always behind the `Storage` trait (BSL safeguard).
 
 ## Build & Run
@@ -84,6 +93,18 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 
 # Watch history
 ./target/debug/hub-history --db-path nats_hub.db --tail
+
+# Stateful session (multi-turn)
+./target/debug/hub-session create --worker cursor-worker-1 --from josh --prompt "Hello"
+./target/debug/hub-session send <session-id> --from josh --message "Follow up"
+
+# Watch structured progress events
+./target/debug/hub-watch --session <session-id>
+
+# Parallel wave orchestration
+./target/debug/hub-wave create --goal "Refactor module" --from josh --tasks tasks.json
+./target/debug/hub-wave spawn <wave-id> --from josh
+./target/debug/hub-watch --wave <wave-id>
 ```
 
 **Note**: Set `CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats` to avoid filling `/` (193G disk). The `/data` partition has 369G.
@@ -102,7 +123,9 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 | `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
 | `hub-delegate --to AGENT --prompt MSG [--timeout SECS] [--verbose]` | Delegate a task |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
-| `hub-worker.js --type <cline|agy|hermes|cursor> --identity <name>` | Universal worker (single CLI, all backend types) |
+| `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
+| `hub-wave create/spawn/status/close/list` | Parallel wave orchestration |
+| `hub-worker.js --type <cline\|agy\|hermes\|cursor> --identity <name>` | Universal worker (single CLI, all backend types) |
 
 ## Python workers (typed backends)
 
@@ -121,13 +144,16 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 - **DM**: `send_to(agent, channel, payload)` — sets `meta.to`, router routes to `channel.inbox.<agent>`
 - **Reply**: `send_reply(&original, payload)` — DM + `meta.reply_to` correlation ID
 - **Task channel**: `hub-delegate` creates `task.<uuid>`, isolated bidirectional conversation
+- **Session**: `hub-session` creates `session.<uuid>`, multi-turn on `channel.session.<uuid>`
+- **Wave**: `hub-wave` creates `wave.<id>` + `wave.<id>.task.<task_id>`, parallel tasks with deps
+- **Events**: workers publish `MessageKind::Event` with `{event_type, data}`; observe via `hub-watch`
 
 ## Conventions
 
 - **Identity**: set once at `HubClient::connect(url, identity)`. Auto-stamped on every envelope. Never manually append identity to payloads.
 - **Wire format**: all messages are JSON `Envelope` structs. Payloads are free-form JSON.
-- **Subject conventions**: `hub.send.<channel>` for publishing, `channel.<name>` for broadcast, `channel.inbox.<identity>` for DM, `channel.task.<uuid>` for task channels.
-- **Message kinds**: `message`, `control`, `human`, `status` (see `MessageKind` enum).
+- **Subject conventions**: `hub.send.<channel>` for publishing, `channel.<name>` for broadcast, `channel.inbox.<identity>` for DM, `channel.task.<uuid>` for task channels, `channel.session.<uuid>` for sessions, `channel.wave.<id>` / `channel.wave.<id>.task.<task_id>` for waves.
+- **Message kinds**: `message`, `control`, `human`, `status`, `event` (see `MessageKind` enum).
 - **Persistence**: SurrealDB (embedded RocksDB) via the `Storage` trait. All envelopes + agent registrations are async-mirrored to the DB. Agent registry persists across restarts.
 - **Async everywhere**: all I/O is async (tokio + async-nats). No blocking calls. Use `tokio::sync::Mutex`, not `std::sync::Mutex`. Use `tokio::process::Command`, not `std::process::Command`.
 - **File size**: keep files under ~400 LOC. Split into focused modules if growing.
@@ -139,11 +165,14 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 ```
 
-21 tests across 4 test files:
+39 tests across 8 test files + 3 unit tests in `src/wave/validate.rs`:
 - `tests/storage_surreal.rs` (5): envelope store/query, agent registry, threading, ping
 - `tests/agent_registry.rs` (10): capability/alive/touch/deregister filters (DB + in-memory)
 - `tests/inbox_routing.rs` (3): DM routing, reply correlation, subject format
 - `tests/task_channels.rs` (3): task channel isolation, delegate round-trip, list_pending
+- `tests/sessions.rs` (4): session lifecycle, filters, persistence, channel isolation
+- `tests/events.rs` (5): event formatting, watch target resolution
+- `tests/waves.rs` (5): wave lifecycle, task status, validation, merge gate
 
 **Note**: Tests that require NATS server will skip gracefully if it's not running.
 
@@ -165,5 +194,7 @@ CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 ## Documentation
 
 - `README.md` — quickstart, embedding guide, CLI reference
+- `docs/PHASE3_PLAN.md` — Phase 3a/3b/3c plan and completion status
 - `docs/PRODUCT_VISION.md` — full product vision, communication patterns, worker design
 - `docs/DATABASE_PLAN.md` — database architecture and implementation roadmap
+- `docs/WORKER_BACKENDS.md` — Python worker backend types and event/wave integration

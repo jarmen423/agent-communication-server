@@ -1,5 +1,15 @@
 # Phase 3: Stateful Sessions + Event Streams + Wave Orchestration
 
+## Status
+
+| Sub-phase | Status | Completed |
+|---|---|---|
+| **3a** Stateful Sessions | ✅ Done | `hub-session`, `SessionRecord`, `worker_runtime` session mode |
+| **3b** Event Stream + `hub-watch` | ✅ Done | `MessageKind::Event`, `src/events/`, `worker_events.py`, `hub-watch` |
+| **3c** Wave Orchestration | ✅ Done | `hub-wave`, `WaveRecord`/`WaveTaskRecord`, `src/wave/`, wave worker mode |
+
+**Verification (all sub-phases):** `CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test` — 39 tests pass; `cargo build` clean.
+
 ## Overview
 
 Transform nats-hub from a one-shot delegation bus into a stateful agent
@@ -15,7 +25,9 @@ watch) — but provider-agnostic and DB-backed.
 
 ---
 
-## Phase 3a: Stateful Sessions
+## Phase 3a: Stateful Sessions ✅
+
+> **Implemented.** See `src/bin/hub_session.rs`, `src/storage/session.rs`, `tests/sessions.rs`.
 
 ### Concept
 
@@ -217,7 +229,10 @@ Add `[[bin]]` entry for `hub-session`.
 
 ---
 
-## Phase 3b: Structured Event Stream + `hub-watch`
+## Phase 3b: Structured Event Stream + `hub-watch` ✅
+
+> **Implemented.** See `src/events/`, `src/bin/hub_watch.rs`, `worker_events.py`, `tests/events.rs`.
+> Wave watch uses a `channel_prefix` filter on `channel.>` (not `channel.wave.{id}.>`) so wave-level broadcasts are included.
 
 ### Concept
 
@@ -311,7 +326,10 @@ await publish_event(nc, session_channel, "completed", {"result": result})
 
 ---
 
-## Phase 3c: Wave Orchestration
+## Phase 3c: Wave Orchestration ✅
+
+> **Implemented.** See `src/bin/hub_wave.rs`, `src/storage/wave.rs`, `src/wave/`, `tests/waves.rs`.
+> Workers accept `channel` + `wave_id` on `session_start`; events mirror to both task and wave channels.
 
 ### Concept
 
@@ -490,11 +508,17 @@ Workers in wave mode:
 
 ## Implementation Order
 
-1. **3a first** (sessions) — foundation for everything else
-2. **3b second** (event stream) — builds on sessions, needed for wave observation
-3. **3c third** (waves) — builds on both sessions and events
+1. ~~**3a first** (sessions)~~ ✅ — foundation for everything else
+2. ~~**3b second** (event stream)~~ ✅ — builds on sessions, needed for wave observation
+3. ~~**3c third** (waves)~~ ✅ — builds on both sessions and events
 
-Total estimated: ~1,586 LOC across 3 sub-phases.
+Total estimated: ~1,586 LOC across 3 sub-phases. **All three sub-phases complete.**
+
+## Next (not in Phase 3 scope)
+
+- `hub-thread` CLI for conversation graph visualization (see `docs/DATABASE_PLAN.md`)
+- Analytics / `hub-stats` (Phase 4 in `DATABASE_PLAN.md`)
+- Dashboard / TUI consuming `hub-watch` event streams
 
 ## Build Conventions
 
