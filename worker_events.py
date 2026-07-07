@@ -89,7 +89,7 @@ async def execute_with_events(
             channel,
             "message",
             {"result": result_text, "task_id": task_id, "status": "done"},
-            reply_to=task_id,
+            reply_to=channel,
         )
         await publish(channel, "status", {"status": done_status})
         return result_text, new_ctx
@@ -99,7 +99,7 @@ async def execute_with_events(
             channel,
             "message",
             {"error": str(err), "task_id": task_id, "status": "error"},
-            reply_to=task_id,
+            reply_to=channel,
         )
         await publish(channel, "status", {"status": "error"})
         return None

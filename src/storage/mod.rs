@@ -56,6 +56,8 @@ pub struct HistoryQuery {
     pub channel: Option<String>,
     /// Filter by sender identity.
     pub from: Option<String>,
+    /// Filter by direct recipient identity (DM target).
+    pub to: Option<String>,
     /// Filter by message kind.
     pub kind: Option<String>,
     /// Only messages after this timestamp.
@@ -81,8 +83,24 @@ impl HistoryQuery {
         self
     }
 
+    /// Filter by direct recipient (DM target).
+    pub fn to(mut self, id: impl Into<String>) -> Self {
+        self.to = Some(id.into());
+        self
+    }
+
+    pub fn kind(mut self, k: impl Into<String>) -> Self {
+        self.kind = Some(k.into());
+        self
+    }
+
     pub fn since(mut self, ts: DateTime<Utc>) -> Self {
         self.since = Some(ts);
+        self
+    }
+
+    pub fn until(mut self, ts: DateTime<Utc>) -> Self {
+        self.until = Some(ts);
         self
     }
 
@@ -329,11 +347,7 @@ pub trait Storage: Send + Sync {
     ) -> Result<()>;
 
     /// Get a single wave task.
-    async fn get_wave_task(
-        &self,
-        wave_id: &str,
-        task_id: &str,
-    ) -> Result<Option<WaveTaskRecord>>;
+    async fn get_wave_task(&self, wave_id: &str, task_id: &str) -> Result<Option<WaveTaskRecord>>;
 
     /// List all tasks for a wave.
     async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>>;

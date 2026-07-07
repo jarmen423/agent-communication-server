@@ -25,7 +25,10 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "hub-delegate", about = "Delegate a task to an agent worker via nats-hub")]
+#[command(
+    name = "hub-delegate",
+    about = "Delegate a task to an agent worker via nats-hub"
+)]
 struct Args {
     /// Recipient agent identity (the worker to send the task to)
     #[arg(long)]
@@ -122,7 +125,11 @@ async fn main() -> Result<()> {
             match tokio::time::timeout(t, task_rx.recv()).await {
                 Ok(result) => result,
                 Err(_) => {
-                    eprintln!("\n[hub-delegate] TIMEOUT after {}s — no reply from {to}", args.timeout, to = args.to);
+                    eprintln!(
+                        "\n[hub-delegate] TIMEOUT after {}s — no reply from {to}",
+                        args.timeout,
+                        to = args.to
+                    );
                     let _ = client.drain().await;
                     std::process::exit(2);
                 }
@@ -136,7 +143,9 @@ async fn main() -> Result<()> {
                 // Check if this is a status update or the final result
                 if reply.meta.kind == MessageKind::Status {
                     if args.verbose {
-                        let status = reply.payload.get("status")
+                        let status = reply
+                            .payload
+                            .get("status")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
                         eprintln!("[status] {} — {status}", reply.meta.from);
@@ -144,8 +153,25 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
+                // Structured events (started/progress/completed/error) are
+                // emitted on the task channel too — skip them; only the final
+                // `message` (with payload.result / payload.error) is the reply.
+                if reply.meta.kind == MessageKind::Event {
+                    if args.verbose {
+                        let etype = reply
+                            .payload
+                            .get("event_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("event");
+                        eprintln!("[event] {} — {etype}", reply.meta.from);
+                    }
+                    continue;
+                }
+
                 // This is the result
-                let result = reply.payload.get("result")
+                let result = reply
+                    .payload
+                    .get("result")
                     .and_then(|v| v.as_str())
                     .unwrap_or_else(|| {
                         if let Some(err) = reply.payload.get("error").and_then(|v| v.as_str()) {
@@ -154,7 +180,9 @@ async fn main() -> Result<()> {
                         "no result field"
                     });
 
-                let status = reply.payload.get("status")
+                let status = reply
+                    .payload
+                    .get("status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("done");
 

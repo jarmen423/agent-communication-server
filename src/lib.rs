@@ -72,7 +72,9 @@ pub mod wave;
 // ── Public API: core types ────────────────────────────────────
 
 pub use client::{AgentInfo, AgentRegistry, HubClient};
-pub use events::{event_payload, event_summary, format_event_line, resolve_watch_target, WatchQuery, WatchTarget};
+pub use events::{
+    event_payload, event_summary, format_event_line, resolve_watch_target, WatchQuery, WatchTarget,
+};
 pub use protocol::{subjects, Envelope, MessageKind, Meta};
 pub use router::{ControlPlane, RoutingTable};
 
@@ -80,8 +82,22 @@ pub use router::{ControlPlane, RoutingTable};
 
 #[cfg(feature = "storage-surreal")]
 pub use storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord,
-    Storage, SurrealStorage, WaveRecord, WaveTaskRecord,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
+    SurrealStorage, WaveRecord, WaveTaskRecord,
 };
+
+// The analytics module is always compiled (its `metrics` submodule has no
+// storage dependency, so `MetricsCollector` is available in `--features
+// no-storage` mode). The storage-dependent `Analytics` trait + `SurrealAnalytics`
+// re-exports below are gated.
+pub mod analytics;
+#[cfg(feature = "storage-surreal")]
+pub use analytics::{
+    ActivityStats, Analytics, ChannelStats, DataPoint, Interval, LatencyStats, SurrealAnalytics,
+    TimeRange,
+};
+
+// Always available — no storage dependency.
+pub use analytics::metrics::MetricsCollector;
 
 pub use wave::{evaluate_merge_gate, spawn_wave, validate_tasks, SpawnOutcome, WaveTaskInput};

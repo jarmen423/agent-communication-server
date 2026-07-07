@@ -16,6 +16,7 @@ use crate::client::{AgentInfo, AgentRegistry};
 use crate::protocol::{subjects, Envelope};
 #[cfg(feature = "storage-surreal")]
 use crate::storage::{AgentFilter, AgentRecord, Storage};
+use crate::MetricsCollector;
 
 /// Routing rules — maps channel names to endpoint lists.
 /// In the base implementation routing is direct (channel → channel.<name>),
@@ -68,6 +69,10 @@ pub struct ControlPlane {
     /// The hot path (NATS routing) never blocks on storage writes.
     #[cfg(feature = "storage-surreal")]
     storage: Option<Arc<dyn Storage>>,
+    /// Optional live metrics collector. When set, every routed envelope is
+    /// recorded via a non-blocking atomic increment (safe on the hot path).
+    /// Always available regardless of the storage feature.
+    metrics: Option<Arc<MetricsCollector>>,
 }
 
 impl ControlPlane {
@@ -82,7 +87,15 @@ impl ControlPlane {
             registry: AgentRegistry::new(),
             #[cfg(feature = "storage-surreal")]
             storage: None,
+            metrics: None,
         })
+    }
+
+    /// Attach a live metrics collector. Records one atomic increment per
+    /// routed envelope on the hot path. Safe to call before `run()`.
+    pub fn with_metrics(mut self, metrics: Arc<MetricsCollector>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Attach a storage backend for persistence (agent registry, message
@@ -192,6 +205,12 @@ impl ControlPlane {
 
         match Envelope::from_json_bytes(&msg.payload) {
             Ok(env) => {
+                // Live metrics: non-blocking atomic increment on the hot path.
+                // Safe even under heavy load — no allocation, no await.
+                if let Some(metrics) = &self.metrics {
+                    metrics.record(&env);
+                }
+
                 // Determine routing destination: inbox (DM) or broadcast
                 let dest = if let Some(ref to) = env.meta.to {
                     debug!(

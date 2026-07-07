@@ -20,8 +20,8 @@ use crate::protocol::Envelope;
 use crate::storage::session;
 use crate::storage::wave;
 use crate::storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord,
-    WaveRecord, WaveTaskRecord, Storage,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
+    WaveRecord, WaveTaskRecord,
 };
 
 /// SurrealDB-backed storage. Embedded RocksDB, zero-config.
@@ -192,7 +192,8 @@ impl Storage for SurrealStorage {
                     .all(|cap| row.capabilities.contains(cap))
             })
             .map(|row| {
-                let ident = row.id
+                let ident = row
+                    .id
                     .as_ref()
                     .map(|id| {
                         let s = id.key().to_string();
@@ -225,13 +226,13 @@ impl Storage for SurrealStorage {
         let rows: Vec<AgentRow> = result.take(0)?;
 
         Ok(rows.into_iter().next().map(|r| {
-            let ident = r.id
-                .as_ref()
-                .map(|id| {
-                    let s = id.key().to_string();
-                    s.trim_matches('`').to_string()
-                })
-                .unwrap_or_default();
+            let ident =
+                r.id.as_ref()
+                    .map(|id| {
+                        let s = id.key().to_string();
+                        s.trim_matches('`').to_string()
+                    })
+                    .unwrap_or_default();
             AgentRecord {
                 identity: ident,
                 capabilities: r.capabilities,
@@ -288,6 +289,9 @@ impl Storage for SurrealStorage {
         if q.from.is_some() {
             conditions.push("from_identity = $from".to_string());
         }
+        if q.to.is_some() {
+            conditions.push("to_identity = $to".to_string());
+        }
         if q.kind.is_some() {
             conditions.push("kind = $kind".to_string());
         }
@@ -316,6 +320,9 @@ impl Storage for SurrealStorage {
         }
         if let Some(ref from) = q.from {
             q_builder = q_builder.bind(("from", from.clone()));
+        }
+        if let Some(ref to) = q.to {
+            q_builder = q_builder.bind(("to", to.clone()));
         }
         if let Some(ref kind) = q.kind {
             q_builder = q_builder.bind(("kind", kind.clone()));
@@ -505,11 +512,7 @@ impl Storage for SurrealStorage {
         wave::update_wave_task_status(&self.db, wave_id, task_id, status, result).await
     }
 
-    async fn get_wave_task(
-        &self,
-        wave_id: &str,
-        task_id: &str,
-    ) -> Result<Option<WaveTaskRecord>> {
+    async fn get_wave_task(&self, wave_id: &str, task_id: &str) -> Result<Option<WaveTaskRecord>> {
         wave::get_wave_task(&self.db, wave_id, task_id).await
     }
 
@@ -596,7 +599,10 @@ impl Storage for SurrealStorage {
     }
 
     async fn ping(&self) -> Result<()> {
-        let mut result = self.db.query("SELECT * FROM type::table('agents') LIMIT 1").await?;
+        let mut result = self
+            .db
+            .query("SELECT * FROM type::table('agents') LIMIT 1")
+            .await?;
         let _: Vec<serde_json::Value> = result.take(0)?;
         Ok(())
     }

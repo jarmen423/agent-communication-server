@@ -18,7 +18,12 @@ def agy_spec(
     if model:
         base.extend(["--model", model])
     if print_timeout:
-        base.extend(["--print-timeout", print_timeout])
+        # agy's --print-timeout expects a Go-style duration (e.g. "90s"), not a
+        # bare integer. Normalize "90" -> "90s".
+        pt = str(print_timeout)
+        if pt and not pt.endswith(("s", "m", "h")):
+            pt = pt + "s"
+        base.extend(["--print-timeout", pt])
     return HeadlessCliSpec(
         binary=agy,
         log_label="agy-worker",
