@@ -65,6 +65,8 @@
 pub mod client;
 pub mod events;
 pub mod protocol;
+pub mod query_api;
+pub mod query_api_client;
 pub mod router;
 pub mod storage;
 pub mod wave;
@@ -101,3 +103,6 @@ pub use analytics::{
 pub use analytics::metrics::MetricsCollector;
 
 pub use wave::{evaluate_merge_gate, spawn_wave, validate_tasks, SpawnOutcome, WaveTaskInput};
+
+pub use query_api::{ApiResponse, ApiRequest};
+pub use query_api_client::ApiClient;

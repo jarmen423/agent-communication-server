@@ -132,7 +132,20 @@ async fn main() -> Result<()> {
                 .context("SurrealDB migration failed")?;
             storage.ping().await.context("SurrealDB ping failed")?;
             info_log(&format!("attached SurrealDB storage at '{}'", args.db_path));
-            let cp = cp.with_storage(Arc::new(storage));
+            let storage = Arc::new(storage);
+
+            // Start the query API so CLI tools can route DB ops through hub-server
+            // (solves RocksDB single-writer lock contention).
+            let api_storage = storage.clone();
+            let api_nats = args.nats_url.clone();
+            tokio::spawn(async move {
+                if let Err(e) = nats_hub::query_api::start_api_listener(api_storage, &api_nats).await {
+                    eprintln!("[hub-server] query API error: {e}");
+                }
+            });
+            info_log("query API listening on hub.api.>");
+
+            let cp = cp.with_storage(storage);
             return cp.run().await;
         } else {
             info_log("no --db-path provided, running without persistent storage");
