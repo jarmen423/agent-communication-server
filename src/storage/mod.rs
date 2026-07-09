@@ -18,7 +18,7 @@ use crate::protocol::Envelope;
 // ── Query / Filter Types ─────────────────────────────────────
 
 /// Filter for agent discovery queries.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct AgentFilter {
     /// Only return agents with ALL these capabilities.
     pub capabilities: Vec<String>,
@@ -50,7 +50,7 @@ impl AgentFilter {
 }
 
 /// Query for message history.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct HistoryQuery {
     /// Filter by channel (exact match).
     pub channel: Option<String>,
@@ -179,7 +179,7 @@ pub struct SessionRecord {
 }
 
 /// Filter for session queries.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SessionFilter {
     pub status: Option<String>,
     pub worker: Option<String>,

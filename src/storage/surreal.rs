@@ -26,6 +26,7 @@ use crate::storage::{
 
 /// SurrealDB-backed storage. Embedded RocksDB, zero-config.
 /// In v2, `Surreal::new::<RocksDb>(path)` returns `Surreal<Db>`.
+#[derive(Clone)]
 pub struct SurrealStorage {
     db: Surreal<surrealdb::engine::local::Db>,
 }

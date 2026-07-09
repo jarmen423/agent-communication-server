@@ -125,6 +125,21 @@ async fn handle_api_request(
         // ── History ────────────────────────────────────────────
         "history.query" => history_query(storage, &req.params).await,
 
+        // ── Threads ───────────────────────────────────────────
+        "thread.get" => thread_get(storage, &req.params).await,
+        "thread.pending" => thread_pending(storage, &req.params).await,
+        "envelope.get" => envelope_get(storage, &req.params).await,
+
+        // ── Single agent ──────────────────────────────────────
+        "agent.get" => agent_get(storage, &req.params).await,
+
+        // ── Stats (analytics) ─────────────────────────────────
+        "stats.message_rate" => stats_message_rate(storage, &req.params).await,
+        "stats.latency" => stats_latency(storage, &req.params).await,
+        "stats.agent_activity" => stats_agent_activity(storage, &req.params).await,
+        "stats.channel_hotspots" => stats_channel_hotspots(storage, &req.params).await,
+        "stats.error_rate" => stats_error_rate(storage, &req.params).await,
+
         // ── Misc ───────────────────────────────────────────────
         "ping" => ApiResponse::ok(serde_json::json!({"ok": true})),
 
@@ -308,6 +323,118 @@ async fn history_query(s: &SurrealStorage, p: &Value) -> ApiResponse {
     };
     match s.query_history(&query).await {
         Ok(envelopes) => ApiResponse::ok(serde_json::json!({"envelopes": envelopes})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+// ── Thread handlers ────────────────────────────────────────────
+
+async fn thread_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    let root_id = match p.get("root_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return ApiResponse::err("missing root_id"),
+    };
+    match s.get_thread(root_id).await {
+        Ok(thread) => ApiResponse::ok(serde_json::json!({"thread": thread})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn thread_pending(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    let identity = match p.get("identity").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return ApiResponse::err("missing identity"),
+    };
+    match s.list_pending(identity).await {
+        Ok(pending) => ApiResponse::ok(serde_json::json!({"pending": pending})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn envelope_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    let id = match p.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return ApiResponse::err("missing id"),
+    };
+    match s.get_envelope(id).await {
+        Ok(env) => ApiResponse::ok(serde_json::json!({"envelope": env})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn agent_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    let identity = match p.get("identity").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return ApiResponse::err("missing identity"),
+    };
+    match s.get_agent(identity).await {
+        Ok(agent) => ApiResponse::ok(serde_json::json!({"agent": agent})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+// ── Stats handlers ─────────────────────────────────────────────
+
+async fn stats_message_rate(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    use crate::analytics::{Analytics, Interval, SurrealAnalytics, TimeRange};
+    use std::sync::Arc;
+    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
+    let interval_str = p.get("interval").and_then(|v| v.as_str()).unwrap_or("hour");
+    let interval = match interval_str { "minute" => Interval::Minute, "hour" => Interval::Hour, "day" => Interval::Day, _ => Interval::Hour };
+    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
+    match analytics.message_rate(&TimeRange::last(secs), interval).await {
+        Ok(data) => ApiResponse::ok(serde_json::json!({"data": data})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn stats_latency(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    use crate::analytics::{Analytics, SurrealAnalytics, TimeRange};
+    use std::sync::Arc;
+    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
+    let channel = p.get("channel").and_then(|v| v.as_str());
+    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
+    match analytics.latency_stats(channel, &TimeRange::last(secs)).await {
+        Ok(stats) => ApiResponse::ok(serde_json::json!({"stats": stats})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn stats_agent_activity(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    use crate::analytics::{Analytics, SurrealAnalytics, TimeRange};
+    use std::sync::Arc;
+    let identity = match p.get("identity").and_then(|v| v.as_str()) {
+        Some(id) => id, None => return ApiResponse::err("missing identity"),
+    };
+    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(86400);
+    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
+    match analytics.agent_activity(identity, &TimeRange::last(secs)).await {
+        Ok(activity) => ApiResponse::ok(serde_json::json!({"activity": activity})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn stats_channel_hotspots(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    use crate::analytics::{Analytics, SurrealAnalytics, TimeRange};
+    use std::sync::Arc;
+    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
+    let limit = p.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
+    match analytics.channel_hotspots(&TimeRange::last(secs), limit).await {
+        Ok(hotspots) => ApiResponse::ok(serde_json::json!({"hotspots": hotspots})),
+        Err(e) => ApiResponse::err(e.to_string()),
+    }
+}
+
+async fn stats_error_rate(s: &SurrealStorage, p: &Value) -> ApiResponse {
+    use crate::analytics::{Analytics, Interval, SurrealAnalytics, TimeRange};
+    use std::sync::Arc;
+    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
+    let interval_str = p.get("interval").and_then(|v| v.as_str()).unwrap_or("hour");
+    let interval = match interval_str { "minute" => Interval::Minute, "hour" => Interval::Hour, "day" => Interval::Day, _ => Interval::Hour };
+    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
+    match analytics.error_rate(&TimeRange::last(secs), interval).await {
+        Ok(data) => ApiResponse::ok(serde_json::json!({"data": data})),
         Err(e) => ApiResponse::err(e.to_string()),
     }
 }

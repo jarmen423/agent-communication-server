@@ -83,14 +83,14 @@ impl Interval {
 }
 
 /// A single `(bucket_start, count)` point in a time series.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DataPoint {
     pub timestamp: DateTime<Utc>,
     pub count: u64,
 }
 
 /// Latency distribution for answered (reply) messages.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LatencyStats {
     pub samples: u64,
     pub avg_ms: f64,
@@ -101,7 +101,7 @@ pub struct LatencyStats {
 }
 
 /// Per-agent activity summary over a time range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ActivityStats {
     pub identity: String,
     pub sent: u64,
@@ -111,7 +111,7 @@ pub struct ActivityStats {
 }
 
 /// Per-channel volume row.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChannelStats {
     pub channel: String,
     pub messages: u64,
