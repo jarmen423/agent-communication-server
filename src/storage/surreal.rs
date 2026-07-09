@@ -600,11 +600,10 @@ impl Storage for SurrealStorage {
     }
 
     async fn ping(&self) -> Result<()> {
-        let mut result = self
-            .db
-            .query("SELECT * FROM type::table('agents') LIMIT 1")
-            .await?;
-        let _: Vec<serde_json::Value> = result.take(0)?;
+        // Run a trivial query that returns no rows — just verify the DB
+        // engine is responsive. Avoids SurrealDB v2.6 deserialization issues
+        // with RecordId enum types in serde_json::Value.
+        self.db.query("INFO FOR DB").await?;
         Ok(())
     }
 }
