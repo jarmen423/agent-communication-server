@@ -70,6 +70,7 @@ pub mod query_api_client;
 pub mod router;
 pub mod storage;
 pub mod wave;
+pub mod ws_bridge;
 
 // ── Public API: core types ────────────────────────────────────
 

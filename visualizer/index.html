@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nats-hub Arcade Visualizer</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.11.3/p5.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { overflow: hidden; background: #0a0a0f; font-family: 'Courier New', monospace; }
+    canvas { display: block; }
+    #hud { position: fixed; top: 12px; left: 12px; z-index: 100; pointer-events: none; }
+    #hud .title { color: #00ff88; font-size: 18px; font-weight: bold; text-shadow: 0 0 8px #00ff88; }
+    #hud .stats { color: #888; font-size: 12px; margin-top: 4px; }
+    #hud .ws-status { font-size: 11px; margin-top: 4px; }
+    #hud .ws-connected { color: #00ff88; }
+    #hud .ws-disconnected { color: #ff4466; }
+
+    /* Agent action popup */
+    #action-popup {
+      position: fixed; display: none; z-index: 200;
+      background: rgba(10, 10, 20, 0.95); border: 2px solid #00ff88;
+      border-radius: 8px; padding: 12px; min-width: 200px;
+      box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+    }
+    #action-popup h3 { color: #00ff88; font-size: 14px; margin-bottom: 8px; }
+    #action-popup .info { color: #aaa; font-size: 11px; margin-bottom: 8px; }
+    #action-popup button {
+      display: block; width: 100%; margin-bottom: 4px; padding: 6px 10px;
+      background: transparent; border: 1px solid #444; color: #ddd;
+      font-family: 'Courier New', monospace; font-size: 12px; cursor: pointer;
+      border-radius: 4px; transition: all 0.15s;
+    }
+    #action-popup button:hover { border-color: #00ff88; color: #00ff88; background: rgba(0, 255, 136, 0.1); }
+    #action-popup button.danger:hover { border-color: #ff4466; color: #ff4466; background: rgba(255, 68, 102, 0.1); }
+
+    /* Session detail popup */
+    #session-detail {
+      position: fixed; display: none; z-index: 300; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(10, 10, 20, 0.97); border: 2px solid #00aaff;
+      border-radius: 8px; padding: 16px; min-width: 400px; max-width: 600px; max-height: 70vh;
+      overflow-y: auto;
+      box-shadow: 0 0 30px rgba(0, 170, 255, 0.3);
+    }
+    #session-detail h3 { color: #00aaff; font-size: 14px; margin-bottom: 8px; }
+    #session-detail pre { color: #ccc; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+    #session-detail .close-btn { position: absolute; top: 8px; right: 12px; cursor: pointer; color: #666; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div class="title">NATS-HUB ARCADE</div>
+    <div class="stats" id="agent-count">0 agents</div>
+    <div class="ws-status ws-disconnected" id="ws-status">connecting...</div>
+  </div>
+
+  <div id="action-popup">
+    <h3 id="popup-title">Agent</h3>
+    <div class="info" id="popup-info"></div>
+    <button onclick="popupAction('message')">💬 Message</button>
+    <button onclick="popupAction('view')">👁 View Session</button>
+    <button onclick="popupAction('resume')">▶ Resume</button>
+    <button class="danger" onclick="popupAction('stop')">⏹ Stop</button>
+  </div>
+
+  <div id="session-detail">
+    <span class="close-btn" onclick="document.getElementById('session-detail').style.display='none'">✕</span>
+    <h3 id="detail-title">Session</h3>
+    <pre id="detail-content"></pre>
+  </div>
+
+<script>
+p5.disableFriendlyErrors = true;
+
+// === Retro Arcade Palette ===
+const COLORS = {
+  bg: [10, 10, 20],
+  grid: [20, 20, 35],
+  agent: {
+    working: [0, 255, 136],     // green
+    idle: [100, 100, 120],       // gray
+    error: [255, 68, 102],       // red
+    ready: [0, 170, 255],        // blue
+    thinking: [255, 200, 0],     // yellow
+  },
+  text: [200, 200, 220],
+  bubble: [255, 255, 255],
+  bubbleBg: [15, 15, 30],
+};
+
+// === Global State ===
+let agents = new Map();      // identity → Agent
+let envelopes = [];           // recent envelopes for visual effects
+let ws = null;
+let selectedAgent = null;
+let hoveredAgent = null;
+let particleEffects = [];
+
+// === Envelope → Agent State Mapping ===
+function envelopeToAgentEvent(env) {
+  const meta = env.meta || {};
+  const payload = env.payload || {};
+  const kind = (meta.kind || '').toLowerCase();
+
+  // Extract agent identity from envelope
+  let identity = meta.from;
+  let eventType = null;
+  let snippet = null;
+  let status = null;
+
+  // Event envelopes carry structured progress
+  if (kind === 'event') {
+    eventType = payload.event_type;
+    const data = payload.data || {};
+    snippet = data.result || data.message || data.error || data.prompt || null;
+    if (eventType === 'started') status = 'working';
+    else if (eventType === 'progress') status = 'thinking';
+    else if (eventType === 'completed') status = 'idle';
+    else if (eventType === 'error') status = 'error';
+    else if (eventType === 'milestone') status = 'thinking';
+  }
+  // Status envelopes
+  else if (kind === 'status') {
+    const s = payload.status;
+    if (s === 'ready') status = 'ready';
+    else if (s === 'working') status = 'working';
+    else if (s === 'idle') status = 'idle';
+    else if (s === 'error') status = 'error';
+    else if (s === 'closed') status = 'idle';
+  }
+  // Message envelopes (results)
+  else if (kind === 'message') {
+    snippet = payload.result || payload.error || payload.message || null;
+    if (payload.result) status = 'idle';
+    else if (payload.error) status = 'error';
+  }
+
+  // Extract session_id or task_id from channel
+  const channel = meta.channel || '';
+  let sessionId = null;
+  if (channel.includes('session.')) sessionId = channel.split('session.')[1]?.split('.')[0];
+  else if (channel.includes('.task.')) sessionId = channel.split('.task.')[1];
+
+  return { identity, eventType, snippet, status, sessionId, channel, kind, payload, meta };
+}
+
+// === Agent Class ===
+class Agent {
+  constructor(identity) {
+    this.identity = identity;
+    this.x = 0; this.y = 0;
+    this.targetX = 0; this.targetY = 0;
+    this.vx = 0; this.vy = 0;
+    this.status = 'idle';
+    this.snippet = null;
+    this.snippetTime = 0;
+    this.size = 24;
+    this.bobOffset = Math.random() * Math.PI * 2;
+    this.pulsePhase = 0;
+    this.color = COLORS.agent.idle;
+    this.lastSeen = Date.now();
+    this.sessionId = null;
+    this.messageCount = 0;
+    this.trail = [];
+  }
+
+  update(dt) {
+    // Smooth movement toward target
+    this.x += (this.targetX - this.x) * 0.05;
+    this.y += (this.targetY - this.y) * 0.05;
+
+    // Add gentle drift
+    this.x += Math.sin(this.bobOffset + Date.now() * 0.001) * 0.3;
+    this.y += Math.cos(this.bobOffset + Date.now() * 0.0015) * 0.2;
+
+    // Trail
+    this.trail.push({ x: this.x, y: this.y, life: 1.0 });
+    if (this.trail.length > 15) this.trail.shift();
+    this.trail.forEach(t => t.life -= 0.05);
+    this.trail = this.trail.filter(t => t.life > 0);
+
+    // Pulse
+    this.pulsePhase += dt * 0.003;
+
+    // Color based on status
+    this.color = COLORS.agent[this.status] || COLORS.agent.idle;
+
+    // Fade snippet after 5s
+    if (this.snippet && Date.now() - this.snippetTime > 5000) {
+      this.snippet = null;
+    }
+  }
+
+  display() {
+    push();
+
+    // Trail
+    noFill();
+    for (let i = 0; i < this.trail.length; i++) {
+      const t = this.trail[i];
+      const alpha = t.life * 30;
+      stroke(this.color[0], this.color[1], this.color[2], alpha);
+      strokeWeight(1);
+      if (i > 0) {
+        const prev = this.trail[i - 1];
+        line(prev.x, prev.y, t.x, t.y);
+      }
+    }
+
+    // Glow
+    const pulse = Math.sin(this.pulsePhase) * 0.15 + 0.85;
+    const glowSize = this.size * 1.8 * pulse;
+    for (let i = 3; i > 0; i--) {
+      fill(this.color[0], this.color[1], this.color[2], 20 / i);
+      noStroke();
+      circle(this.x, this.y, glowSize * i * 0.5);
+    }
+
+    // Body — retro pixel-art style
+    noStroke();
+    fill(this.color[0], this.color[1], this.color[2]);
+    rectMode(CENTER);
+    rect(this.x, this.y, this.size, this.size, 4);
+
+    // Inner highlight
+    fill(255, 255, 255, 40);
+    rect(this.x - this.size * 0.15, this.y - this.size * 0.15, this.size * 0.3, this.size * 0.3, 2);
+
+    // Hover ring
+    if (hoveredAgent === this) {
+      noFill();
+      stroke(255, 255, 255, 150);
+      strokeWeight(2);
+      circle(this.x, this.y, this.size * 2.2);
+    }
+
+    // Selected ring
+    if (selectedAgent === this) {
+      noFill();
+      stroke(0, 170, 255, 200);
+      strokeWeight(2);
+      circle(this.x, this.y, this.size * 2.5);
+    }
+
+    // Label (session_id)
+    fill(COLORS.text);
+    textAlign(CENTER, TOP);
+    textSize(11);
+    textStyle(BOLD);
+    const label = this.sessionId ? this.sessionId.substring(0, 12) : this.identity.substring(0, 12);
+    text(label, this.x, this.y + this.size * 0.7 + 4);
+    textStyle(NORMAL);
+
+    // Thought bubble
+    if (this.snippet) {
+      this.drawBubble();
+    }
+
+    pop();
+  }
+
+  drawBubble() {
+    const bubbleY = this.y - this.size - 20;
+    const maxW = 180;
+    const snippet = this.snippet.length > 60 ? this.snippet.substring(0, 57) + '...' : this.snippet;
+
+    push();
+    textSize(10);
+    const w = Math.max(textWidth(snippet) + 16, 50);
+    const h = 24;
+
+    // Bubble background
+    fill(COLORS.bubbleBg[0], COLORS.bubbleBg[1], COLORS.bubbleBg[2], 230);
+    stroke(this.color[0], this.color[1], this.color[2], 150);
+    strokeWeight(1);
+    rectMode(CENTER);
+    rect(this.x, bubbleY, w, h, 6);
+
+    // Bubble tail
+    noStroke();
+    fill(COLORS.bubbleBg[0], COLORS.bubbleBg[1], COLORS.bubbleBg[2], 230);
+    triangle(
+      this.x - 4, bubbleY + h * 0.5,
+      this.x + 4, bubbleY + h * 0.5,
+      this.x, bubbleY + h * 0.5 + 6
+    );
+
+    // Text
+    fill(this.color[0], this.color[1], this.color[2]);
+    textAlign(CENTER, CENTER);
+    text(snippet, this.x, bubbleY);
+    pop();
+  }
+
+  setSnippet(text) {
+    this.snippet = text;
+    this.snippetTime = Date.now();
+  }
+
+  contains(mx, my) {
+    return Math.abs(mx - this.x) < this.size && Math.abs(my - this.y) < this.size;
+  }
+}
+
+// === Particle Effect ===
+class Particle {
+  constructor(x, y, color) {
+    this.x = x; this.y = y;
+    this.vx = (Math.random() - 0.5) * 4;
+    this.vy = (Math.random() - 0.5) * 4;
+    this.life = 1.0;
+    this.color = color;
+    this.size = Math.random() * 3 + 1;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vx *= 0.96;
+    this.vy *= 0.96;
+    this.life -= 0.02;
+  }
+  display() {
+    noStroke();
+    fill(this.color[0], this.color[1], this.color[2], this.life * 200);
+    circle(this.x, this.y, this.size * this.life);
+  }
+}
+
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particleEffects.push(new Particle(x, y, color));
+  }
+}
+
+// === Layout — arrange agents in a circle ===
+function layoutAgents() {
+  const agents_arr = [...agents.values()];
+  const count = agents_arr.length;
+  if (count === 0) return;
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) * 0.3;
+
+  agents_arr.forEach((agent, i) => {
+    if (count === 1) {
+      agent.targetX = cx;
+      agent.targetY = cy;
+    } else {
+      const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
+      agent.targetX = cx + Math.cos(angle) * radius;
+      agent.targetY = cy + Math.sin(angle) * radius;
+    }
+  });
+}
+
+// === p5.js Setup ===
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  pixelDensity(1);
+  frameRate(60);
+
+  // Connect WebSocket
+  connectWS();
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/ws`;
+  console.log('Connecting to', wsUrl);
+
+  ws = new WebSocket(wsUrl);
+  ws.onopen = () => {
+    document.getElementById('ws-status').textContent = '● connected';
+    document.getElementById('ws-status').className = 'ws-status ws-connected';
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-status').textContent = '○ disconnected — reconnecting...';
+    document.getElementById('ws-status').className = 'ws-status ws-disconnected';
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => { ws.close(); };
+  ws.onmessage = (event) => {
+    try {
+      const env = JSON.parse(event.data);
+      handleEnvelope(env);
+    } catch (e) {
+      console.error('parse error', e);
+    }
+  };
+}
+
+function handleEnvelope(env) {
+  const evt = envelopeToAgentEvent(env);
+  if (!evt.identity) return;
+
+  // Create or update agent
+  let agent = agents.get(evt.identity);
+  if (!agent) {
+    agent = new Agent(evt.identity);
+    agents.set(evt.identity, agent);
+    // Spawn at center
+    agent.x = width / 2;
+    agent.y = height / 2;
+    agent.targetX = width / 2;
+    agent.targetY = height / 2;
+    layoutAgents();
+  }
+
+  agent.lastSeen = Date.now();
+  agent.messageCount++;
+
+  if (evt.status) agent.status = evt.status;
+  if (evt.sessionId) agent.sessionId = evt.sessionId;
+  if (evt.snippet) agent.setSnippet(evt.snippet);
+
+  // Particle burst on events
+  if (evt.eventType === 'completed') {
+    spawnParticles(agent.x, agent.y, COLORS.agent.working, 15);
+  } else if (evt.eventType === 'error') {
+    spawnParticles(agent.x, agent.y, COLORS.agent.error, 20);
+  } else if (evt.eventType === 'started') {
+    spawnParticles(agent.x, agent.y, COLORS.agent.ready, 10);
+  }
+
+  // Store envelope for the session detail view
+  envelopes.push({ ...env, _time: Date.now() });
+  if (envelopes.length > 100) envelopes.shift();
+
+  // Update HUD
+  document.getElementById('agent-count').textContent = `${agents.size} agent(s)`;
+}
+
+// === p5.js Draw Loop ===
+function draw() {
+  const dt = deltaTime;
+
+  // Background with scanline effect
+  background(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2]);
+
+  // Grid
+  stroke(COLORS.grid[0], COLORS.grid[1], COLORS.grid[2]);
+  strokeWeight(0.5);
+  const gridSize = 40;
+  for (let x = 0; x < width; x += gridSize) line(x, 0, x, height);
+  for (let y = 0; y < height; y += gridSize) line(0, y, width, y);
+
+  // Scanline overlay
+  noStroke();
+  fill(0, 0, 0, 15);
+  for (let y = 0; y < height; y += 4) rect(0, y, width, 2);
+
+  // Remove stale agents (60s timeout)
+  const now = Date.now();
+  for (const [id, agent] of agents) {
+    if (now - agent.lastSeen > 60000) {
+      agents.delete(id);
+    }
+  }
+
+  // Update + draw agents
+  for (const agent of agents.values()) {
+    agent.update(dt);
+    agent.display();
+  }
+
+  // Draw connections between agents that recently communicated
+  drawConnections();
+
+  // Particles
+  for (let i = particleEffects.length - 1; i >= 0; i--) {
+    particleEffects[i].update();
+    particleEffects[i].display();
+    if (particleEffects[i].life <= 0) particleEffects.splice(i, 1);
+  }
+
+  // Check hover
+  hoveredAgent = null;
+  for (const agent of agents.values()) {
+    if (agent.contains(mouseX, mouseY)) {
+      hoveredAgent = agent;
+      break;
+    }
+  }
+  cursor(hoveredAgent ? 'pointer' : 'default');
+}
+
+function drawConnections() {
+  // Draw lines between agents that have recent message exchanges
+  const now = Date.now();
+  const recent = [...agents.values()].filter(a => now - a.lastSeen < 3000);
+  stroke(0, 255, 136, 20);
+  strokeWeight(0.5);
+  for (let i = 0; i < recent.length; i++) {
+    for (let j = i + 1; j < recent.length; j++) {
+      line(recent[i].x, recent[i].y, recent[j].x, recent[j].y);
+    }
+  }
+}
+
+// === Mouse / Click Handlers ===
+function mousePressed() {
+  for (const agent of agents.values()) {
+    if (agent.contains(mouseX, mouseY)) {
+      selectedAgent = agent;
+      showActionPopup(agent);
+      return;
+    }
+  }
+  // Click elsewhere — close popup
+  selectedAgent = null;
+  document.getElementById('action-popup').style.display = 'none';
+}
+
+function showActionPopup(agent) {
+  const popup = document.getElementById('action-popup');
+  document.getElementById('popup-title').textContent = agent.identity;
+  document.getElementById('popup-info').textContent =
+    `Status: ${agent.status} | Messages: ${agent.messageCount}${agent.sessionId ? ' | Session: ' + agent.sessionId.substring(0, 8) : ''}`;
+  popup.style.display = 'block';
+  popup.style.left = Math.min(mouseX + 10, width - 220) + 'px';
+  popup.style.top = Math.min(mouseY + 10, height - 200) + 'px';
+}
+
+function popupAction(action) {
+  if (!selectedAgent) return;
+  const agent = selectedAgent;
+
+  if (action === 'view') {
+    showSessionDetail(agent);
+  } else if (action === 'message') {
+    const msg = prompt(`Message to ${agent.identity}:`);
+    if (msg) {
+      // Send via WS (reverse direction — client → server → NATS)
+      ws.send(JSON.stringify({
+        type: 'send_message',
+        to: agent.identity,
+        message: msg,
+      }));
+    }
+  } else if (action === 'stop') {
+    ws.send(JSON.stringify({ type: 'stop_agent', identity: agent.identity }));
+  } else if (action === 'resume') {
+    ws.send(JSON.stringify({ type: 'resume_agent', identity: agent.identity }));
+  }
+
+  document.getElementById('action-popup').style.display = 'none';
+}
+
+function showSessionDetail(agent) {
+  const detail = document.getElementById('session-detail');
+  document.getElementById('detail-title').textContent = `Session: ${agent.identity}`;
+
+  // Filter envelopes for this agent
+  const agentEnvelopes = envelopes.filter(e =>
+    (e.meta && e.meta.from === agent.identity) ||
+    (e.meta && e.meta.to === agent.identity)
+  ).slice(-20);
+
+  const lines = agentEnvelopes.map(e => {
+    const time = new Date(e._time).toLocaleTimeString();
+    const kind = e.meta.kind;
+    const channel = e.meta.channel;
+    const snippet = e.payload.result || e.payload.message || e.payload.status ||
+      e.payload.error || e.payload.event_type || JSON.stringify(e.payload).substring(0, 80);
+    return `[${time}] ${kind.padEnd(8)} ${channel.padEnd(30)} ${snippet}`;
+  }).join('\n');
+
+  document.getElementById('detail-content').textContent = lines || '(no messages)';
+  detail.style.display = 'block';
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  layoutAgents();
+}
+</script>
+</body>
+</html>

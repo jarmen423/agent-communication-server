@@ -38,11 +38,19 @@ struct Args {
     #[arg(long, default_value = "nats_hub.db")]
     db_path: String,
 
-    /// Address for the Prometheus-compatible `/metrics` endpoint. When set
-    /// (e.g. `127.0.0.1:9090`), `hub-server` serves live metrics here with
-    /// zero extra web dependencies. Works with and without storage.
+    /// Address for the Prometheus-compatible `/metrics` endpoint.
     #[arg(long)]
     metrics_addr: Option<String>,
+
+    /// Address for the WebSocket bridge (visualizer). When set (e.g.
+    /// `127.0.0.1:9191`), serves a live event stream at /ws and static
+    /// files from --static-dir.
+    #[arg(long)]
+    ws_addr: Option<String>,
+
+    /// Directory to serve static files from (visualizer HTML/JS/CSS).
+    #[arg(long)]
+    static_dir: Option<String>,
 }
 
 /// Spawn a minimal HTTP/1.0 server that responds to `GET /metrics` with the
@@ -115,10 +123,24 @@ async fn main() -> Result<()> {
         spawn_metrics_server(addr.clone(), metrics.clone());
     }
 
+    // Set up the WS bridge for the visualizer
+    let ws_tx = nats_hub::ws_bridge::create_event_channel(1024);
+    if let Some(ref ws_addr) = args.ws_addr {
+        let static_dir = args.static_dir.as_ref().map(|s| std::path::PathBuf::from(s));
+        let ws_tx_clone = ws_tx.clone();
+        let ws_addr_clone = ws_addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = nats_hub::ws_bridge::start_ws_bridge(&ws_addr_clone, ws_tx_clone, static_dir).await {
+                eprintln!("[hub-server] WS bridge error: {e}");
+            }
+        });
+        info_log(&format!("WS bridge (visualizer) on http://{ws_addr}"));
+    }
+
     let cp = ControlPlane::connect(&args.nats_url)
         .await
         .context("failed to connect to NATS")?;
-    let cp = cp.with_metrics(metrics);
+    let cp = cp.with_metrics(metrics).with_ws_events(ws_tx);
 
     #[cfg(feature = "storage-surreal")]
     {

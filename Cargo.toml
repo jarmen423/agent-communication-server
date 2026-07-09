@@ -95,6 +95,9 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# ── WebSocket bridge (for visualizer) ──────────────────────────
+tokio-tungstenite = "0.24"
+
 # ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
 

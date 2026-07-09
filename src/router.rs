@@ -64,15 +64,12 @@ pub struct ControlPlane {
     nats: async_nats::Client,
     routing: RoutingTable,
     registry: AgentRegistry,
-    /// Optional persistence backend. When set, envelopes and agent
-    /// registrations are fire-and-forget mirrored to storage.
-    /// The hot path (NATS routing) never blocks on storage writes.
     #[cfg(feature = "storage-surreal")]
     storage: Option<Arc<dyn Storage>>,
-    /// Optional live metrics collector. When set, every routed envelope is
-    /// recorded via a non-blocking atomic increment (safe on the hot path).
-    /// Always available regardless of the storage feature.
     metrics: Option<Arc<MetricsCollector>>,
+    /// Optional WS bridge broadcast channel. When set, every routed envelope
+    /// is serialized to JSON and pushed to all connected visualizer clients.
+    ws_event_tx: Option<crate::ws_bridge::EventTx>,
 }
 
 impl ControlPlane {
@@ -88,6 +85,7 @@ impl ControlPlane {
             #[cfg(feature = "storage-surreal")]
             storage: None,
             metrics: None,
+            ws_event_tx: None,
         })
     }
 
@@ -95,6 +93,13 @@ impl ControlPlane {
     /// routed envelope on the hot path. Safe to call before `run()`.
     pub fn with_metrics(mut self, metrics: Arc<MetricsCollector>) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    /// Attach a WS bridge broadcast channel for the visualizer.
+    /// Every routed envelope is serialized to JSON and pushed here.
+    pub fn with_ws_events(mut self, tx: crate::ws_bridge::EventTx) -> Self {
+        self.ws_event_tx = Some(tx);
         self
     }
 
@@ -209,6 +214,13 @@ impl ControlPlane {
                 // Safe even under heavy load — no allocation, no await.
                 if let Some(metrics) = &self.metrics {
                     metrics.record(&env);
+                }
+
+                // Push to WS bridge for visualizer (fire-and-forget broadcast)
+                if let Some(tx) = &self.ws_event_tx {
+                    if let Ok(json) = serde_json::to_string(&env) {
+                        let _ = tx.send(json); // broadcast::send is non-blocking
+                    }
                 }
 
                 // Determine routing destination: inbox (DM) or broadcast
