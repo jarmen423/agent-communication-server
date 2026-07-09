@@ -399,6 +399,24 @@ serves a zero-dependency Prometheus exposition format (`natshub_messages_total`,
 `natshub_messages_by_kind`, `natshub_messages_by_channel_class`,
 `natshub_errors_total`) with bounded labels — safe on the routing hot path.
 
+### Phase 7: Visualizer + TUI
+
+Two surfaces for observing and steering agent work:
+
+**Arcade Visualizer** (HTML/p5.js, served by hub-server's WS bridge):
+- Retro CRT aesthetic: scanlines, neon grid, pixel-art agent characters
+- Each agent = a square with glow, trail, status color, session_id label
+- Thought bubbles show real stdout/event snippets
+- Click agent → action popup (message, view session, stop, resume)
+- Particle bursts on task completion/error/start
+- Hooks: future petdex sprite integration (same tech as Hermes/Codex pets)
+- WebSocket: hub-server pushes every routed envelope to all browser clients
+
+**TUI** (ratatui, `hub-tui` binary):
+- Clean modern daily driver — keyboard-driven, not bloated
+- Live agent dashboard, sessions, wave status, message feed
+- Subscribes to NATS directly + uses query API for persistent data
+
 ### Phase 5: Human bridges
 
 Telegram, SMS, email, social media bridges. Each is a specialized `hub-worker`

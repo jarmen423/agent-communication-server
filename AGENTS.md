@@ -35,7 +35,10 @@ src/
 ├── client.rs                 — HubClient + AgentRegistry (in-memory cache)
 ├── events/                   — structured progress events (MessageKind::Event)
 ├── wave/                     — wave validation + spawn orchestration
-├── router.rs                 — ControlPlane (routing daemon, async DB mirror)
+├── router.rs                 — ControlPlane (routing daemon, async DB mirror, WS bridge push)
+├── query_api.rs              — NATS request-reply API (hub.api.>) — DB ops routed through server
+├── query_api_client.rs       — ApiClient for CLI tools (avoids RocksDB lock contention)
+├── ws_bridge.rs              — WebSocket bridge + static file server (for visualizer)
 ├── storage/
 │   ├── mod.rs                — Storage trait + query types
 │   ├── surreal.rs            — SurrealStorage impl (embedded RocksDB)
@@ -93,6 +96,12 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 # Delegate a task
 ./target/debug/hub-delegate --to worker-1 --prompt "What is 2+2?" --verbose
 
+# Start with visualizer (WebSocket + static files)
+./target/debug/hub-server --db-path nats_hub.db \
+    --ws-addr 127.0.0.1:9191 \
+    --static-dir visualizer/
+# → Open http://127.0.0.1:9191/ in browser for arcade visualizer
+
 # Watch history
 ./target/debug/hub-history --db-path nats_hub.db --tail
 
@@ -128,7 +137,8 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
 | `hub-wave create/spawn/status/close/list` | Parallel wave orchestration |
 | `hub-thread show/pending` | View reply chains and unanswered messages |
-| `hub-stats [--db-path PATH] [--since DUR] [--agent ID] [--top-channels N] [--json]` | Analytics: rates, latency, activity, hotspots, error rate (Phase 4a) |
+| `hub-stats [--since DUR] [--agent ID] [--top-channels N] [--json]` | Analytics: rates, latency, activity, hotspots, error rate (Phase 4a) |
+| `hub-server --ws-addr ADDR --static-dir DIR` | WebSocket bridge + visualizer static files |
 | `hub-worker.js --type <cline\|agy\|hermes\|cursor> --identity <name>` | Universal worker (single CLI, all backend types) |
 
 ## Python workers (typed backends)
