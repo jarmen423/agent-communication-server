@@ -382,13 +382,18 @@ impl Storage for SurrealStorage {
     async fn link_reply(&self, reply_id: &str, parent_id: &str) -> Result<()> {
         debug!(%reply_id, %parent_id, "linking reply edge");
 
-        let _: Option<serde_json::Value> = self
-            .db
-            .query("RELATE type::thing('envelopes', $reply)->reply_to->type::thing('envelopes', $parent)")
-            .bind(("reply", reply_id.to_string()))
-            .bind(("parent", parent_id.to_string()))
+        // SurrealDB 2.x rejects type::thing() inside the RELATE path; resolve record
+        // ids via LET, then RELATE the bound record-id parameters.
+        self.db
+            .query(
+                "LET $reply = type::thing('envelopes', $reply_id);
+                 LET $parent = type::thing('envelopes', $parent_id);
+                 RELATE $reply->reply_to->$parent",
+            )
+            .bind(("reply_id", reply_id.to_string()))
+            .bind(("parent_id", parent_id.to_string()))
             .await?
-            .take(0)?;
+            .check()?;
 
         Ok(())
     }
@@ -440,7 +445,7 @@ impl Storage for SurrealStorage {
                 "SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
                  FROM envelopes \
                  WHERE to_identity = $identity \
-                 AND id NOT IN (SELECT ->reply_to->envelopes.id FROM envelopes WHERE to_identity = $identity)"
+                 AND <-reply_to<-envelopes IS NONE"
             )
             .bind(("identity", identity.to_string()))
             .await?;

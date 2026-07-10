@@ -3,6 +3,7 @@ AcpAgent backend — wired when an ACP server exists in this environment.
 
 Current status:
 - Hermes: real stdio JSON-RPC verified in worker_backends/hermes_acp.py
+- Grok: real stdio JSON-RPC in worker_backends/grok_acp.py (`grok agent stdio`)
 - Cursor: not yet an available stdio/HTTP endpoint here; blocked until
   a Cursor ACP process/transport is exposed in this environment.
 

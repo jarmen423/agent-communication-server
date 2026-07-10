@@ -93,6 +93,42 @@ async fn test_agent_registry() {
 }
 
 #[tokio::test]
+async fn test_link_reply_graph_edge() {
+    let storage = setup().await;
+
+    let root = Envelope::new(
+        "sender",
+        "agents.tasks",
+        MessageKind::Message,
+        json!({"prompt": "compute"}),
+    )
+    .to("worker-1");
+    let root_id = root.meta.id.clone();
+    storage.store_envelope(&root).await.unwrap();
+
+    let reply = Envelope::new(
+        "worker-1",
+        "agents.tasks",
+        MessageKind::Message,
+        json!({"result": "42"}),
+    )
+    .to("sender")
+    .reply_to(&root_id);
+    let reply_id = reply.meta.id.clone();
+    storage.store_envelope(&reply).await.unwrap();
+
+    // store_envelope calls link_reply; explicit call must also succeed (idempotent).
+    storage
+        .link_reply(&reply_id, &root_id)
+        .await
+        .expect("link_reply should succeed without SurrealQL parse errors");
+
+    // Graph edge direction: reply(in) -> parent(out). Pending clears for recipient.
+    let pending = storage.list_pending("worker-1").await.unwrap();
+    assert_eq!(pending.len(), 0, "replied message should not be pending");
+}
+
+#[tokio::test]
 async fn test_conversation_thread() {
     let storage = setup().await;
 

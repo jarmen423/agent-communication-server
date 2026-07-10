@@ -2,21 +2,22 @@
 //!
 //! hub-server spawns a WS listener on `--ws-addr` (e.g. 127.0.0.1:9191).
 //! Each WS client gets a live feed of all `channel.>` envelopes as JSON.
-//! The browser visualizer (p5.js arcade) consumes these to animate agents.
-//!
-//! Also serves static files (visualizer HTML/JS) when `--static-dir` is set.
+//! Browser clients may also send control commands (message/stop/resume)
+//! which are published onto the NATS bus via HubClient.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
-/// A shared broadcast channel for envelope events.
-/// hub-server's router pushes envelopes here; WS clients consume.
+use crate::protocol::{Envelope, MessageKind};
+use crate::HubClient;
+
+/// Shared broadcast channel for envelope events (router → browsers).
 pub type EventTx = tokio::sync::broadcast::Sender<String>;
 
 /// Create a bounded broadcast channel for envelope events.
@@ -28,15 +29,19 @@ pub fn create_event_channel(capacity: usize) -> EventTx {
 ///
 /// - `event_tx`: broadcast sender that the router pushes JSON envelopes to
 /// - `static_dir`: optional directory to serve static files from (visualizer HTML)
+/// - `nats_url`: when set, browser → hub commands (message/stop/resume) publish to NATS
 pub async fn start_ws_bridge(
     addr: &str,
     event_tx: EventTx,
     static_dir: Option<PathBuf>,
+    nats_url: Option<String>,
 ) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     info!("WS bridge listening on http://{addr}");
 
     let static_dir = Arc::new(static_dir);
+    let nats_url = Arc::new(nats_url);
+
     loop {
         let (stream, peer_addr) = match listener.accept().await {
             Ok(s) => s,
@@ -48,9 +53,10 @@ pub async fn start_ws_bridge(
 
         let tx = event_tx.clone();
         let sd = static_dir.clone();
+        let nats = nats_url.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, tx, sd, peer_addr).await {
+            if let Err(e) = handle_connection(stream, tx, sd, nats, peer_addr).await {
                 debug!("WS connection from {peer_addr} ended: {e}");
             }
         });
@@ -61,16 +67,20 @@ async fn handle_connection(
     stream: TcpStream,
     event_tx: EventTx,
     static_dir: Arc<Option<PathBuf>>,
+    nats_url: Arc<Option<String>>,
     peer: std::net::SocketAddr,
 ) -> Result<()> {
-    // Peek at the request to determine if it's a WebSocket upgrade or HTTP
     let mut peek_buf = [0u8; 4096];
     let n = stream.peek(&mut peek_buf).await?;
     let request = String::from_utf8_lossy(&peek_buf[..n]);
 
     let is_ws = request.contains("Upgrade: websocket")
         || request.contains("upgrade: websocket")
-        || request.lines().next().map(|l| l.contains("/ws")).unwrap_or(false);
+        || request
+            .lines()
+            .next()
+            .map(|l| l.contains("/ws"))
+            .unwrap_or(false);
 
     let path = request
         .lines()
@@ -79,7 +89,7 @@ async fn handle_connection(
         .unwrap_or("/");
 
     if is_ws || path == "/ws" {
-        handle_websocket(stream, event_tx, peer).await
+        handle_websocket(stream, event_tx, nats_url, peer).await
     } else {
         handle_http(stream, path, &static_dir).await
     }
@@ -88,27 +98,45 @@ async fn handle_connection(
 async fn handle_websocket(
     stream: TcpStream,
     event_tx: EventTx,
+    nats_url: Arc<Option<String>>,
     _peer: std::net::SocketAddr,
 ) -> Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(stream).await?;
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
-
     let mut rx = event_tx.subscribe();
 
-    debug!("WS client connected");
+    // Optional outbound client so browser buttons can publish onto the bus.
+    let hub = match nats_url.as_ref() {
+        Some(url) => match HubClient::connect(url, "visualizer").await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                warn!("WS bridge could not connect HubClient for commands: {e}");
+                None
+            }
+        },
+        None => None,
+    };
+
+    debug!("WS client connected (commands={})", hub.is_some());
 
     loop {
         tokio::select! {
             msg = rx.recv() => {
                 match msg {
                     Ok(json) => {
-                        if ws_tx.send(tokio_tungstenite::tungstenite::Message::Text(json)).await.is_err() {
+                        if ws_tx
+                            .send(tokio_tungstenite::tungstenite::Message::Text(json))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        let warn_msg = format!("{{\"type\":\"lagged\",\"skipped\":{n}}}");
-                        let _ = ws_tx.send(tokio_tungstenite::tungstenite::Message::Text(warn_msg)).await;
+                        let warn_msg = format!(r#"{{"type":"lagged","skipped":{n}}}"#);
+                        let _ = ws_tx
+                            .send(tokio_tungstenite::tungstenite::Message::Text(warn_msg))
+                            .await;
                     }
                     Err(_) => break,
                 }
@@ -116,7 +144,33 @@ async fn handle_websocket(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None => break,
-                    _ => {}
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                        if let Some(ref client) = hub {
+                            match handle_client_command(client, &text).await {
+                                Ok(ack) => {
+                                    let _ = ws_tx
+                                        .send(tokio_tungstenite::tungstenite::Message::Text(ack))
+                                        .await;
+                                }
+                                Err(e) => {
+                                    let err = format!(
+                                        r#"{{"type":"error","message":{}}}"#,
+                                        serde_json::to_string(&e.to_string()).unwrap_or_else(|_| "\"error\"".into())
+                                    );
+                                    let _ = ws_tx
+                                        .send(tokio_tungstenite::tungstenite::Message::Text(err))
+                                        .await;
+                                }
+                            }
+                        } else {
+                            let err = r#"{"type":"error","message":"NATS commands disabled on this bridge"}"#;
+                            let _ = ws_tx
+                                .send(tokio_tungstenite::tungstenite::Message::Text(err.into()))
+                                .await;
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
                 }
             }
         }
@@ -126,12 +180,99 @@ async fn handle_websocket(
     Ok(())
 }
 
+/// Browser command → NATS publish.
+/// Supported:
+/// - `{"type":"send_message","to":"agent","message":"..."}` → real task (like hub-delegate)
+/// - `{"type":"stop_agent","identity":"..."}` → status closed on agents.<id>
+/// - `{"type":"resume_agent","identity":"..."}` → status ready on agents.<id>
+async fn handle_client_command(client: &HubClient, text: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(text).context("invalid JSON command")?;
+    let cmd = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match cmd {
+        "send_message" => {
+            let to = v
+                .get("to")
+                .and_then(|t| t.as_str())
+                .context("send_message requires to")?;
+            let message = v
+                .get("message")
+                .and_then(|t| t.as_str())
+                .context("send_message requires message")?;
+
+            // Same shape as hub-delegate: task.<short-uuid> with meta.to = worker.
+            let task_short = &Uuid::new_v4().to_string()[..8];
+            let task_channel = format!("task.{task_short}");
+            let payload = serde_json::json!({
+                "prompt": message,
+                "source": "visualizer",
+            });
+            let env = Envelope::new("josh", &task_channel, MessageKind::Message, payload).to(to);
+            client.send(&env).await?;
+
+            Ok(format!(
+                r#"{{"type":"ack","action":"send_message","to":{},"task_channel":{}}}"#,
+                serde_json::to_string(to).unwrap(),
+                serde_json::to_string(&task_channel).unwrap()
+            ))
+        }
+        "stop_agent" => {
+            let identity = v
+                .get("identity")
+                .and_then(|t| t.as_str())
+                .context("stop_agent requires identity")?;
+            let channel = format!("agents.{identity}");
+            client.send_status(&channel, "closed").await?;
+            // Also mark a human-visible control note on the bus.
+            let _ = client
+                .send_message(
+                    &channel,
+                    serde_json::json!({
+                        "message": format!("visualizer stop requested for {identity}"),
+                        "action": "stop",
+                        "source": "visualizer",
+                    }),
+                )
+                .await;
+            Ok(format!(
+                r#"{{"type":"ack","action":"stop_agent","identity":{}}}"#,
+                serde_json::to_string(identity).unwrap()
+            ))
+        }
+        "resume_agent" => {
+            let identity = v
+                .get("identity")
+                .and_then(|t| t.as_str())
+                .context("resume_agent requires identity")?;
+            let channel = format!("agents.{identity}");
+            client.send_status(&channel, "ready").await?;
+            let _ = client
+                .send_message(
+                    &channel,
+                    serde_json::json!({
+                        "message": format!("visualizer resume requested for {identity}"),
+                        "action": "resume",
+                        "source": "visualizer",
+                    }),
+                )
+                .await;
+            Ok(format!(
+                r#"{{"type":"ack","action":"resume_agent","identity":{}}}"#,
+                serde_json::to_string(identity).unwrap()
+            ))
+        }
+        other => Ok(format!(
+            r#"{{"type":"error","message":"unknown command: {}"}}"#,
+            other.replace('"', "'")
+        )),
+    }
+}
+
 async fn handle_http(
     mut stream: TcpStream,
     path: &str,
     static_dir: &Arc<Option<PathBuf>>,
 ) -> Result<()> {
-    // Read and discard the full request
     let mut buf = [0u8; 4096];
     let _ = stream.read(&mut buf).await;
 
@@ -139,7 +280,8 @@ async fn handle_http(
         Some(d) => d,
         None => {
             let body = "Static file serving disabled. Use --static-dir.";
-            write_http_response(&mut stream, 404, "Not Found", "text/plain", body.as_bytes()).await?;
+            write_http_response(&mut stream, 404, "Not Found", "text/plain", body.as_bytes())
+                .await?;
             return Ok(());
         }
     };
@@ -151,7 +293,14 @@ async fn handle_http(
     };
 
     if !file_path.starts_with(dir) {
-        write_http_response(&mut stream, 403, "Forbidden", "text/plain", b"Path traversal denied").await?;
+        write_http_response(
+            &mut stream,
+            403,
+            "Forbidden",
+            "text/plain",
+            b"Path traversal denied",
+        )
+        .await?;
         return Ok(());
     }
 
@@ -160,7 +309,8 @@ async fn handle_http(
         let mime = mime_type(&file_path);
         write_http_response(&mut stream, 200, "OK", mime, &content).await?;
     } else {
-        write_http_response(&mut stream, 404, "Not Found", "text/plain", b"404 Not Found").await?;
+        write_http_response(&mut stream, 404, "Not Found", "text/plain", b"404 Not Found")
+            .await?;
     }
 
     Ok(())
@@ -173,8 +323,9 @@ async fn write_http_response(
     content_type: &str,
     body: &[u8],
 ) -> Result<()> {
+    // no-cache so visualizer HTML edits show up without fighting browser cache
     let header = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store, max-age=0\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes()).await?;

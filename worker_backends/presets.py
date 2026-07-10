@@ -64,3 +64,31 @@ def hermes_spec(
         resume_ctx_key="hermes_session_id",
         strip_line_prefixes=("session_id:", "Warning:", "⚠️"),
     )
+
+
+def grok_spec(
+    *,
+    repo: str | Path = ".",
+    model: str | None = None,
+    max_turns: int = 40,
+    always_approve: bool = True,
+    grok_bin: str | None = None,
+) -> HeadlessCliSpec:
+    """Headless Grok CLI (`grok -p`) — prefer GrokAcpBackend for multi-turn ACP sessions."""
+    from worker_backends.grok_acp import resolve_grok_bin
+
+    base: list[str] = []
+    if always_approve:
+        base.append("--always-approve")
+    base.extend(["--max-turns", str(max_turns), "--no-auto-update"])
+    if model:
+        base.extend(["-m", model])
+    return HeadlessCliSpec(
+        binary=grok_bin or resolve_grok_bin(),
+        log_label="grok-worker",
+        repo=repo,
+        base_argv=base,
+        prompt_flag="-p",
+        resume_mode="none",
+    )
+

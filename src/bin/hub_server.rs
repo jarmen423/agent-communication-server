@@ -123,14 +123,22 @@ async fn main() -> Result<()> {
         spawn_metrics_server(addr.clone(), metrics.clone());
     }
 
-    // Set up the WS bridge for the visualizer
+    // Set up the WS bridge for the visualizer (browser can also publish commands).
     let ws_tx = nats_hub::ws_bridge::create_event_channel(1024);
     if let Some(ref ws_addr) = args.ws_addr {
         let static_dir = args.static_dir.as_ref().map(|s| std::path::PathBuf::from(s));
         let ws_tx_clone = ws_tx.clone();
         let ws_addr_clone = ws_addr.clone();
+        let nats_url = args.nats_url.clone();
         tokio::spawn(async move {
-            if let Err(e) = nats_hub::ws_bridge::start_ws_bridge(&ws_addr_clone, ws_tx_clone, static_dir).await {
+            if let Err(e) = nats_hub::ws_bridge::start_ws_bridge(
+                &ws_addr_clone,
+                ws_tx_clone,
+                static_dir,
+                Some(nats_url),
+            )
+            .await
+            {
                 eprintln!("[hub-server] WS bridge error: {e}");
             }
         });

@@ -183,16 +183,11 @@ async fn test_list_pending_storage() {
     .to("sender")
     .reply_to(&env.meta.id);
     storage.store_envelope(&reply).await.unwrap();
-    // Note: link_reply has a known SurrealQL v2 syntax issue with RELATE.
-    // The reply envelope is stored, but the graph edge may not be created.
-    // list_pending should still work — it checks if a reply exists by
-    // matching reply_to field, not just graph edges.
-    let _ = storage.link_reply(&reply.meta.id, &env.meta.id).await;
 
-    // list_pending should not grow after reply
     let pending_after = storage.list_pending("agent-x").await.unwrap();
-    assert!(
-        pending_after.len() <= 1,
-        "pending should not grow after reply"
+    assert_eq!(
+        pending_after.len(),
+        0,
+        "original message should leave pending once reply edge exists"
     );
 }

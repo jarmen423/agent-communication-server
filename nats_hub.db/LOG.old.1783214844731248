@@ -1,1 +1,0 @@
-2026/07/04-17:08:19.172555 4012397 [WARN] [db/db_impl/db_impl_open.cc:2704] DB::Open() failed: IO error: While lock file: nats_hub.db/LOCK: Resource temporarily unavailable

@@ -43,6 +43,7 @@ See `worker_backends/presets.py`:
 - `agy_spec()` → `--continue` per session cwd
 - `hermes_chat_q_spec()` → `--resume`
 - `cursor_sdk_spec()` → Cursor SDK resume via `agent_id`
+- `grok_spec()` → `grok -p` headless (prefer ACP for multi-turn)
 
 ## Starting a worker
 
@@ -50,6 +51,8 @@ See `worker_backends/presets.py`:
 # Python (any backend)
 python3 cursor_worker.py --identity cursor-worker-1 --repo /path/to/repo
 python3 hermes_acp_worker.py --identity hermes-worker-1
+python3 grok_worker.py --identity grok-worker-1          # headless -p
+python3 grok_acp_worker.py --identity grok-acp-1         # ACP stdio sessions
 
 # Universal JS entrypoint
 node hub_worker.js --type cursor --identity cursor-worker-1

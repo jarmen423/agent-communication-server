@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+import asyncio
+from typing import Any, Awaitable, Callable, Protocol
+
+ProgressHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class EventPublisher(Protocol):
@@ -56,6 +59,21 @@ async def run_verify_cmd(verify_cmd: str) -> None:
         raise RuntimeError(f"verify_cmd failed (exit {proc.returncode}): {verify_cmd}")
 
 
+def _attach_progress_handler(backend: Any, handler: ProgressHandler) -> Callable[[], None]:
+    """Best-effort: backends may expose set_progress_handler / clear_progress_handler."""
+    if hasattr(backend, "set_progress_handler"):
+        backend.set_progress_handler(handler)
+
+        def _clear() -> None:
+            if hasattr(backend, "clear_progress_handler"):
+                backend.clear_progress_handler()
+            elif hasattr(backend, "set_progress_handler"):
+                backend.set_progress_handler(None)
+
+        return _clear
+    return lambda: None
+
+
 async def execute_with_events(
     *,
     publish: StatusPublisher,
@@ -70,18 +88,37 @@ async def execute_with_events(
     wave_channel: str | None = None,
     verify_cmd: str | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
-    """Run one worker turn, emitting started/progress/completed|error events."""
+    """Run one worker turn, emitting started/progress/completed|error events.
+
+    If the backend supports streaming (e.g. Grok ACP), mid-turn message/thought
+    chunks are forwarded as progress events so visualizers can update live.
+    """
     emit = lambda et, data: publish_event_dual(
         publish_event_fn, channel, wave_channel, task_id, et, data
     )
 
-    await emit("started", {"prompt": prompt})
+    await emit("started", {"prompt": prompt[:2000] if isinstance(prompt, str) else prompt})
     await publish(channel, "status", {"status": working_status})
+
+    async def on_stream(kind: str, data: dict[str, Any]) -> None:
+        # kind: message | thought | tool | status
+        payload = dict(data)
+        payload.setdefault("stream", kind)
+        if kind == "thought":
+            await emit("progress", {"message": payload.get("text") or "", **payload, "phase": "thinking"})
+        elif kind == "tool":
+            await emit("progress", {"message": payload.get("message") or payload.get("text") or "tool", **payload, "phase": "tool"})
+        else:
+            # agent message tokens / partial answers
+            text = payload.get("text") or payload.get("message") or ""
+            await emit("progress", {"message": text, **payload, "phase": "message"})
+
+    clear_handler = _attach_progress_handler(backend, on_stream)
     try:
-        await emit("progress", {"message": "calling model..."})
+        await emit("progress", {"message": "calling model...", "phase": "start"})
         result_text, new_ctx = await backend.run(prompt, ctx)
         if verify_cmd:
-            await emit("progress", {"message": f"running verify: {verify_cmd}"})
+            await emit("progress", {"message": f"running verify: {verify_cmd}", "phase": "verify"})
             await run_verify_cmd(verify_cmd)
             await emit("milestone", {"name": "verify_passed"})
         await emit("completed", {"result": result_text})
@@ -103,3 +140,5 @@ async def execute_with_events(
         )
         await publish(channel, "status", {"status": "error"})
         return None
+    finally:
+        clear_handler()
