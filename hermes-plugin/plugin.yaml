@@ -1,0 +1,5 @@
+name: nats-hub
+version: 0.1.0
+description: "NATS-hub multi-agent coordination — MCP server tools for agent messaging, session management, task delegation, wave orchestration, and history. Also auto-launches the visualizer dashboard."
+hooks:
+  - on_session_start

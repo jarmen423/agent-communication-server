@@ -1,0 +1,17 @@
+{
+  "name": "nats-hub",
+  "displayName": "NATS Hub",
+  "version": "0.1.0",
+  "description": "Multi-agent coordination via NATS messaging bus. List agents, send messages, manage sessions, delegate tasks, create waves, and query history.",
+  "author": {
+    "name": "jarmen423",
+    "url": "https://github.com/jarmen423"
+  },
+  "homepage": "https://github.com/jarmen423/agent-communication-server",
+  "repository": "https://github.com/jarmen423/agent-communication-server",
+  "license": "MIT",
+  "keywords": ["nats", "multi-agent", "orchestration", "coordination"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

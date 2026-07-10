@@ -1,0 +1,12 @@
+{
+  "mcp_servers": {
+    "nats-hub": {
+      "command": "python3",
+      "args": ["${PLUGIN_ROOT}/server/mcp_server.py"],
+      "env": {
+        "NATS_URL": "nats://127.0.0.1:4222",
+        "NATS_HUB_IDENTITY": "codex-agent"
+      }
+    }
+  }
+}
