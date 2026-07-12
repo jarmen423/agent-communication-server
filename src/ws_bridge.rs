@@ -182,9 +182,10 @@ async fn handle_websocket(
 
 /// Browser command → NATS publish.
 /// Supported:
-/// - `{"type":"send_message","to":"agent","message":"..."}` → real task (like hub-delegate)
-/// - `{"type":"stop_agent","identity":"..."}` → status closed on agents.<id>
+/// - `{"type":"send_message","to":"agent","message":"...","provider":"grok"?}` → ensure worker then task
+/// - `{"type":"stop_agent","identity":"..."}` → stop supervised worker + status closed
 /// - `{"type":"resume_agent","identity":"..."}` → status ready on agents.<id>
+/// - `{"type":"ensure_worker","identity":"...","provider":"..."}` → spawn only
 async fn handle_client_command(client: &HubClient, text: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(text).context("invalid JSON command")?;
     let cmd = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -199,31 +200,109 @@ async fn handle_client_command(client: &HubClient, text: &str) -> Result<String>
                 .get("message")
                 .and_then(|t| t.as_str())
                 .context("send_message requires message")?;
+            let provider = v
+                .get("provider")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+            let ensure = v
+                .get("ensure_worker")
+                .and_then(|t| t.as_bool())
+                .unwrap_or(true);
 
-            // Same shape as hub-delegate: task.<short-uuid> with meta.to = worker.
+            let mut ensure_status = serde_json::Value::Null;
+            if ensure {
+                if let Some(ref prov) = provider {
+                    match client
+                        .request_json(
+                            "hub.worker.ensure",
+                            serde_json::json!({
+                                "identity": to,
+                                "provider": prov,
+                            }),
+                            std::time::Duration::from_secs(45),
+                        )
+                        .await
+                    {
+                        Ok(resp) => {
+                            ensure_status = resp.clone();
+                            if resp.get("ok") == Some(&serde_json::Value::Bool(false)) {
+                                return Ok(format!(
+                                    r#"{{"type":"error","message":"worker ensure failed","detail":{}}}"#,
+                                    resp
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            // Supervisor down — still deliver the task (manual workers may exist)
+                            warn!("worker ensure failed (continuing to publish task): {e}");
+                            ensure_status = serde_json::json!({
+                                "ok": false,
+                                "error": e.to_string(),
+                                "continued": true,
+                            });
+                        }
+                    }
+                }
+            }
+
             let task_short = &Uuid::new_v4().to_string()[..8];
             let task_channel = format!("task.{task_short}");
             let payload = serde_json::json!({
                 "prompt": message,
                 "source": "visualizer",
+                "provider": provider,
             });
             let env = Envelope::new("josh", &task_channel, MessageKind::Message, payload).to(to);
             client.send(&env).await?;
 
             Ok(format!(
-                r#"{{"type":"ack","action":"send_message","to":{},"task_channel":{}}}"#,
+                r#"{{"type":"ack","action":"send_message","to":{},"task_channel":{},"ensure":{}}}"#,
                 serde_json::to_string(to).unwrap(),
-                serde_json::to_string(&task_channel).unwrap()
+                serde_json::to_string(&task_channel).unwrap(),
+                ensure_status
             ))
+        }
+        "ensure_worker" => {
+            let identity = v
+                .get("identity")
+                .and_then(|t| t.as_str())
+                .context("ensure_worker requires identity")?;
+            let provider = v
+                .get("provider")
+                .and_then(|t| t.as_str())
+                .context("ensure_worker requires provider")?;
+            match client
+                .request_json(
+                    "hub.worker.ensure",
+                    serde_json::json!({ "identity": identity, "provider": provider }),
+                    std::time::Duration::from_secs(45),
+                )
+                .await
+            {
+                Ok(resp) => Ok(format!(
+                    r#"{{"type":"ack","action":"ensure_worker","detail":{}}}"#,
+                    resp
+                )),
+                Err(e) => Ok(format!(
+                    r#"{{"type":"error","message":"ensure_worker failed: {}"}}"#,
+                    e.to_string().replace('"', "'")
+                )),
+            }
         }
         "stop_agent" => {
             let identity = v
                 .get("identity")
                 .and_then(|t| t.as_str())
                 .context("stop_agent requires identity")?;
+            let _ = client
+                .request_json(
+                    "hub.worker.stop",
+                    serde_json::json!({ "identity": identity }),
+                    std::time::Duration::from_secs(10),
+                )
+                .await;
             let channel = format!("agents.{identity}");
             client.send_status(&channel, "closed").await?;
-            // Also mark a human-visible control note on the bus.
             let _ = client
                 .send_message(
                     &channel,

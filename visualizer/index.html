@@ -931,6 +931,183 @@
       transform: rotate(180deg);
     }
 
+
+    .roster-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 4px 8px;
+    }
+    .roster-step {
+      font-family: var(--font-heading);
+      font-size: 10px;
+      letter-spacing: 0.6px;
+      color: var(--color-text-muted);
+    }
+    .roster-primary {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 217, 255, 0.45);
+      background: rgba(0, 217, 255, 0.14);
+      color: var(--color-cyan);
+      font-family: var(--font-heading);
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+    .roster-primary:hover {
+      background: rgba(0, 217, 255, 0.24);
+      border-color: var(--color-cyan);
+    }
+    .roster-back {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.04);
+      color: var(--color-text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      font-family: var(--font-body);
+    }
+    .roster-back:hover { color: var(--color-cyan); border-color: rgba(0,217,255,0.35); }
+    .roster-hint {
+      font-size: 10px;
+      color: #6b7a90;
+      line-height: 1.4;
+      padding: 8px 6px 4px;
+    }
+    .roster-hint code {
+      font-size: 9px;
+      color: #9fb0c8;
+    }
+    .provider-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .provider-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      color: var(--color-text);
+      cursor: pointer;
+      font-family: var(--font-body);
+      transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+    }
+    .provider-card:hover,
+    .provider-card:focus-visible {
+      border-color: rgba(0, 217, 255, 0.4);
+      background: rgba(0, 217, 255, 0.08);
+      outline: none;
+    }
+    .provider-card:active { transform: scale(0.985); }
+    .provider-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+      background: color-mix(in srgb, var(--pcolor) 18%, transparent);
+      border: 1px solid color-mix(in srgb, var(--pcolor) 55%, transparent);
+      box-shadow: 0 0 12px color-mix(in srgb, var(--pcolor) 25%, transparent);
+    }
+    .provider-mono {
+      font-family: var(--font-heading);
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      color: var(--pcolor);
+    }
+    .provider-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .provider-name {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .provider-blurb {
+      font-size: 10px;
+      color: var(--color-text-muted);
+    }
+    .create-provider-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 4px 10px;
+      font-family: var(--font-heading);
+      font-size: 12px;
+      color: var(--color-cyan);
+      letter-spacing: 0.4px;
+    }
+    .create-provider-chip .provider-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+    }
+    .create-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 6px 2px 10px;
+      font-size: 11px;
+      color: var(--color-text-muted);
+    }
+    .create-field > span {
+      font-family: var(--font-heading);
+      letter-spacing: 0.5px;
+      font-size: 10px;
+    }
+    #spawn-name {
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.45);
+      color: var(--color-text);
+      font-family: var(--font-body);
+      font-size: 13px;
+      outline: none;
+    }
+    #spawn-name:focus {
+      border-color: rgba(0, 217, 255, 0.55);
+      box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.12);
+    }
+    .pet-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .pet-pick {
+      padding: 10px 8px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.03);
+      color: var(--color-text);
+      cursor: pointer;
+      font-size: 11px;
+      font-family: var(--font-body);
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .pet-pick:hover { border-color: rgba(0,217,255,0.35); }
+    .pet-pick.selected {
+      border-color: var(--color-cyan);
+      background: rgba(0, 217, 255, 0.12);
+      color: var(--color-cyan);
+    }
+    .pet-pick-label { word-break: break-all; }
+    .create-go { width: 100%; margin-top: 4px; }
+
     #toast {
       display: none; 
       position: fixed; 
@@ -1014,8 +1191,8 @@
       <div class="radar-core"></div>
     </div>
     <div class="empty-title">FLOOR EMPTY</div>
-    <div class="empty-subtitle">Open AGENTS ▾ below to start a chat — or wait for live workers</div>
-    <div class="empty-hint">CONFIGURED ROSTER · LIVE BUS PRESENCE</div>
+    <div class="empty-subtitle">AGENTS ▾ → pick provider type → name + pet → land on floor → chat</div>
+    <div class="empty-hint">PROVIDER TYPES · INSTANCES · LIVE BUS</div>
   </div>
 
   <div id="modal-backdrop"></div>
@@ -1025,14 +1202,14 @@
     <div id="agent-roster" role="listbox" aria-label="Configured agents" aria-hidden="true">
       <div class="roster-header">
         <h4>AGENTS</h4>
-        <span class="roster-meta" id="roster-count">0 options</span>
+        <span class="roster-meta" id="roster-count">providers</span>
       </div>
       <div id="agent-roster-list"></div>
     </div>
     <button type="button" id="agent-dock-toggle" aria-expanded="false" aria-controls="agent-roster">
       <span class="dock-label">
         <span class="dock-title">AGENTS</span>
-        <span class="dock-sub" id="dock-sub">Pick a worker · open chat</span>
+        <span class="dock-sub" id="dock-sub">New agent from provider type</span>
       </span>
       <span class="chevron" aria-hidden="true">⌃</span>
     </button>
@@ -1077,6 +1254,7 @@
   <div id="toast"></div>
 
 <script src="pets.js"></script>
+<script src="agent-dock.js"></script>
 <script>
 p5.disableFriendlyErrors = true;
 
@@ -1115,20 +1293,6 @@ const STATUS_LABELS = {
   stopped: 'STOPPED',
 };
 
-/**
- * Configured agent catalog (operator roster).
- * Live bus agents are merged in at render time.
- * Optional localStorage: nats-hub.configured-agents = JSON [{identity,kind,label}|string]
- */
-const DEFAULT_CONFIGURED_AGENTS = [
-  { identity: 'design-agent', kind: 'Grok ACP · UI/design', label: 'Design' },
-  { identity: 'petdex-agent', kind: 'Grok ACP · pets/sprites', label: 'Petdex' },
-  { identity: 'bg-agent', kind: 'Grok ACP · backgrounds', label: 'Background' },
-  { identity: 'surreal-agent', kind: 'Grok ACP · SurrealDB', label: 'Surreal' },
-  { identity: 'cursor-agent', kind: 'Echo / Cursor dogfood', label: 'Cursor' },
-  { identity: 'hermes-agent', kind: 'Hermes ACP', label: 'Hermes' },
-  { identity: 'grok-agent', kind: 'Grok ACP general', label: 'Grok' },
-];
 
 const MAX_PARTICLES = 80;
 const MAX_BUBBLE_LINES = 3;
@@ -1969,7 +2133,11 @@ function connectWS() {
     try {
       const env = JSON.parse(event.data);
       if (env && env.type === 'ack') {
-        showToast(`✓ ${env.action}${env.to ? ' → ' + env.to : ''}${env.identity ? ' ' + env.identity : ''}${env.task_channel ? ' (' + env.task_channel + ')' : ''}`);
+        let extra = '';
+        if (env.ensure && env.ensure.status) {
+          extra = ` · worker ${env.ensure.status}`;
+        }
+        showToast(`✓ ${env.action}${env.to ? ' → ' + env.to : ''}${env.identity ? ' ' + env.identity : ''}${env.task_channel ? ' (' + env.task_channel + ')' : ''}${extra}`);
         return;
       }
       if (env && env.type === 'error') {
@@ -2223,14 +2391,8 @@ function mousePressed(event) {
   for (const agent of agents.values()) {
     if (agent.contains(mouseX, mouseY)) {
       selectedAgent = agent;
-      // Primary path: open chat immediately (coding-agent session UI)
-      // Hold Shift for the stop/resume action menu
-      if (event && event.shiftKey) {
-        showActionPopup(agent);
-      } else {
-        document.getElementById('action-popup').style.display = 'none';
-        showSessionDetail(agent);
-      }
+      // Click = action menu (Open chat / Stop / Resume). Double path not forced into chat.
+      showActionPopup(agent);
       return;
     }
   }
@@ -2248,7 +2410,11 @@ function showActionPopup(agent) {
   title.style.color = `rgb(${palette[0]}, ${palette[1]}, ${palette[2]})`;
   const statusLabel = agent.stopped ? 'STOPPED' : (STATUS_LABELS[agent.status] || agent.status.toUpperCase());
   document.getElementById('popup-info').textContent =
-    `${statusLabel} · ${agent.messageCount} msgs${agent.petSlug ? ' · pet ' + agent.petSlug : ''}${agent.sessionId ? ' · ses ' + agent.sessionId.substring(0, 8) : ''}`;
+    `${statusLabel}` +
+    (agent.providerId ? ` · ${agent.providerId}` : '') +
+    ` · ${agent.messageCount} msgs` +
+    (agent.petSlug ? ` · pet ${agent.petSlug}` : '') +
+    (agent.sessionId ? ` · ses ${agent.sessionId.substring(0, 8)}` : '');
 
   popup.style.display = 'block';
   popup.style.left = Math.min(mouseX + 12, window.innerWidth - 250) + 'px';
@@ -2345,198 +2511,29 @@ function showSessionDetail(agent) {
   }
 }
 
-// --- Agent dock roster (chevron → pick configured agent → open chat) ---
-
-function loadConfiguredAgents() {
-  const base = DEFAULT_CONFIGURED_AGENTS.map(a => ({ ...a }));
-  try {
-    const raw = localStorage.getItem('nats-hub.configured-agents');
-    if (!raw) return base;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return base;
-    const seen = new Set(base.map(a => a.identity));
-    for (const item of parsed) {
-      let entry;
-      if (typeof item === 'string') {
-        entry = { identity: item, kind: 'Custom', label: item };
-      } else {
-        entry = {
-          identity: item.identity || item.id || item.name,
-          kind: item.kind || item.type || 'Custom',
-          label: item.label || item.displayName || item.identity || item.id,
-        };
-      }
-      if (!entry.identity || seen.has(entry.identity)) continue;
-      base.push(entry);
-      seen.add(entry.identity);
-    }
-  } catch (_) { /* ignore bad localStorage */ }
-  return base;
-}
-
-function agentKindLabel(identity) {
-  const conf = loadConfiguredAgents().find(a => a.identity === identity);
-  if (conf) return conf.kind;
-  if (identity.includes('design')) return 'Design';
-  if (identity.includes('pet')) return 'Pets';
-  if (identity.includes('echo')) return 'Echo';
-  if (identity.includes('hermes')) return 'Hermes';
-  if (identity.includes('grok')) return 'Grok';
-  return 'Worker';
-}
-
-function ensureAgent(identity) {
-  if (!identity) return null;
-  let agent = agents.get(identity);
-  if (!agent) {
-    agent = new Agent(identity);
-    agent.status = 'idle';
-    agent.lastSeen = Date.now();
-    agents.set(identity, agent);
-    layoutAgents();
-    const countEl = document.getElementById('agent-count');
-    if (countEl) countEl.textContent = agents.size;
-  }
-  return agent;
-}
-
-function openChatForIdentity(identity) {
-  const agent = ensureAgent(identity);
-  if (!agent) {
-    showToast('Unknown agent', true);
-    return;
-  }
-  selectedAgent = agent;
-  setAgentRosterOpen(false);
-  showSessionDetail(agent);
-  showToast('Chat · ' + identity);
-  refreshAgentRoster();
-}
-
-function rosterDotClass(agent) {
-  if (!agent) return 'off';
-  if (agent.stopped) return 'off';
-  if (agent.status === 'error') return 'err';
-  if (agent.status === 'working' || agent.status === 'thinking') return 'busy';
-  if (agent.status === 'ready') return 'live';
-  return 'idle';
-}
-
-function rosterStatusText(agent) {
-  if (!agent) return 'OFFLINE';
-  if (agent.stopped) return 'STOPPED';
-  return STATUS_LABELS[agent.status] || (agent.status || 'IDLE').toUpperCase();
-}
-
-function buildRosterEntries() {
-  const configured = loadConfiguredAgents();
-  const liveIds = new Set(agents.keys());
-  const confIds = new Set(configured.map(c => c.identity));
-
-  const liveConfigured = [];
-  const offlineConfigured = [];
-  for (const c of configured) {
-    const live = agents.has(c.identity);
-    const entry = {
-      identity: c.identity,
-      label: c.label || c.identity,
-      kind: c.kind || agentKindLabel(c.identity),
-      live,
-      agent: agents.get(c.identity) || null,
-    };
-    if (live) liveConfigured.push(entry);
-    else offlineConfigured.push(entry);
-  }
-
-  const liveOther = [];
-  for (const id of liveIds) {
-    if (confIds.has(id)) continue;
-    if (id === 'visualizer' || id === 'josh' || id === 'hub') continue;
-    liveOther.push({
-      identity: id,
-      label: id,
-      kind: agentKindLabel(id),
-      live: true,
-      agent: agents.get(id),
-    });
-  }
-
-  return { liveConfigured, offlineConfigured, liveOther };
-}
-
-function renderRosterItem(entry) {
-  const offline = !entry.live;
-  const dot = rosterDotClass(entry.agent);
-  const status = rosterStatusText(entry.agent);
-  return (
-    '<button type="button" class="roster-item' + (offline ? ' offline' : '') + '" ' +
-    'data-identity="' + escapeHtml(entry.identity) + '" role="option">' +
-      '<span class="roster-dot ' + dot + '" aria-hidden="true"></span>' +
-      '<span class="roster-copy">' +
-        '<div class="roster-name">' + escapeHtml(entry.label) + '</div>' +
-        '<div class="roster-kind">' + escapeHtml(entry.kind) + ' · ' + escapeHtml(entry.identity) + '</div>' +
-      '</span>' +
-      '<span class="roster-status">' + escapeHtml(status) + '</span>' +
-    '</button>'
-  );
-}
-
+// Agent dock lives in agent-dock.js (provider → name+pet → floor → chat)
 function refreshAgentRoster() {
-  const list = document.getElementById('agent-roster-list');
-  const countEl = document.getElementById('roster-count');
-  const dockSub = document.getElementById('dock-sub');
-  const roster = document.getElementById('agent-roster');
-  if (!list) return;
-
-  const parts = buildRosterEntries();
-  const liveConfigured = parts.liveConfigured;
-  const offlineConfigured = parts.offlineConfigured;
-  const liveOther = parts.liveOther;
-  const total = liveConfigured.length + offlineConfigured.length + liveOther.length;
-  const liveN = liveConfigured.length + liveOther.length;
-
-  if (countEl) countEl.textContent = total + ' option' + (total === 1 ? '' : 's');
-  if (dockSub) {
-    dockSub.textContent = liveN
-      ? liveN + ' live · click to chat'
-      : 'Pick a worker · open chat';
-  }
-
-  // Full list rebuild only while expanded
-  if (!roster || !roster.classList.contains('open')) return;
-
-  if (!total) {
-    list.innerHTML = '<div class="roster-empty">No agents configured yet.<br>Start a worker or set localStorage <code>nats-hub.configured-agents</code>.</div>';
-    return;
-  }
-
-  let html = '';
-  if (liveConfigured.length || liveOther.length) {
-    html += '<div class="roster-section-label">Live</div>';
-    for (const e of liveConfigured) html += renderRosterItem(e);
-    for (const e of liveOther) html += renderRosterItem(e);
-  }
-  if (offlineConfigured.length) {
-    html += '<div class="roster-section-label">Configured</div>';
-    for (const e of offlineConfigured) html += renderRosterItem(e);
-  }
-  list.innerHTML = html;
+  if (typeof AgentDock !== 'undefined') AgentDock.refresh();
 }
-
 function setAgentRosterOpen(open) {
-  const roster = document.getElementById('agent-roster');
-  const toggle = document.getElementById('agent-dock-toggle');
-  if (!roster || !toggle) return;
-  roster.classList.toggle('open', open);
-  roster.setAttribute('aria-hidden', open ? 'false' : 'true');
-  toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  if (open) refreshAgentRoster();
+  if (typeof AgentDock !== 'undefined') AgentDock.setOpen(open);
 }
-
 function toggleAgentRoster() {
-  const roster = document.getElementById('agent-roster');
-  if (!roster) return;
-  setAgentRosterOpen(!roster.classList.contains('open'));
+  if (typeof AgentDock === 'undefined') return;
+  AgentDock.setOpen(!AgentDock.isOpen());
+}
+function ensureAgent(identity) {
+  if (typeof AgentDock !== 'undefined') return AgentDock.ensureAgentOnFloor(identity);
+  return agents.get(identity) || null;
+}
+function openChatForIdentity(identity) {
+  if (typeof AgentDock !== 'undefined') {
+    const a = AgentDock.ensureAgentOnFloor(identity);
+    if (!a) return;
+    selectedAgent = a;
+    AgentDock.setOpen(false);
+    showSessionDetail(a);
+  }
 }
 
 function updateChatSendEnabled() {
@@ -2558,14 +2555,21 @@ function sendChatMessage() {
   }
 
   const agent = openLogAgent;
+  const provider = agent.providerId || null;
+  if (provider && !agent.workerEnsured) {
+    showToast(`Spawning ${provider} worker for ${agent.identity}…`);
+  }
   ws.send(JSON.stringify({
     type: 'send_message',
     to: agent.identity,
     message: msg,
+    provider: provider,
+    ensure_worker: true,
   }));
   agent.status = 'working';
-  agent.statusHoldUntil = Date.now() + 4000;
-  agent.setSnippet('task → ' + msg);
+  agent.statusHoldUntil = Date.now() + 8000;
+  agent.setSnippet((provider ? `[${provider}] ` : '') + 'task → ' + msg);
+  if (provider) agent.workerEnsured = true;
 
   optimisticChatHtml.push(formatOptimisticYouBubble(msg));
   if (optimisticChatHtml.length > 20) optimisticChatHtml.shift();
@@ -2653,37 +2657,8 @@ function wireUiInteractions() {
     });
   }
 
-  const dockToggle = document.getElementById('agent-dock-toggle');
-  const rosterList = document.getElementById('agent-roster-list');
-  const dock = document.getElementById('agent-dock');
-  if (dockToggle) {
-    dockToggle.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      toggleAgentRoster();
-    });
-  }
-  if (rosterList) {
-    rosterList.addEventListener('click', (ev) => {
-      const btn = ev.target.closest('.roster-item[data-identity]');
-      if (!btn) return;
-      ev.preventDefault();
-      openChatForIdentity(btn.getAttribute('data-identity'));
-    });
-  }
-  if (dock) {
-    dock.addEventListener('mousedown', (ev) => ev.stopPropagation());
-  }
-  // keyboard: A opens agent roster when not typing
-  document.addEventListener('keydown', (ev) => {
-    if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
-    if (ev.key.toLowerCase() === 'a' && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
-      const detail = document.getElementById('session-detail');
-      if (detail && detail.classList.contains('open')) return;
-      ev.preventDefault();
-      toggleAgentRoster();
-    }
-  });
-  refreshAgentRoster();
+  if (typeof AgentDock !== 'undefined') AgentDock.wire();
+  else refreshAgentRoster();
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', wireUiInteractions);

@@ -92,3 +92,63 @@ def grok_spec(
         resume_mode="none",
     )
 
+
+def kilo_spec(
+    *,
+    repo: str | Path = ".",
+    model: str | None = None,
+    kilo_bin: str = "kilo",
+    auto_approve: bool = True,
+    json_output: bool = True,
+) -> HeadlessCliSpec:
+    """Kilo CLI (`kilo run`) headless preset.
+
+    Session resume: kilo supports `--continue` (last session) and `--session <id>`.
+    We use session_id mode so each hub-session maps to a kilo session.
+    """
+    base: list[str] = ["run"]
+    if auto_approve:
+        base.append("--auto")
+    if json_output:
+        base.extend(["--format", "json"])
+    if model:
+        base.extend(["-m", model])
+    return HeadlessCliSpec(
+        binary=kilo_bin,
+        log_label="kilo-worker",
+        repo=repo,
+        base_argv=base,
+        prompt_flag=None,  # kilo uses positional message
+        resume_mode="resume_id",
+        resume_id_flag="--session",
+        resume_ctx_key="kilo_session_id",
+        timeout_sec=600.0,
+    )
+
+
+def opencode_spec(
+    *,
+    repo: str | Path = ".",
+    model: str | None = None,
+    opencode_bin: str = "opencode",
+) -> HeadlessCliSpec:
+    """OpenCode CLI (`opencode run`) headless preset.
+
+    OpenCode supports `opencode run <message>` for one-shot and session
+    resume via `--session` / `--continue`.
+    """
+    base: list[str] = ["run"]
+    if model:
+        base.extend(["-m", model])
+    return HeadlessCliSpec(
+        binary=opencode_bin,
+        log_label="opencode-worker",
+        repo=repo,
+        base_argv=base,
+        prompt_flag=None,  # positional message
+        resume_mode="resume_id",
+        resume_id_flag="--session",
+        resume_ctx_key="opencode_session_id",
+        timeout_sec=600.0,
+    )
+

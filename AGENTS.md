@@ -62,6 +62,7 @@ src/
 ```
 
 Python workers: `worker_runtime.py`, `worker_events.py`, `worker_backends/`, `hub_worker.js`.
+Remote agents: `remote_agent_adapter.py` (WebSocket-connected workers for distributed teams).
 
 ## Key Types
 
@@ -219,3 +220,4 @@ CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 - `docs/PRODUCT_VISION.md` — full product vision, communication patterns, worker design
 - `docs/DATABASE_PLAN.md` — database architecture and implementation roadmap
 - `docs/WORKER_BACKENDS.md` — Python worker backend types and event/wave integration
+- `docs/REMOTE_AGENTS.md` — WebSocket remote agent adapter for distributed teams

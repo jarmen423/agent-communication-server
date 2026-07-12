@@ -19,8 +19,8 @@ class HeadlessCliSpec:
     repo: str | Path = "."
     # Fixed argv before prompt (e.g. ["hermes", "chat", "-Q"])
     base_argv: list[str] = field(default_factory=list)
-    # Prompt: append ["-p", prompt] or ["-q", prompt]
-    prompt_flag: str = "-p"
+    # Prompt: append ["-p", prompt] or ["-q", prompt]; None = positional arg
+    prompt_flag: str | None = "-p"
     # Session resume
     resume_mode: str = "none"  # none | continue_flag | resume_id | session_cwd_continue
     continue_flag: str = "--continue"
@@ -59,7 +59,10 @@ class HeadlessCliBackend:
         elif s.resume_mode == "session_cwd_continue" and ctx.get(s.has_turn_ctx_key):
             cmd.append(s.continue_flag)
 
-        cmd.extend([s.prompt_flag, prompt])
+        if s.prompt_flag:
+            cmd.extend([s.prompt_flag, prompt])
+        else:
+            cmd.append(prompt)
         return cmd
 
     def _parse_text(self, raw: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:

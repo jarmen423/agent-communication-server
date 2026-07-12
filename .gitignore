@@ -27,3 +27,5 @@ __pycache__/
 nats_hub.db/
 .cline/
 .cursor/
+.hermes/
+.agentic-memory/

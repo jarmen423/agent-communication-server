@@ -160,7 +160,8 @@ const Petdex = (() => {
 
   /** Draw animated pet for an arcade agent. Returns false → caller uses chip fallback. */
   function drawAgent(agent) {
-    const slug = hashIdentityToPet(agent.identity);
+    // Prefer operator-chosen pet (spawn wizard); fall back to identity hash
+    const slug = agent.petSlug || hashIdentityToPet(agent.identity);
     const sprite = getSprite(slug);
     const state = agentStatusToPetState(agent.status, agent.stopped);
     const useErrorTint = agent.status === 'error' && !hasStateRow(sprite.sheetRows, 'failed');
@@ -175,6 +176,10 @@ const Petdex = (() => {
     return spriteReady(slug) ? metrics().hitRadius : 0;
   }
 
+  function setExplicitPet(identity, slug) {
+    if (identity && slug) EXPLICIT_PET_MAP[String(identity).toLowerCase()] = slug;
+  }
+
   return {
     INSTALLED_PETS,
     EXPLICIT_PET_MAP,
@@ -185,5 +190,6 @@ const Petdex = (() => {
     spriteReady,
     hitRadius,
     metrics,
+    setExplicitPet,
   };
 })();

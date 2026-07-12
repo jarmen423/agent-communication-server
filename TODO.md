@@ -1,4 +1,10 @@
-[ ] Get rid of weird triplet pet dex animation / rendering
+[ ] Incorporate concepts from jarmen423/checklist-ledger AND
+    jarmen423/skills/my-created-skills/wave-execution
+    - need to think about best method of incorporation?
+    - deployed checklist ledger site becomes a channel that agents can
+      subscribe to?
+      - enables **MULTI-MACHINE AGENT TEAM COORDINATION** 
+[X] Get rid of weird triplet pet dex animation / rendering
 
 [ ] select different spawn in animations 
 - collect roster of cools ones

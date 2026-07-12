@@ -71,6 +71,23 @@ impl HubClient {
         Ok(id)
     }
 
+    /// NATS request/reply helper (JSON in, JSON out). Visualizer → worker supervisor.
+    pub async fn request_json(
+        &self,
+        subject: &str,
+        payload: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<serde_json::Value> {
+        let bytes = serde_json::to_vec(&payload).context("serialize request payload")?;
+        let resp = tokio::time::timeout(timeout, self.nats.request(subject.to_string(), bytes.into()))
+            .await
+            .with_context(|| format!("request {subject} timed out"))?
+            .with_context(|| format!("request {subject} failed"))?;
+        let v: serde_json::Value =
+            serde_json::from_slice(&resp.payload).context("decode request reply JSON")?;
+        Ok(v)
+    }
+
     /// Convenience: build + send a status envelope.
     pub async fn send_status(&self, channel: &str, status: impl Into<String>) -> Result<String> {
         let payload = serde_json::json!({ "status": status.into() });

@@ -21,6 +21,8 @@ __all__ = [
     "agy_spec",
     "hermes_spec",
     "grok_spec",
+    "kilo_spec",
+    "opencode_spec",
 ]
 
 
@@ -40,3 +42,15 @@ def grok_spec(**kwargs) -> HeadlessCliSpec:
     from worker_backends.presets import grok_spec as _grok
 
     return _grok(**kwargs)
+
+
+def kilo_spec(**kwargs) -> HeadlessCliSpec:
+    from worker_backends.presets import kilo_spec as _kilo
+
+    return _kilo(**kwargs)
+
+
+def opencode_spec(**kwargs) -> HeadlessCliSpec:
+    from worker_backends.presets import opencode_spec as _opencode
+
+    return _opencode(**kwargs)
