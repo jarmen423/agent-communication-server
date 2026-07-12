@@ -40,10 +40,11 @@ The WS bridge (`src/ws_bridge.rs`) is embedded in `hub-server`. When you pass
 
 ```bash
 # Start hub-server with the visualizer
+cd ~/nats  # ensure working directory is the repo root
 /data/cargo-targets/jfrie/nats/debug/hub-server \
     --db-path /tmp/nats_hub.db \
     --ws-addr 127.0.0.1:9191 \
-    --static-dir visualizer/
+    --static-dir /home/jfrie/nats/visualizer/
 ```
 
 Then open **http://127.0.0.1:9191/** in your browser.
@@ -63,10 +64,11 @@ From the nats-hub repo root, in separate terminals:
 nats-server -c config/nats-server.conf
 
 # Terminal 2: hub-server (router + DB + visualizer)
+cd ~/nats
 /data/cargo-targets/jfrie/nats/debug/hub-server \
     --db-path /tmp/nats_hub.db \
     --ws-addr 127.0.0.1:9191 \
-    --static-dir visualizer/
+    --static-dir /home/jfrie/nats/visualizer/
 
 # Terminal 3: worker supervisor (on-demand agent spawning)
 /home/jfrie/.hermes/hermes-agent/venv/bin/python3 worker_supervisor.py
