@@ -31,6 +31,49 @@ const AgentDock = (() => {
     { id: 'echo', label: 'Echo', monogram: 'Ec', color: '#94a3b8', blurb: 'Dogfood reverse worker', backend: 'sdk', defaultModel: null },
   ];
 
+  // Known models per provider (operator-facing dropdowns).
+  // value = exact string passed as --model; label = human-readable.
+  const PROVIDER_MODELS = {
+    kilo: [
+      { value: 'kilo/minimax/minimax-m3', label: 'MiniMax M3 (Kilo Gateway)' },
+      { value: 'kilo/minimax/minimax-m2.7', label: 'MiniMax M2.7 (Kilo Gateway)' },
+      { value: 'kilo/anthropic/claude-sonnet-4', label: 'Claude Sonnet 4 (Kilo Gateway)' },
+      { value: 'kilo/anthropic/claude-haiku-4.5', label: 'Claude Haiku 4.5 (Kilo Gateway)' },
+      { value: 'openrouter/~openai/gpt-mini-latest', label: 'GPT Mini (OpenRouter)' },
+      { value: 'openrouter/~anthropic/claude-sonnet-latest', label: 'Claude Sonnet (OpenRouter)' },
+      { value: 'openrouter/~google/gemini-flash-latest', label: 'Gemini Flash (OpenRouter)' },
+    ],
+    'kilo-acp': [
+      { value: 'kilo/minimax/minimax-m3', label: 'MiniMax M3 (Kilo Gateway)' },
+      { value: 'kilo/anthropic/claude-sonnet-4', label: 'Claude Sonnet 4 (Kilo Gateway)' },
+      { value: 'openrouter/~openai/gpt-mini-latest', label: 'GPT Mini (OpenRouter)' },
+    ],
+    opencode: [
+      { value: 'opencode/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash Free (Zen)' },
+      { value: 'opencode/claude-sonnet-4', label: 'Claude Sonnet 4 (Zen)' },
+      { value: 'opencode/gpt-5-mini', label: 'GPT-5 Mini (Zen)' },
+    ],
+    'opencode-acp': [
+      { value: 'opencode/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash Free (Zen)' },
+      { value: 'opencode/claude-sonnet-4', label: 'Claude Sonnet 4 (Zen)' },
+    ],
+    grok: [
+      { value: 'grok-4.5', label: 'Grok 4.5' },
+      { value: 'grok-4', label: 'Grok 4' },
+      { value: 'grok-3', label: 'Grok 3' },
+    ],
+    hermes: [
+      { value: 'xai/grok-4.5', label: 'Grok 4.5 (xAI)' },
+      { value: 'anthropic/claude-sonnet-4', label: 'Claude Sonnet 4' },
+      { value: 'openai/gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+    ],
+    cursor: [],
+    claude: [],
+    codex: [],
+    agy: [],
+    echo: [],
+  };
+
   let view = 'home'; // home | providers | create
   let selectedProviderId = null;
   let selectedPetSlug = null;
@@ -79,6 +122,67 @@ const AgentDock = (() => {
 
   function providerById(id) {
     return DEFAULT_PROVIDERS.find((p) => p.id === id) || null;
+  }
+
+  function modelsForProvider(providerId) {
+    const list = PROVIDER_MODELS[providerId];
+    return Array.isArray(list) ? list.slice() : [];
+  }
+
+  function defaultModelForProvider(providerId) {
+    const p = providerById(providerId);
+    return (p && p.defaultModel) || (modelsForProvider(providerId)[0] || {}).value || '';
+  }
+
+  /** Build <select> options HTML. Includes blank + known models + Other… */
+  function modelOptionsHtml(providerId, selectedModel) {
+    const models = modelsForProvider(providerId);
+    const selected = selectedModel || defaultModelForProvider(providerId) || '';
+    const knownValues = new Set(models.map((m) => m.value));
+    const isCustom = selected && !knownValues.has(selected);
+
+    let html = `<option value="">Provider default</option>`;
+    for (const m of models) {
+      const sel = !isCustom && m.value === selected ? ' selected' : '';
+      html += `<option value="${esc(m.value)}"${sel}>${esc(m.label)}</option>`;
+    }
+    html += `<option value="__other__"${isCustom ? ' selected' : ''}>Other…</option>`;
+    return html;
+  }
+
+  /** Read select + optional custom input → model string (or ''). */
+  function readModelPicker(selectId, customInputId) {
+    const sel = document.getElementById(selectId);
+    const custom = document.getElementById(customInputId);
+    if (!sel) return (custom && custom.value.trim()) || '';
+    const v = sel.value;
+    if (v === '__other__') return (custom && custom.value.trim()) || '';
+    return v || '';
+  }
+
+  function syncModelCustomVisibility(selectId, customInputId) {
+    const sel = document.getElementById(selectId);
+    const custom = document.getElementById(customInputId);
+    if (!sel || !custom) return;
+    const show = sel.value === '__other__';
+    custom.style.display = show ? '' : 'none';
+    if (show) setTimeout(() => custom.focus(), 20);
+  }
+
+  function fillModelPicker(selectId, customInputId, providerId, selectedModel) {
+    const sel = document.getElementById(selectId);
+    const custom = document.getElementById(customInputId);
+    if (!sel) return;
+    const models = modelsForProvider(providerId);
+    const selected = selectedModel || defaultModelForProvider(providerId) || '';
+    const knownValues = new Set(models.map((m) => m.value));
+    const isCustom = selected && !knownValues.has(selected);
+    sel.innerHTML = modelOptionsHtml(providerId, selected);
+    if (custom) {
+      custom.value = isCustom ? selected : '';
+      custom.style.display = isCustom ? '' : 'none';
+      custom.placeholder = defaultModelForProvider(providerId) || 'provider/model';
+    }
   }
 
   function slugifyName(name) {
@@ -300,8 +404,12 @@ const AgentDock = (() => {
       <input id="spawn-name" type="text" maxlength="40" placeholder="e.g. design, research, petdex" autocomplete="off" />
     </label>
     <label class="create-field">
-      <span>Model ${p.defaultModel ? '<em style="opacity:0.6">(default: ' + esc(p.defaultModel) + ')</em>' : ''}</span>
-      <input id="spawn-model" type="text" maxlength="80" placeholder="${p.defaultModel ? esc(p.defaultModel) : 'provider/model'}" autocomplete="off" />
+      <span>Model</span>
+      <select id="spawn-model-select" class="model-select">
+        ${modelOptionsHtml(p.id, p.defaultModel || '')}
+      </select>
+      <input id="spawn-model-custom" class="model-custom" type="text" maxlength="120"
+        placeholder="${esc(p.defaultModel || 'provider/model')}" autocomplete="off" style="display:none;margin-top:6px" />
     </label>
     <div class="create-field">
       <span>Pet / character</span>
@@ -312,6 +420,13 @@ const AgentDock = (() => {
 
     const input = body.querySelector('#spawn-name');
     if (input) setTimeout(() => input.focus(), 30);
+    const modelSel = body.querySelector('#spawn-model-select');
+    if (modelSel) {
+      modelSel.addEventListener('change', () => {
+        syncModelCustomVisibility('spawn-model-select', 'spawn-model-custom');
+      });
+      syncModelCustomVisibility('spawn-model-select', 'spawn-model-custom');
+    }
   }
 
   function updateChrome() {
@@ -369,8 +484,7 @@ const AgentDock = (() => {
     }
     const identity = makeIdentity(name);
     const label = String(name).trim();
-    const modelInput = document.getElementById('spawn-model');
-    const model = (modelInput && modelInput.value.trim()) || (p.defaultModel || '');
+    const model = readModelPicker('spawn-model-select', 'spawn-model-custom') || (p.defaultModel || '');
     const petSlug =
       selectedPetSlug ||
       (typeof Petdex !== 'undefined' && Petdex.INSTALLED_PETS[0]) ||
@@ -500,6 +614,7 @@ const AgentDock = (() => {
 
   return {
     DEFAULT_PROVIDERS,
+    PROVIDER_MODELS,
     wire,
     refresh,
     setOpen,
@@ -509,5 +624,11 @@ const AgentDock = (() => {
     loadInstances,
     saveInstances,
     providerById,
+    modelsForProvider,
+    defaultModelForProvider,
+    modelOptionsHtml,
+    readModelPicker,
+    syncModelCustomVisibility,
+    fillModelPicker,
   };
 })();

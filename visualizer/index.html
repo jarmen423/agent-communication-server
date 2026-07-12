@@ -556,6 +556,40 @@
       outline: none;
       border-color: rgba(0, 217, 255, 0.45);
     }
+    #chat-model-select,
+    .model-select {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.45);
+      color: var(--color-text);
+      font-family: var(--font-body);
+      font-size: 12px;
+    }
+    #chat-model-select:focus,
+    .model-select:focus {
+      outline: none;
+      border-color: rgba(0, 217, 255, 0.45);
+    }
+    #chat-model-custom,
+    .model-custom {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.45);
+      color: var(--color-text);
+      font-family: var(--font-body);
+      font-size: 12px;
+    }
+    #chat-model-custom:focus,
+    .model-custom:focus {
+      outline: none;
+      border-color: rgba(0, 217, 255, 0.45);
+    }
     #chat-model-apply {
       flex-shrink: 0;
       padding: 7px 10px;
@@ -1291,9 +1325,10 @@
       <span class="close-btn" id="detail-close" title="Close">✕</span>
     </div>
     <div id="chat-model-bar">
-      <label for="chat-model-input">MODEL</label>
-      <input id="chat-model-input" type="text" maxlength="120" placeholder="provider/model" autocomplete="off" />
-      <button type="button" id="chat-model-apply" title="Apply model for next worker spawn">Apply</button>
+      <label for="chat-model-select">MODEL</label>
+      <select id="chat-model-select" title="Select model for this agent"></select>
+      <input id="chat-model-custom" type="text" maxlength="120" placeholder="custom provider/model" autocomplete="off" style="display:none" />
+      <button type="button" id="chat-model-apply" title="Apply model and restart worker if needed">Apply</button>
     </div>
     <div id="chat-messages" aria-live="polite"></div>
     <form id="chat-composer" autocomplete="off">
@@ -2537,10 +2572,17 @@ function renderSessionDetail(agent) {
       (agent.petSlug ? ` · pet ${agent.petSlug}` : '');
   }
   if (input) input.placeholder = `Message ${agent.identity}…`;
-  const modelInput = document.getElementById('chat-model-input');
-  if (modelInput && document.activeElement !== modelInput) {
-    modelInput.value = agent.model || '';
-    modelInput.placeholder = agent.model || 'provider/model (optional)';
+  const modelSel = document.getElementById('chat-model-select');
+  const modelCustom = document.getElementById('chat-model-custom');
+  if (modelSel && document.activeElement !== modelSel && document.activeElement !== modelCustom) {
+    if (typeof AgentDock !== 'undefined' && AgentDock.fillModelPicker) {
+      AgentDock.fillModelPicker(
+        'chat-model-select',
+        'chat-model-custom',
+        agent.providerId || '',
+        agent.model || ''
+      );
+    }
   }
 
   const agentEnvelopes = agentEnvelopesFor(agent);
@@ -2675,9 +2717,10 @@ function applyChatModel() {
     showToast('No agent selected', true);
     return;
   }
-  const input = document.getElementById('chat-model-input');
-  if (!input) return;
-  const model = input.value.trim();
+  const model =
+    (typeof AgentDock !== 'undefined' && AgentDock.readModelPicker)
+      ? AgentDock.readModelPicker('chat-model-select', 'chat-model-custom')
+      : '';
   const agent = openLogAgent;
   const prev = agent.model || '';
   agent.model = model;
@@ -2788,10 +2831,18 @@ function wireUiInteractions() {
   }
 
   const modelApply = document.getElementById('chat-model-apply');
-  const modelInput = document.getElementById('chat-model-input');
+  const modelSel = document.getElementById('chat-model-select');
+  const modelCustom = document.getElementById('chat-model-custom');
   if (modelApply) modelApply.addEventListener('click', applyChatModel);
-  if (modelInput) {
-    modelInput.addEventListener('keydown', (ev) => {
+  if (modelSel) {
+    modelSel.addEventListener('change', () => {
+      if (typeof AgentDock !== 'undefined' && AgentDock.syncModelCustomVisibility) {
+        AgentDock.syncModelCustomVisibility('chat-model-select', 'chat-model-custom');
+      }
+    });
+  }
+  if (modelCustom) {
+    modelCustom.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') {
         ev.preventDefault();
         applyChatModel();
