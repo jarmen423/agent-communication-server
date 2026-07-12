@@ -260,6 +260,7 @@ const AgentDock = (() => {
   function ensureAgentOnFloor(identity, opts = {}) {
     if (typeof agents === 'undefined' || typeof Agent === 'undefined') return null;
     let agent = agents.get(identity);
+    const created = !agent;
     if (!agent) {
       agent = new Agent(identity);
       agent.status = 'idle';
@@ -275,7 +276,8 @@ const AgentDock = (() => {
     if (opts.providerId) agent.providerId = opts.providerId;
     if (opts.label) agent.displayLabel = opts.label;
     if (opts.model) agent.model = opts.model;
-    if (typeof layoutAgents === 'function') layoutAgents();
+    if (created && typeof placeAgent === 'function') placeAgent(agent);
+    else if (typeof layoutAgents === 'function') layoutAgents();
     const countEl = document.getElementById('agent-count');
     if (countEl) countEl.textContent = String(agents.size);
     return agent;

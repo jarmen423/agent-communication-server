@@ -130,6 +130,35 @@ sprite loads, the visualizer falls back to an octagonal chip with a glyph.
 
 See `docs/pets.md` for sprite format details.
 
+## Scene interaction
+
+### Move agents
+
+| Gesture | Result |
+|---------|--------|
+| **Click** (press + quick release, no hold/drag) | Action menu (Open chat / Stop / Resume) |
+| **Click-and-hold** (~220ms) | Grab agent; move follows pointer; **no menu** on release |
+| **Click + drag** past a few pixels | Same as hold — reposition, **no menu** |
+
+Pinned positions are stored in `localStorage` (`nats-hub.positions`) as normalized
+coords and restored on reload / resize. **Reflow** in the HUD SCENE tools unpins
+everyone and restores the automatic ring layout. **Unstick** ejects any agent that
+landed under the HUD / AGENTS dock / chat panel (those overlays steal mouse events,
+so a sprite buried under them cannot be grabbed). Drag clamp + load/resize rescue
+also prevent re-parking under chrome.
+
+### Custom background
+
+No stock catalog yet. Operators upload their own floor image:
+
+1. HUD → **SCENE** → **Upload BG**
+2. Pick any image file (jpeg/png/webp/…)
+3. Image is compressed (max edge 1920, JPEG) and drawn cover-fit under the grid
+4. Persisted as `localStorage` key `nats-hub.scene-bg` when quota allows
+5. **Clear BG** removes the custom image
+
+Grid + a light dim overlay stay on top so sprites remain readable.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

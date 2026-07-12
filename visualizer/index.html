@@ -97,6 +97,62 @@
       margin: 8px 0;
     }
 
+    .scene-tools {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .scene-tools .scene-label {
+      font-size: 9px;
+      letter-spacing: 0.8px;
+      color: var(--color-text-muted);
+      font-family: var(--font-heading);
+      width: 100%;
+      margin-bottom: 2px;
+    }
+
+    .scene-tools button {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-family: var(--font-heading);
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--color-cyan);
+      background: rgba(0, 217, 255, 0.08);
+      border: 1px solid rgba(0, 217, 255, 0.28);
+      border-radius: 5px;
+      padding: 6px 8px;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+
+    .scene-tools button:hover {
+      background: rgba(0, 217, 255, 0.16);
+      border-color: rgba(0, 217, 255, 0.5);
+    }
+
+    .scene-tools button.danger-soft {
+      color: var(--color-red);
+      background: rgba(255, 42, 95, 0.08);
+      border-color: rgba(255, 42, 95, 0.28);
+    }
+
+    .scene-tools button.danger-soft:hover {
+      background: rgba(255, 42, 95, 0.14);
+      border-color: rgba(255, 42, 95, 0.45);
+    }
+
+    .scene-tools #bg-status {
+      width: 100%;
+      font-size: 9px;
+      color: var(--color-text-muted);
+      margin-top: 2px;
+      line-height: 1.3;
+    }
+
     .status-row {
       display: flex;
       justify-content: space-between;
@@ -1275,6 +1331,16 @@
       <div class="metric-item">ROUTED<span class="metric-value" id="routed-count">0</span></div>
     </div>
     <div class="divider"></div>
+    <div class="scene-tools">
+      <div class="scene-label">SCENE</div>
+      <button type="button" id="bg-upload-btn" title="Upload a custom floor image">Upload BG</button>
+      <button type="button" id="bg-clear-btn" class="danger-soft" title="Remove custom background">Clear BG</button>
+      <button type="button" id="reflow-agents-btn" title="Unpin all agents and reflow ring layout">Reflow</button>
+      <button type="button" id="unstick-agents-btn" title="Pull agents out from under HUD / dock / chat">Unstick</button>
+      <input type="file" id="bg-file" accept="image/*" hidden />
+      <div id="bg-status">Default grid · hold/drag agents to place</div>
+    </div>
+    <div class="divider"></div>
     <div class="ticker-title">
       <span>BUS FEED</span>
       <span class="ticker-count">last 5</span>
@@ -1329,7 +1395,7 @@
       <span>Stop worker</span>
       <span class="key-badge">S</span>
     </button>
-    <div class="popup-esc-hint">Press [ESC] to close</div>
+    <div class="popup-esc-hint">Click = menu · hold / drag = move · [ESC] close</div>
   </div>
 
   <!-- Agent chat panel (Cursor-like) -->
@@ -1414,6 +1480,318 @@ let hoveredAgent = null;
 let particleEffects = [];
 let totalMessageCount = 0;
 let reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Sprite grab / move (click = menu; hold or drag = reposition, no menu)
+const AGENT_HOLD_MS = 220;
+const AGENT_DRAG_PX = 7;
+const POS_STORAGE_KEY = 'nats-hub.positions';
+const BG_STORAGE_KEY = 'nats-hub.scene-bg';
+let pointerGesture = null; // { agent, startX, startY, offsetX, offsetY, holdTimer, mode }
+let sceneBgImage = null;   // p5.Image
+let sceneBgActive = false;
+
+function loadPositionsMap() {
+  try {
+    const raw = localStorage.getItem(POS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveAgentPosition(agent) {
+  if (!agent || !width || !height) return;
+  try {
+    const map = loadPositionsMap();
+    map[agent.identity] = {
+      nx: Math.min(1, Math.max(0, agent.x / width)),
+      ny: Math.min(1, Math.max(0, agent.y / height)),
+      pinned: true,
+    };
+    localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(map));
+  } catch (_) { /* quota / private mode */ }
+}
+
+function clearAllPinnedPositions() {
+  try { localStorage.removeItem(POS_STORAGE_KEY); } catch (_) {}
+}
+
+function applySavedPosition(agent) {
+  if (!agent || !width || !height) return false;
+  const pos = loadPositionsMap()[agent.identity];
+  if (!pos || typeof pos.nx !== 'number' || typeof pos.ny !== 'number') return false;
+  agent.pinned = true;
+  agent.x = pos.nx * width;
+  agent.y = pos.ny * height;
+  agent.targetX = agent.x;
+  agent.targetY = agent.y;
+  // Self-heal positions saved under HUD/dock before occlusion clamp existed.
+  clampAgentToFloor(agent);
+  return true;
+}
+
+function clampAgentToFloor(agent) {
+  if (!agent || typeof width !== 'number' || width <= 0) return;
+  const pad = agentBodyPad();
+  // Canvas bounds first
+  agent.x = Math.min(width - pad, Math.max(pad, agent.x));
+  agent.y = Math.min(height - pad, Math.max(pad, agent.y));
+
+  // Push out of HTML overlays that steal pointer events (HUD / dock / chat).
+  // That's how sprites "disappear" behind menus and become un-grabbable.
+  const rects = uiOcclusionRects();
+  for (let iter = 0; iter < 5; iter++) {
+    let moved = false;
+    for (const r of rects) {
+      // Treat agent as a circle of radius pad against the rect
+      const nearestX = Math.min(r.right, Math.max(r.left, agent.x));
+      const nearestY = Math.min(r.bottom, Math.max(r.top, agent.y));
+      const dx = agent.x - nearestX;
+      const dy = agent.y - nearestY;
+      const dist2 = dx * dx + dy * dy;
+      if (dist2 >= pad * pad && !pointInExpandedRect(agent.x, agent.y, r, 0)) {
+        continue;
+      }
+      // Inside or overlapping — push to nearest exterior side + pad
+      const dl = Math.abs(agent.x - r.left);
+      const dr = Math.abs(r.right - agent.x);
+      const dt = Math.abs(agent.y - r.top);
+      const db = Math.abs(r.bottom - agent.y);
+      const m = Math.min(dl, dr, dt, db);
+      if (m === dl) agent.x = r.left - pad;
+      else if (m === dr) agent.x = r.right + pad;
+      else if (m === dt) agent.y = r.top - pad;
+      else agent.y = r.bottom + pad;
+
+      agent.x = Math.min(width - pad, Math.max(pad, agent.x));
+      agent.y = Math.min(height - pad, Math.max(pad, agent.y));
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  agent.targetX = agent.x;
+  agent.targetY = agent.y;
+}
+
+function agentBodyPad() {
+  try {
+    if (typeof Petdex !== 'undefined' && Petdex.metrics) {
+      return Math.max(52, Petdex.metrics().hitRadius * 1.55);
+    }
+  } catch (_) {}
+  return 52;
+}
+
+function pointInExpandedRect(x, y, r, expand) {
+  return (
+    x >= r.left - expand &&
+    x <= r.right + expand &&
+    y >= r.top - expand &&
+    y <= r.bottom + expand
+  );
+}
+
+function uiOcclusionRects() {
+  const rects = [];
+  const margin = 6;
+
+  function addVisible(el) {
+    if (!el) return;
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden') return;
+    if (parseFloat(style.opacity || '1') < 0.05) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) return;
+    // Skip if fully off-canvas
+    if (r.right < 0 || r.bottom < 0 || r.left > window.innerWidth || r.top > window.innerHeight) return;
+    rects.push({
+      left: r.left - margin,
+      top: r.top - margin,
+      right: r.right + margin,
+      bottom: r.bottom + margin,
+    });
+  }
+
+  addVisible(document.getElementById('hud'));
+  addVisible(document.getElementById('agent-dock-toggle'));
+  const roster = document.getElementById('agent-roster');
+  if (roster && roster.classList.contains('open')) addVisible(roster);
+  const detail = document.getElementById('session-detail');
+  if (detail && detail.classList.contains('open')) addVisible(detail);
+  const popup = document.getElementById('action-popup');
+  if (popup && popup.style.display === 'block') addVisible(popup);
+  return rects;
+}
+
+/** Eject any agents currently under UI chrome without destroying pins/layout intent. */
+function rescueAgentsFromUi(opts = {}) {
+  if (typeof width !== 'number' || width <= 0) return 0;
+  let n = 0;
+  for (const agent of agents.values()) {
+    if (agent.dragging) continue;
+    const bx = agent.x;
+    const by = agent.y;
+    clampAgentToFloor(agent);
+    if (Math.hypot(agent.x - bx, agent.y - by) > 0.5) {
+      agent.pinned = true;
+      saveAgentPosition(agent);
+      n++;
+    }
+  }
+  if (n && !opts.silent) {
+    showToast(n === 1 ? 'Unstuck 1 agent from under UI' : `Unstuck ${n} agents from under UI`);
+  }
+  return n;
+}
+
+/** Place a newly created agent: restore pin, else center then ring-layout free agents. */
+function placeAgent(agent) {
+  if (!agent) return;
+  if (applySavedPosition(agent)) return;
+  if (typeof width === 'number' && width > 0) {
+    agent.x = width / 2;
+    agent.y = height / 2;
+    agent.targetX = agent.x;
+    agent.targetY = agent.y;
+  }
+  layoutAgents();
+}
+
+function updateBgStatus(text) {
+  const el = document.getElementById('bg-status');
+  if (el) el.textContent = text;
+}
+
+function setSceneBackgroundFromDataUrl(dataUrl, opts = {}) {
+  if (!dataUrl) {
+    sceneBgImage = null;
+    sceneBgActive = false;
+    if (!opts.silent) updateBgStatus('Default grid · hold/drag agents to place');
+    return;
+  }
+  loadImage(
+    dataUrl,
+    (img) => {
+      sceneBgImage = img;
+      sceneBgActive = true;
+      updateBgStatus(opts.statusText || 'Custom image · cover fit under grid');
+    },
+    () => {
+      sceneBgImage = null;
+      sceneBgActive = false;
+      if (!opts.silent) showToast('Failed to load background image', true);
+      updateBgStatus('Default grid · hold/drag agents to place');
+    }
+  );
+}
+
+function compressImageFileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('decode failed'));
+      img.onload = () => {
+        const maxEdge = 1920;
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        if (!w || !h) {
+          reject(new Error('bad dimensions'));
+          return;
+        }
+        if (Math.max(w, h) > maxEdge) {
+          const s = maxEdge / Math.max(w, h);
+          w = Math.max(1, Math.round(w * s));
+          h = Math.max(1, Math.round(h * s));
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        // JPEG keeps localStorage under typical 5MB quotas better than PNG.
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleBackgroundFile(file) {
+  if (!file) return;
+  if (!file.type || !file.type.startsWith('image/')) {
+    showToast('Pick an image file', true);
+    return;
+  }
+  updateBgStatus('Compressing image…');
+  try {
+    const dataUrl = await compressImageFileToDataUrl(file);
+    setSceneBackgroundFromDataUrl(dataUrl);
+    try {
+      localStorage.setItem(BG_STORAGE_KEY, dataUrl);
+      showToast('Background saved');
+    } catch (_) {
+      // Still show for this session even if storage is full.
+      showToast('Background applied (not persisted — image too large for storage)', true);
+      updateBgStatus('Custom image (session only — storage full)');
+    }
+  } catch (e) {
+    showToast('Could not use that image', true);
+    updateBgStatus('Default grid · hold/drag agents to place');
+  }
+}
+
+function clearSceneBackground() {
+  sceneBgImage = null;
+  sceneBgActive = false;
+  try { localStorage.removeItem(BG_STORAGE_KEY); } catch (_) {}
+  updateBgStatus('Default grid · hold/drag agents to place');
+  showToast('Background cleared');
+}
+
+function reflowAllAgents() {
+  for (const agent of agents.values()) {
+    agent.pinned = false;
+    agent.dragging = false;
+  }
+  clearAllPinnedPositions();
+  layoutAgents();
+  // After ring targets settle one frame they still might land under chrome on tiny viewports.
+  setTimeout(() => rescueAgentsFromUi({ silent: true }), 0);
+  showToast('Agents reflowed');
+}
+
+function restoreSceneBackgroundFromStorage() {
+  try {
+    const dataUrl = localStorage.getItem(BG_STORAGE_KEY);
+    if (dataUrl) setSceneBackgroundFromDataUrl(dataUrl, { silent: true });
+  } catch (_) {}
+}
+
+function beginAgentDrag(gesture) {
+  if (!gesture || gesture.mode === 'dragging') return;
+  gesture.mode = 'dragging';
+  const agent = gesture.agent;
+  agent.dragging = true;
+  agent.pinned = true;
+  selectedAgent = agent;
+  const popup = document.getElementById('action-popup');
+  if (popup) popup.style.display = 'none';
+  agent.x = mouseX - gesture.offsetX;
+  agent.y = mouseY - gesture.offsetY;
+  clampAgentToFloor(agent);
+}
+
+function cancelPointerGestureTimers(gesture) {
+  if (gesture && gesture.holdTimer) {
+    clearTimeout(gesture.holdTimer);
+    gesture.holdTimer = null;
+  }
+}
 
 // Helper to word-wrap thought bubble text in p5.js
 function wrapText(str, maxW) {
@@ -1742,6 +2120,8 @@ class Agent {
     this.identity = identity;
     this.x = 0; this.y = 0;
     this.targetX = 0; this.targetY = 0;
+    this.pinned = false;
+    this.dragging = false;
     this.status = 'idle';
     this.statusHoldUntil = 0;
     this.snippet = null;
@@ -1762,13 +2142,17 @@ class Agent {
   }
 
   update(dt) {
-    // Smooth movement toward target grid coordinate
-    this.x += (this.targetX - this.x) * 0.05;
-    this.y += (this.targetY - this.y) * 0.05;
+    // While dragging, stick to pointer path (targets set in mouse handlers).
+    if (!this.dragging) {
+      this.x += (this.targetX - this.x) * 0.05;
+      this.y += (this.targetY - this.y) * 0.05;
 
-    // Add gentle drift (reduced bob speed)
-    this.x += Math.sin(this.bobOffset + Date.now() * 0.0008) * 0.25;
-    this.y += Math.cos(this.bobOffset + Date.now() * 0.0012) * 0.15;
+      // Gentle drift only for auto-layout (unpinned) agents.
+      if (!this.pinned && !reducedMotion) {
+        this.x += Math.sin(this.bobOffset + Date.now() * 0.0008) * 0.25;
+        this.y += Math.cos(this.bobOffset + Date.now() * 0.0012) * 0.15;
+      }
+    }
 
     // Smooth movement trail
     this.trail.push({ x: this.x, y: this.y, life: 1.0 });
@@ -2173,17 +2557,17 @@ class BroadcastRipple {
 }
 let broadcastRipples = [];
 
-// === Arrange agents in a stable circle ===
+// === Arrange free (unpinned) agents in a stable circle ===
 function layoutAgents() {
-  const agents_arr = [...agents.values()];
-  const count = agents_arr.length;
+  const free = [...agents.values()].filter((a) => !a.pinned && !a.dragging);
+  const count = free.length;
   if (count === 0) return;
 
   const cx = width / 2;
   const cy = height / 2;
   const radius = Math.min(width, height) * 0.28;
 
-  agents_arr.forEach((agent, i) => {
+  free.forEach((agent, i) => {
     if (count === 1) {
       agent.targetX = cx;
       agent.targetY = cy;
@@ -2204,6 +2588,17 @@ function setup() {
   createCanvas(windowWidth, windowHeight);
   pixelDensity(1);
   frameRate(60);
+
+  restoreSceneBackgroundFromStorage();
+  // Re-apply saved pins once canvas size is known (dock may hydrate before setup).
+  for (const agent of agents.values()) {
+    if (!applySavedPosition(agent) && !agent.pinned) {
+      // leave for layoutAgents
+    }
+  }
+  layoutAgents();
+  // Eject anyone restored under HUD/dock (pointer-events steal grabs).
+  rescueAgentsFromUi({ silent: true });
 
   // Connect WebSocket
   connectWS();
@@ -2281,12 +2676,7 @@ function handleEnvelope(env) {
   if (!agent) {
     agent = new Agent(evt.identity);
     agents.set(evt.identity, agent);
-    // Spawn at center and calculate target coordinate ring layout
-    agent.x = width / 2;
-    agent.y = height / 2;
-    agent.targetX = width / 2;
-    agent.targetY = height / 2;
-    layoutAgents();
+    placeAgent(agent);
   }
 
   agent.lastSeen = Date.now();
@@ -2382,22 +2772,39 @@ function addTickerEvent(env) {
 function draw() {
   const dt = deltaTime;
 
-  // Background
+  // Background (optional user image, cover-fit) + floor grid
   background(COLORS.bg[0], COLORS.bg[1], COLORS.bg[2]);
+  if (sceneBgImage && sceneBgImage.width) {
+    const iw = sceneBgImage.width;
+    const ih = sceneBgImage.height;
+    const scale = Math.max(width / iw, height / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    push();
+    imageMode(CENTER);
+    image(sceneBgImage, width / 2, height / 2, dw, dh);
+    // Dim so sprites/grid stay readable
+    noStroke();
+    fill(6, 6, 10, 120);
+    rect(0, 0, width, height);
+    pop();
+  }
 
   // Floor grid — light accent every 4th line
   const gridSize = 45;
+  const gridAlpha = sceneBgActive ? 36 : 45;
+  const accentAlpha = sceneBgActive ? 55 : 70;
   strokeWeight(0.5);
   for (let x = 0; x < width; x += gridSize) {
     const accent = (x / gridSize) % 4 === 0;
     const c = accent ? COLORS.gridAccent : COLORS.grid;
-    stroke(c[0], c[1], c[2], accent ? 70 : 45);
+    stroke(c[0], c[1], c[2], accent ? accentAlpha : gridAlpha);
     line(x, 0, x, height);
   }
   for (let y = 0; y < height; y += gridSize) {
     const accent = (y / gridSize) % 4 === 0;
     const c = accent ? COLORS.gridAccent : COLORS.grid;
-    stroke(c[0], c[1], c[2], accent ? 70 : 45);
+    stroke(c[0], c[1], c[2], accent ? accentAlpha : gridAlpha);
     line(0, y, width, y);
   }
 
@@ -2459,15 +2866,23 @@ function draw() {
     if (particleEffects[i].life <= 0) particleEffects.splice(i, 1);
   }
 
-  // Mouse hover tracking
+  // Mouse hover tracking + grab cursor
   hoveredAgent = null;
-  for (const agent of agents.values()) {
-    if (agent.contains(mouseX, mouseY)) {
-      hoveredAgent = agent;
-      break;
+  if (!(pointerGesture && pointerGesture.mode === 'dragging')) {
+    for (const agent of agents.values()) {
+      if (agent.contains(mouseX, mouseY)) {
+        hoveredAgent = agent;
+        break;
+      }
     }
   }
-  cursor(hoveredAgent ? 'pointer' : 'default');
+  if (pointerGesture && pointerGesture.mode === 'dragging') {
+    cursor('grabbing');
+  } else if (hoveredAgent) {
+    cursor('grab');
+  } else {
+    cursor('default');
+  }
 }
 
 // === Pointer / Interaction Handlers ===
@@ -2498,19 +2913,86 @@ function pointerOnUi(event) {
 function mousePressed(event) {
   if (pointerOnUi(event)) return;
 
-  for (const agent of agents.values()) {
+  // Prefer topmost (later map insert ≈ newer); convert to array reverse for hit test
+  const list = [...agents.values()].reverse();
+  for (const agent of list) {
     if (agent.contains(mouseX, mouseY)) {
-      selectedAgent = agent;
-      // Click = action menu (Open chat / Stop / Resume). Double path not forced into chat.
-      showActionPopup(agent);
+      cancelPointerGestureTimers(pointerGesture);
+      pointerGesture = {
+        agent,
+        startX: mouseX,
+        startY: mouseY,
+        offsetX: mouseX - agent.x,
+        offsetY: mouseY - agent.y,
+        mode: 'pending', // pending → click menu; dragging → move, no menu
+        holdTimer: setTimeout(() => {
+          if (pointerGesture && pointerGesture.mode === 'pending' && pointerGesture.agent === agent) {
+            beginAgentDrag(pointerGesture);
+          }
+        }, AGENT_HOLD_MS),
+      };
       return;
     }
   }
-  
+
   // Clicking empty canvas closes popup
   selectedAgent = null;
   document.getElementById('action-popup').style.display = 'none';
 }
+
+function mouseDragged(event) {
+  if (!pointerGesture) return;
+  if (pointerOnUi(event) && pointerGesture.mode !== 'dragging') return;
+
+  const g = pointerGesture;
+  const dx = mouseX - g.startX;
+  const dy = mouseY - g.startY;
+  if (g.mode === 'pending' && (dx * dx + dy * dy) >= AGENT_DRAG_PX * AGENT_DRAG_PX) {
+    cancelPointerGestureTimers(g);
+    beginAgentDrag(g);
+  }
+  if (g.mode === 'dragging') {
+    g.agent.x = mouseX - g.offsetX;
+    g.agent.y = mouseY - g.offsetY;
+    clampAgentToFloor(g.agent);
+  }
+}
+
+function mouseReleased(event) {
+  if (!pointerGesture) return;
+  const g = pointerGesture;
+  cancelPointerGestureTimers(g);
+
+  if (g.mode === 'pending') {
+    // Pure click → action menu (Open chat / Stop / Resume)
+    selectedAgent = g.agent;
+    showActionPopup(g.agent);
+  } else if (g.mode === 'dragging') {
+    g.agent.dragging = false;
+    g.agent.pinned = true;
+    clampAgentToFloor(g.agent);
+    saveAgentPosition(g.agent);
+    // No menu after hold/drag move
+  }
+
+  pointerGesture = null;
+}
+
+// If pointer is released outside the canvas, still finish the gesture.
+window.addEventListener('mouseup', () => {
+  if (pointerGesture) mouseReleased();
+});
+window.addEventListener('blur', () => {
+  if (!pointerGesture) return;
+  cancelPointerGestureTimers(pointerGesture);
+  if (pointerGesture.mode === 'dragging' && pointerGesture.agent) {
+    pointerGesture.agent.dragging = false;
+    pointerGesture.agent.pinned = true;
+    clampAgentToFloor(pointerGesture.agent);
+    saveAgentPosition(pointerGesture.agent);
+  }
+  pointerGesture = null;
+});
 
 function showActionPopup(agent) {
   const popup = document.getElementById('action-popup');
@@ -2873,6 +3355,33 @@ function wireUiInteractions() {
     });
   }
 
+  const bgUploadBtn = document.getElementById('bg-upload-btn');
+  const bgClearBtn = document.getElementById('bg-clear-btn');
+  const bgFile = document.getElementById('bg-file');
+  const reflowBtn = document.getElementById('reflow-agents-btn');
+  const unstickBtn = document.getElementById('unstick-agents-btn');
+  if (bgUploadBtn && bgFile) {
+    bgUploadBtn.addEventListener('click', () => bgFile.click());
+    bgFile.addEventListener('change', () => {
+      const file = bgFile.files && bgFile.files[0];
+      bgFile.value = '';
+      if (file) handleBackgroundFile(file);
+    });
+  }
+  if (bgClearBtn) bgClearBtn.addEventListener('click', clearSceneBackground);
+  if (reflowBtn) reflowBtn.addEventListener('click', reflowAllAgents);
+  if (unstickBtn) unstickBtn.addEventListener('click', () => {
+    const n = rescueAgentsFromUi();
+    if (!n) showToast('No agents under UI');
+  });
+
+  // Restore status label if a stored bg exists (image itself loads in setup/p5).
+  try {
+    if (localStorage.getItem(BG_STORAGE_KEY)) {
+      updateBgStatus('Custom image · cover fit under grid');
+    }
+  } catch (_) {}
+
   if (typeof AgentDock !== 'undefined') AgentDock.wire();
   else refreshAgentRoster();
 }
@@ -2884,7 +3393,12 @@ if (document.readyState === 'loading') {
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
+  // Keep pinned agents at their normalized scene coords; reflow free ones.
+  for (const agent of agents.values()) {
+    if (agent.pinned) applySavedPosition(agent) || clampAgentToFloor(agent);
+  }
   layoutAgents();
+  rescueAgentsFromUi({ silent: true });
 }
 </script>
 </body>
