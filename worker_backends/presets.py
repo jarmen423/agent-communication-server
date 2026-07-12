@@ -122,6 +122,7 @@ def kilo_spec(
         resume_mode="resume_id",
         resume_id_flag="--session",
         resume_ctx_key="kilo_session_id",
+        json_events=True,  # parse NDJSON --format json output
         timeout_sec=600.0,
     )
 
@@ -137,7 +138,7 @@ def opencode_spec(
     OpenCode supports `opencode run <message>` for one-shot and session
     resume via `--session` / `--continue`.
     """
-    base: list[str] = ["run"]
+    base: list[str] = ["run", "--format", "json"]
     if model:
         base.extend(["-m", model])
     return HeadlessCliSpec(
@@ -149,6 +150,7 @@ def opencode_spec(
         resume_mode="resume_id",
         resume_id_flag="--session",
         resume_ctx_key="opencode_session_id",
+        json_events=True,  # parse NDJSON --format json output
         timeout_sec=600.0,
     )
 

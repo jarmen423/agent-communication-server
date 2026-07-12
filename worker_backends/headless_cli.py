@@ -32,6 +32,10 @@ class HeadlessCliSpec:
     # Output
     parse_session_id: Callable[[str], str | None] | None = None
     strip_line_prefixes: tuple[str, ...] = ()
+    # When True, parse NDJSON event stream and extract text + session ID
+    json_events: bool = False
+    json_text_key: str = "text"       # key inside event["part"] for text content
+    json_session_key: str = "sessionID"  # key inside event for session ID
     timeout_sec: float | None = None
 
 
@@ -67,6 +71,12 @@ class HeadlessCliBackend:
 
     def _parse_text(self, raw: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         s = self.spec
+        ctx = dict(ctx or {})
+
+        # NDJSON event stream mode (kilo --format json, opencode --format json)
+        if s.json_events:
+            return self._parse_json_events(raw, ctx)
+
         lines = raw.strip().splitlines()
         sid = None
         if s.parse_session_id:
@@ -91,6 +101,55 @@ class HeadlessCliBackend:
             ctx[s.resume_ctx_key] = sid
         if s.resume_mode in ("continue_flag", "session_cwd_continue"):
             ctx[s.has_turn_ctx_key] = True
+        return text, ctx
+
+    def _parse_json_events(self, raw: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Parse NDJSON event stream from kilo/opencode --format json output.
+
+        Extracts text content from text-type events and session ID.
+        Returns concatenated text and updated ctx with session ID.
+        """
+        import json as _json
+
+        s = self.spec
+        text_parts: list[str] = []
+        session_id: str | None = None
+
+        for line in raw.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = _json.loads(line)
+            except (ValueError, TypeError):
+                continue
+
+            # Capture session ID from any event that has it
+            if not session_id:
+                session_id = event.get(s.json_session_key) or event.get("sessionID")
+
+            # Error events — surface the error message
+            if event.get("type") == "error":
+                err = event.get("error", {})
+                msg = err.get("message") if isinstance(err, dict) else str(err)
+                if msg:
+                    text_parts.append(f"[error: {msg}]")
+                continue
+
+            # Text events — extract the text content
+            part = event.get("part", {})
+            if isinstance(part, dict) and part.get("type") == "text":
+                t = part.get(s.json_text_key)
+                if t:
+                    text_parts.append(t)
+
+        text = "".join(text_parts).strip() or raw.strip()
+
+        if session_id and s.resume_ctx_key:
+            ctx[s.resume_ctx_key] = session_id
+        if s.resume_mode in ("continue_flag", "session_cwd_continue"):
+            ctx[s.has_turn_ctx_key] = True
+
         return text, ctx
 
     async def run(self, prompt: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
