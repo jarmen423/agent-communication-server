@@ -73,8 +73,8 @@ workers — so session/wave/event semantics are identical.
 | Backend | Flag | Mechanism |
 |---------|------|-----------|
 | `shell` | `--execute "cmd"` | Generic shell command, prompt as arg |
-| `kilo` | `--model <model>` | `kilo run` headless CLI |
-| `opencode` | `--model <model>` | `opencode run` headless CLI |
+| `kilo` | `--model <model>` | `kilo run --format json --auto` headless CLI |
+| `opencode` | `--model <model>` | `opencode run --format json` headless CLI |
 
 To add a new named backend, add a spec to `worker_backends/presets.py` and a
 case in `remote_agent_adapter.py::build_backend()`.
