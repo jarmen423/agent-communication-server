@@ -2,9 +2,11 @@
 """Spawn / stop nats-hub workers on demand (visualizer first-message ensure).
 
 Listens (request-reply) on:
-  hub.worker.ensure  {identity, provider, repo?, nats_url?}
+  hub.worker.ensure  {identity, provider, repo?, nats_url?, model?}
   hub.worker.stop    {identity}
   hub.worker.list    {}
+  hub.worker.models  {provider}            — live model list for any provider
+  hub.worker.providers {}                  — catalog of model sources
 
 Maps provider ids (from arcade AgentDock) → worker entrypoints under this repo.
 
@@ -78,6 +80,8 @@ class Supervisor:
         await self.nc.subscribe("hub.worker.ensure", cb=self._on_ensure)
         await self.nc.subscribe("hub.worker.stop", cb=self._on_stop)
         await self.nc.subscribe("hub.worker.list", cb=self._on_list)
+        await self.nc.subscribe("hub.worker.models", cb=self._on_models)
+        await self.nc.subscribe("hub.worker.providers", cb=self._on_providers)
         await self.nc.subscribe("hub.presence", cb=self._on_presence)
         print(f"[supervisor] ready on {self.nats_url} (repo={self.repo})")
 
@@ -298,6 +302,42 @@ class Supervisor:
             for c in self.children.values()
         ]
         await self._reply(msg, {"ok": True, "workers": workers})
+
+    async def _on_models(self, msg) -> None:
+        """Live model list for any provider via model_catalog (CLI/config/static)."""
+        try:
+            req = json.loads(msg.data.decode() or "{}")
+        except Exception as e:
+            await self._reply(msg, {"ok": False, "error": f"bad json: {e}", "models": []})
+            return
+        provider = (req.get("provider") or "").strip().lower()
+        refresh = bool(req.get("refresh"))
+        if not provider:
+            await self._reply(msg, {"ok": False, "error": "provider required", "models": []})
+            return
+        try:
+            from worker_backends.model_catalog import clear_cache, list_models
+
+            if refresh:
+                clear_cache(provider)
+            result = await list_models(provider, use_cache=not refresh)
+        except Exception as e:
+            result = {"ok": False, "provider": provider, "error": str(e), "models": []}
+        await self._reply(msg, result)
+
+    async def _on_providers(self, msg) -> None:
+        """Catalog of model sources for all known/config providers."""
+        try:
+            from worker_backends.model_catalog import list_provider_catalog
+
+            result = list_provider_catalog()
+            # annotate which providers have spawn entrypoints
+            for p in result.get("providers") or []:
+                p["spawnable"] = p.get("id") in PROVIDER_CMDS
+            result["spawnable"] = sorted(PROVIDER_CMDS)
+        except Exception as e:
+            result = {"ok": False, "error": str(e), "providers": []}
+        await self._reply(msg, result)
 
     async def run_forever(self) -> None:
         await self.start()

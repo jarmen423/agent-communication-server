@@ -70,6 +70,64 @@ python3 remote_agent_adapter.py \
 
 Workers subscribe to `channel.inbox.<identity>` and stay alive for sessions and wave tasks.
 
+## Model catalog (all providers)
+
+Model dropdowns in the visualizer are **not hard-coded**. They load live via:
+
+```
+browser  →  WS list_models {provider}
+         →  hub-server
+         →  hub.worker.models
+         →  worker_supervisor
+         →  worker_backends/model_catalog.py
+         →  that provider's CLI / static source / config override
+```
+
+| Provider | Model source today |
+|----------|--------------------|
+| `kilo`, `kilo-acp` | `kilo models` |
+| `opencode`, `opencode-acp` | `opencode models` |
+| `cursor` | `agent models` (or `cursor-agent models`) |
+| `agy` | `agy models` |
+| `hermes`, `grok`, `claude`, `codex` | no stable list yet → empty + **Other…** |
+| `echo` | static empty (ignores models) |
+
+### Add / configure a future provider
+
+Edit `config/provider_models.json` (merged over built-ins):
+
+```json
+{
+  "providers": {
+    "my-agent": {
+      "kind": "cli",
+      "cmd": ["my-agent", "models"],
+      "parser": "plain_ids",
+      "label": "My Agent"
+    }
+  }
+}
+```
+
+`kind` options:
+- `cli` — run a command; parsers: `plain_ids`, `id_dash_label`, `plain_lines`
+- `static` — embed `models: [{value,label}, ...]`
+- `none` — empty list with a `reason` string for the UI
+
+Also register a spawn entry in `worker_supervisor.py::PROVIDER_CMDS` so the
+visualizer can actually launch that provider.
+
+CLI check:
+
+```bash
+# direct
+python3 -c "import asyncio; from worker_backends.model_catalog import list_models; \
+  print(asyncio.run(list_models('kilo')))"
+
+# via supervisor
+# request-reply on hub.worker.models {"provider":"kilo"}
+```
+
 ## Agent setup guide
 
 Operator reference for configuring each supported agent CLI. Covers model

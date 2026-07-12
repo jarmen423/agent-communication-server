@@ -182,10 +182,12 @@ async fn handle_websocket(
 
 /// Browser command → NATS publish.
 /// Supported:
-/// - `{"type":"send_message","to":"agent","message":"...","provider":"grok"?}` → ensure worker then task
+/// - `{"type":"send_message","to":"agent","message":"...","provider":"grok"?,"model":"..."}` → ensure worker then task
 /// - `{"type":"stop_agent","identity":"..."}` → stop supervised worker + status closed
 /// - `{"type":"resume_agent","identity":"..."}` → status ready on agents.<id>
-/// - `{"type":"ensure_worker","identity":"...","provider":"..."}` → spawn only
+/// - `{"type":"ensure_worker","identity":"...","provider":"...","model":"..."}` → spawn only
+/// - `{"type":"list_models","provider":"...","refresh":false}` → live model list for any provider
+/// - `{"type":"list_providers"}` → model-source catalog for all providers
 async fn handle_client_command(client: &HubClient, text: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(text).context("invalid JSON command")?;
     let cmd = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -355,6 +357,50 @@ async fn handle_client_command(client: &HubClient, text: &str) -> Result<String>
                 r#"{{"type":"ack","action":"resume_agent","identity":{}}}"#,
                 serde_json::to_string(identity).unwrap()
             ))
+        }
+        "list_models" => {
+            let provider = v
+                .get("provider")
+                .and_then(|t| t.as_str())
+                .context("list_models requires provider")?;
+            let refresh = v
+                .get("refresh")
+                .and_then(|t| t.as_bool())
+                .unwrap_or(false);
+            match client
+                .request_json(
+                    "hub.worker.models",
+                    serde_json::json!({ "provider": provider, "refresh": refresh }),
+                    std::time::Duration::from_secs(45),
+                )
+                .await
+            {
+                Ok(resp) => Ok(format!(
+                    r#"{{"type":"models","provider":{},"detail":{}}}"#,
+                    serde_json::to_string(provider).unwrap(),
+                    resp
+                )),
+                Err(e) => Ok(format!(
+                    r#"{{"type":"error","message":"list_models failed: {}"}}"#,
+                    e.to_string().replace('"', "'")
+                )),
+            }
+        }
+        "list_providers" => {
+            match client
+                .request_json(
+                    "hub.worker.providers",
+                    serde_json::json!({}),
+                    std::time::Duration::from_secs(10),
+                )
+                .await
+            {
+                Ok(resp) => Ok(format!(r#"{{"type":"providers","detail":{}}}"#, resp)),
+                Err(e) => Ok(format!(
+                    r#"{{"type":"error","message":"list_providers failed: {}"}}"#,
+                    e.to_string().replace('"', "'")
+                )),
+            }
         }
         other => Ok(format!(
             r#"{{"type":"error","message":"unknown command: {}"}}"#,

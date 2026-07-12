@@ -2244,6 +2244,12 @@ function connectWS() {
         showToast(`✓ ${env.action}${env.to ? ' → ' + env.to : ''}${env.identity ? ' ' + env.identity : ''}${env.task_channel ? ' (' + env.task_channel + ')' : ''}${extra}`);
         return;
       }
+      if (env && env.type === 'models') {
+        if (typeof AgentDock !== 'undefined' && AgentDock.ingestModels) {
+          AgentDock.ingestModels(env.provider, env.detail || {});
+        }
+        return;
+      }
       if (env && env.type === 'error') {
         showToast('✗ ' + (env.message || 'error'), true);
         return;

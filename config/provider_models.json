@@ -1,0 +1,11 @@
+{
+  "_comment": "Optional overrides / future provider model sources for nats-hub. Merged over worker_backends/model_catalog.py BUILTIN_SOURCES. kind: cli | static | none",
+  "providers": {
+    "example-future-agent": {
+      "kind": "cli",
+      "cmd": ["my-agent", "models"],
+      "parser": "plain_ids",
+      "label": "Example Future Agent"
+    }
+  }
+}

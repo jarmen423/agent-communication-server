@@ -111,6 +111,17 @@ The `model` field is optional. When provided, the supervisor passes `--model`
 to the worker process. If a worker for that identity is already running with a
 different model, the supervisor restarts it.
 
+Model **dropdown choices** are loaded live per provider:
+
+```json
+{"type":"list_models","provider":"kilo"}
+{"type":"list_providers"}
+```
+
+These hit `hub.worker.models` / `hub.worker.providers` on the supervisor and use
+`worker_backends/model_catalog.py` so every supported (and future configured)
+provider can supply its own list — not a hard-coded kilo/opencode table.
+
 ### Pets (agent sprites)
 
 Agent sprites come from Petdex installs under `visualizer/pets/<slug>/`. Each
