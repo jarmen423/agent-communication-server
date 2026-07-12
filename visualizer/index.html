@@ -525,6 +525,53 @@
       line-height: 1.35;
     }
 
+    #chat-model-bar {
+      flex-shrink: 0;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.22);
+    }
+    #chat-model-bar label {
+      font-size: 10px;
+      color: #7a879c;
+      font-family: var(--font-heading);
+      letter-spacing: 0.4px;
+      flex-shrink: 0;
+    }
+    #chat-model-input {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.45);
+      color: var(--color-text);
+      font-family: var(--font-body);
+      font-size: 12px;
+    }
+    #chat-model-input:focus {
+      outline: none;
+      border-color: rgba(0, 217, 255, 0.45);
+    }
+    #chat-model-apply {
+      flex-shrink: 0;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 217, 255, 0.3);
+      background: rgba(0, 217, 255, 0.08);
+      color: var(--color-cyan);
+      font-family: var(--font-heading);
+      font-size: 11px;
+      letter-spacing: 0.4px;
+      cursor: pointer;
+    }
+    #chat-model-apply:hover {
+      background: rgba(0, 217, 255, 0.16);
+    }
+
     #session-detail .close-btn {
       cursor: pointer;
       color: var(--color-text-muted);
@@ -1242,6 +1289,11 @@
         <div class="chat-sub" id="detail-sub">Session conversation</div>
       </div>
       <span class="close-btn" id="detail-close" title="Close">✕</span>
+    </div>
+    <div id="chat-model-bar">
+      <label for="chat-model-input">MODEL</label>
+      <input id="chat-model-input" type="text" maxlength="120" placeholder="provider/model" autocomplete="off" />
+      <button type="button" id="chat-model-apply" title="Apply model for next worker spawn">Apply</button>
     </div>
     <div id="chat-messages" aria-live="polite"></div>
     <form id="chat-composer" autocomplete="off">
@@ -2412,6 +2464,7 @@ function showActionPopup(agent) {
   document.getElementById('popup-info').textContent =
     `${statusLabel}` +
     (agent.providerId ? ` · ${agent.providerId}` : '') +
+    (agent.model ? ` · ${agent.model}` : '') +
     ` · ${agent.messageCount} msgs` +
     (agent.petSlug ? ` · pet ${agent.petSlug}` : '') +
     (agent.sessionId ? ` · ses ${agent.sessionId.substring(0, 8)}` : '');
@@ -2477,11 +2530,18 @@ function renderSessionDetail(agent) {
   if (sub) {
     sub.textContent =
       `${statusLabel}` +
+      (agent.providerId ? ` · ${agent.providerId}` : '') +
+      (agent.model ? ` · ${agent.model}` : '') +
       (agent.sessionId ? ` · ses ${agent.sessionId.substring(0, 8)}` : '') +
       ` · ${agent.messageCount || 0} bus msgs` +
       (agent.petSlug ? ` · pet ${agent.petSlug}` : '');
   }
   if (input) input.placeholder = `Message ${agent.identity}…`;
+  const modelInput = document.getElementById('chat-model-input');
+  if (modelInput && document.activeElement !== modelInput) {
+    modelInput.value = agent.model || '';
+    modelInput.placeholder = agent.model || 'provider/model (optional)';
+  }
 
   const agentEnvelopes = agentEnvelopesFor(agent);
   if (!agentEnvelopes.length && !optimisticChatHtml.length) {
@@ -2556,19 +2616,26 @@ function sendChatMessage() {
 
   const agent = openLogAgent;
   const provider = agent.providerId || null;
+  const model = (agent.model || '').trim() || null;
   if (provider && !agent.workerEnsured) {
-    showToast(`Spawning ${provider} worker for ${agent.identity}…`);
+    showToast(`Spawning ${provider}${model ? ' · ' + model : ''} for ${agent.identity}…`);
   }
-  ws.send(JSON.stringify({
+  const payload = {
     type: 'send_message',
     to: agent.identity,
     message: msg,
     provider: provider,
     ensure_worker: true,
-  }));
+  };
+  if (model) payload.model = model;
+  ws.send(JSON.stringify(payload));
   agent.status = 'working';
   agent.statusHoldUntil = Date.now() + 8000;
-  agent.setSnippet((provider ? `[${provider}] ` : '') + 'task → ' + msg);
+  agent.setSnippet(
+    (provider ? `[${provider}] ` : '') +
+    (model ? `${model} · ` : '') +
+    'task → ' + msg
+  );
   if (provider) agent.workerEnsured = true;
 
   optimisticChatHtml.push(formatOptimisticYouBubble(msg));
@@ -2577,6 +2644,69 @@ function sendChatMessage() {
   updateChatSendEnabled();
   renderSessionDetail(agent);
   showToast(`Sent to ${agent.identity}`);
+}
+
+function persistAgentModel(identity, model) {
+  if (typeof AgentDock === 'undefined' || !AgentDock.loadInstances || !AgentDock.saveInstances) return;
+  try {
+    const list = AgentDock.loadInstances();
+    let found = false;
+    for (const inst of list) {
+      if (inst.identity === identity) {
+        inst.model = model || '';
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      list.push({
+        identity,
+        providerId: openLogAgent && openLogAgent.providerId,
+        model: model || '',
+        createdAt: Date.now(),
+      });
+    }
+    AgentDock.saveInstances(list);
+  } catch (_) { /* ignore localStorage failures */ }
+}
+
+function applyChatModel() {
+  if (!openLogAgent) {
+    showToast('No agent selected', true);
+    return;
+  }
+  const input = document.getElementById('chat-model-input');
+  if (!input) return;
+  const model = input.value.trim();
+  const agent = openLogAgent;
+  const prev = agent.model || '';
+  agent.model = model;
+  persistAgentModel(agent.identity, model);
+
+  // Force next message to re-ensure worker with the new model.
+  if (prev !== model) agent.workerEnsured = false;
+
+  if (ws && ws.readyState === WebSocket.OPEN && agent.providerId && model) {
+    // Stop any currently-running worker so the next ensure uses the new model.
+    ws.send(JSON.stringify({ type: 'stop_agent', identity: agent.identity }));
+    ws.send(JSON.stringify({
+      type: 'ensure_worker',
+      identity: agent.identity,
+      provider: agent.providerId,
+      model,
+    }));
+    agent.workerEnsured = true;
+    agent.status = 'ready';
+    agent.statusHoldUntil = Date.now() + 4000;
+    agent.setSnippet(`model → ${model}`);
+    showToast(`Model set to ${model} (worker restart requested)`);
+  } else if (model) {
+    showToast(`Model set to ${model}`);
+  } else {
+    showToast('Model cleared — next spawn uses provider default');
+  }
+  renderSessionDetail(agent);
+  if (typeof AgentDock !== 'undefined') AgentDock.refresh();
 }
 
 // === Global Keyboard Affordances ===
@@ -2653,6 +2783,18 @@ function wireUiInteractions() {
       if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
         sendChatMessage();
+      }
+    });
+  }
+
+  const modelApply = document.getElementById('chat-model-apply');
+  const modelInput = document.getElementById('chat-model-input');
+  if (modelApply) modelApply.addEventListener('click', applyChatModel);
+  if (modelInput) {
+    modelInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        applyChatModel();
       }
     });
   }

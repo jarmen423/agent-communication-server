@@ -204,6 +204,10 @@ async fn handle_client_command(client: &HubClient, text: &str) -> Result<String>
                 .get("provider")
                 .and_then(|t| t.as_str())
                 .map(|s| s.to_string());
+            let model = v
+                .get("model")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
             let ensure = v
                 .get("ensure_worker")
                 .and_then(|t| t.as_bool())
@@ -212,13 +216,17 @@ async fn handle_client_command(client: &HubClient, text: &str) -> Result<String>
             let mut ensure_status = serde_json::Value::Null;
             if ensure {
                 if let Some(ref prov) = provider {
+                    let mut ensure_req = serde_json::json!({
+                        "identity": to,
+                        "provider": prov,
+                    });
+                    if let Some(ref m) = model {
+                        ensure_req["model"] = serde_json::Value::String(m.clone());
+                    }
                     match client
                         .request_json(
                             "hub.worker.ensure",
-                            serde_json::json!({
-                                "identity": to,
-                                "provider": prov,
-                            }),
+                            ensure_req,
                             std::time::Duration::from_secs(45),
                         )
                         .await
@@ -271,10 +279,18 @@ async fn handle_client_command(client: &HubClient, text: &str) -> Result<String>
                 .get("provider")
                 .and_then(|t| t.as_str())
                 .context("ensure_worker requires provider")?;
+            let model = v
+                .get("model")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+            let mut ensure_req = serde_json::json!({ "identity": identity, "provider": provider });
+            if let Some(ref m) = model {
+                ensure_req["model"] = serde_json::Value::String(m.clone());
+            }
             match client
                 .request_json(
                     "hub.worker.ensure",
-                    serde_json::json!({ "identity": identity, "provider": provider }),
+                    ensure_req,
                     std::time::Duration::from_secs(45),
                 )
                 .await

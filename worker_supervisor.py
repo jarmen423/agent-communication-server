@@ -58,6 +58,7 @@ class Child:
     identity: str
     provider: str
     proc: asyncio.subprocess.Process
+    model: str | None = None
     started_at: float = field(default_factory=time.time)
     ready: bool = False
 
@@ -80,7 +81,7 @@ class Supervisor:
         await self.nc.subscribe("hub.presence", cb=self._on_presence)
         print(f"[supervisor] ready on {self.nats_url} (repo={self.repo})")
 
-    def _cmd(self, provider: str, identity: str) -> list[str]:
+    def _cmd(self, provider: str, identity: str, model: str | None = None) -> list[str]:
         base = PROVIDER_CMDS.get(provider)
         if not base:
             raise ValueError(f"unknown provider: {provider}")
@@ -99,6 +100,8 @@ class Supervisor:
                 self.nats_url,
             ]
         )
+        if model:
+            argv.extend(["--model", model])
         return argv
 
     async def _on_presence(self, msg) -> None:
@@ -136,20 +139,47 @@ class Supervisor:
             if fut in lst:
                 lst.remove(fut)
 
-    async def _spawn(self, identity: str, provider: str) -> dict[str, Any]:
+    async def _spawn(self, identity: str, provider: str, model: str | None = None) -> dict[str, Any]:
         async with self._lock:
             existing = self.children.get(identity)
             if existing and existing.proc.returncode is None:
-                return {
-                    "ok": True,
-                    "status": "already_running",
-                    "identity": identity,
-                    "provider": existing.provider,
-                    "pid": existing.proc.pid,
-                    "ready": existing.ready,
-                }
+                # Restart if model changed so operators can swap models after launch.
+                if model is not None and existing.model != model:
+                    print(
+                        f"[supervisor] model change for {identity}: "
+                        f"{existing.model!r} → {model!r}; restarting"
+                    )
+                    # release lock path via unlock-free stop: stop outside would deadlock;
+                    # stop the process here then fall through to spawn.
+                    try:
+                        os.killpg(existing.proc.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    except Exception:
+                        try:
+                            existing.proc.terminate()
+                        except Exception:
+                            pass
+                    try:
+                        await asyncio.wait_for(existing.proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        try:
+                            os.killpg(existing.proc.pid, signal.SIGKILL)
+                        except Exception:
+                            existing.proc.kill()
+                    self.children.pop(identity, None)
+                else:
+                    return {
+                        "ok": True,
+                        "status": "already_running",
+                        "identity": identity,
+                        "provider": existing.provider,
+                        "model": existing.model,
+                        "pid": existing.proc.pid,
+                        "ready": existing.ready,
+                    }
 
-            argv = self._cmd(provider, identity)
+            argv = self._cmd(provider, identity, model=model)
             print(f"[supervisor] spawn {identity} provider={provider}: {' '.join(argv)}")
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -159,7 +189,7 @@ class Supervisor:
                 start_new_session=True,
             )
             self.children[identity] = Child(
-                identity=identity, provider=provider, proc=proc, ready=False
+                identity=identity, provider=provider, proc=proc, model=model, ready=False
             )
 
         ready = await self._wait_ready(identity, timeout=30.0)
@@ -176,6 +206,7 @@ class Supervisor:
             "status": "started" if ready else "started_pending_presence",
             "identity": identity,
             "provider": provider,
+            "model": model,
             "pid": child.proc.pid,
             "ready": ready,
         }
@@ -215,6 +246,7 @@ class Supervisor:
             return
         identity = (req.get("identity") or "").strip()
         provider = (req.get("provider") or "").strip().lower()
+        model = (req.get("model") or "").strip() or None
         if not identity or not provider:
             await self._reply(msg, {"ok": False, "error": "identity and provider required"})
             return
@@ -229,7 +261,7 @@ class Supervisor:
             )
             return
         try:
-            result = await self._spawn(identity, provider)
+            result = await self._spawn(identity, provider, model=model)
         except Exception as e:
             result = {"ok": False, "error": str(e), "identity": identity, "provider": provider}
         await self._reply(msg, result)
@@ -258,6 +290,7 @@ class Supervisor:
             {
                 "identity": c.identity,
                 "provider": c.provider,
+                "model": c.model,
                 "pid": c.proc.pid,
                 "ready": c.ready,
                 "alive": c.proc.returncode is None,

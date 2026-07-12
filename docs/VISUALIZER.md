@@ -98,14 +98,18 @@ handled by `handle_client_command()` in `ws_bridge.rs`:
 | Command | Action |
 |---------|--------|
 | `{"type":"send_message","to":"agent","message":"..."}` | Ensure worker exists, then delegate task |
-| `{"type":"send_message","to":"agent","message":"...","provider":"kilo"}` | Spawn kilo worker if needed, then delegate |
-| `{"type":"ensure_worker","identity":"...","provider":"..."}` | Spawn a worker without sending a task |
+| `{"type":"send_message","to":"agent","message":"...","provider":"kilo","model":"kilo/minimax/minimax-m3"}` | Spawn worker with provider+model if needed, then delegate |
+| `{"type":"ensure_worker","identity":"...","provider":"...","model":"..."}` | Spawn a worker without sending a task (model optional) |
 | `{"type":"stop_agent","identity":"..."}` | Stop a supervised worker and mark closed |
 | `{"type":"resume_agent","identity":"..."}` | Mark agent as ready again |
 
 The `provider` field maps to entries in `worker_supervisor.py::PROVIDER_CMDS`.
 Supported values: `grok`, `hermes`, `echo`, `agy`, `cursor`, `kilo`, `kilo-acp`,
 `opencode`, `opencode-acp`, `codex`, `claude`.
+
+The `model` field is optional. When provided, the supervisor passes `--model`
+to the worker process. If a worker for that identity is already running with a
+different model, the supervisor restarts it.
 
 ### Pets (agent sprites)
 

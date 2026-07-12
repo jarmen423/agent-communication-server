@@ -18,13 +18,17 @@ const AgentDock = (() => {
   const LS_INSTANCES = 'nats-hub.instances';
 
   const DEFAULT_PROVIDERS = [
-    { id: 'cursor', label: 'Cursor', monogram: 'Cu', color: '#00ff88', blurb: 'Cursor agent CLI', backend: 'headless' },
-    { id: 'claude', label: 'Claude Code', monogram: 'CC', color: '#d4a27f', blurb: 'Anthropic Claude Code', backend: 'headless' },
-    { id: 'codex', label: 'Codex', monogram: 'Cx', color: '#a78bfa', blurb: 'OpenAI Codex CLI', backend: 'headless' },
-    { id: 'agy', label: 'Antigravity', monogram: 'AG', color: '#38bdf8', blurb: 'agy headless agent', backend: 'headless' },
-    { id: 'grok', label: 'Grok', monogram: 'Gk', color: '#00d9ff', blurb: 'Grok ACP stdio', backend: 'acp' },
-    { id: 'hermes', label: 'Hermes', monogram: 'He', color: '#f472b6', blurb: 'Hermes ACP / headless', backend: 'acp' },
-    { id: 'echo', label: 'Echo', monogram: 'Ec', color: '#94a3b8', blurb: 'Dogfood reverse worker', backend: 'sdk' },
+    { id: 'cursor', label: 'Cursor', monogram: 'Cu', color: '#00ff88', blurb: 'Cursor agent CLI', backend: 'headless', defaultModel: null },
+    { id: 'claude', label: 'Claude Code', monogram: 'CC', color: '#d4a27f', blurb: 'Anthropic Claude Code', backend: 'headless', defaultModel: null },
+    { id: 'codex', label: 'Codex', monogram: 'Cx', color: '#a78bfa', blurb: 'OpenAI Codex CLI', backend: 'headless', defaultModel: null },
+    { id: 'agy', label: 'Antigravity', monogram: 'AG', color: '#38bdf8', blurb: 'agy headless agent', backend: 'headless', defaultModel: null },
+    { id: 'grok', label: 'Grok', monogram: 'Gk', color: '#00d9ff', blurb: 'Grok ACP stdio', backend: 'acp', defaultModel: 'grok-4.5' },
+    { id: 'hermes', label: 'Hermes', monogram: 'He', color: '#f472b6', blurb: 'Hermes ACP / headless', backend: 'acp', defaultModel: null },
+    { id: 'kilo', label: 'Kilo', monogram: 'Ki', color: '#ff9f43', blurb: 'Kilo CLI (kilo/minimax/minimax-m3)', backend: 'headless', defaultModel: 'kilo/minimax/minimax-m3' },
+    { id: 'kilo-acp', label: 'Kilo ACP', monogram: 'KA', color: '#ff6b6b', blurb: 'Kilo ACP HTTP server', backend: 'acp', defaultModel: 'kilo/minimax/minimax-m3' },
+    { id: 'opencode', label: 'OpenCode', monogram: 'OC', color: '#48dbfb', blurb: 'OpenCode CLI (opencode/deepseek-v4-flash-free)', backend: 'headless', defaultModel: 'opencode/deepseek-v4-flash-free' },
+    { id: 'opencode-acp', label: 'OpenCode ACP', monogram: 'OA', color: '#54a0ff', blurb: 'OpenCode ACP stdio', backend: 'acp', defaultModel: 'opencode/deepseek-v4-flash-free' },
+    { id: 'echo', label: 'Echo', monogram: 'Ec', color: '#94a3b8', blurb: 'Dogfood reverse worker', backend: 'sdk', defaultModel: null },
   ];
 
   let view = 'home'; // home | providers | create
@@ -117,6 +121,7 @@ const AgentDock = (() => {
     }
     if (opts.providerId) agent.providerId = opts.providerId;
     if (opts.label) agent.displayLabel = opts.label;
+    if (opts.model) agent.model = opts.model;
     if (typeof layoutAgents === 'function') layoutAgents();
     const countEl = document.getElementById('agent-count');
     if (countEl) countEl.textContent = String(agents.size);
@@ -129,6 +134,7 @@ const AgentDock = (() => {
         petSlug: inst.petSlug,
         providerId: inst.providerId,
         label: inst.label,
+        model: inst.model,
       });
     }
   }
@@ -217,11 +223,12 @@ const AgentDock = (() => {
           const p = providerById(inst.providerId);
           const agent = liveAgent(inst.identity);
           const kind = p ? p.label : (inst.providerId || 'agent');
+          const modelBit = inst.model ? ` · ${esc(inst.model)}` : '';
           html += `<button type="button" class="roster-item" data-action="open-chat" data-identity="${esc(inst.identity)}">
             <span class="roster-dot ${statusDot(agent)}"></span>
             <span class="roster-copy">
               <div class="roster-name">${esc(inst.label || inst.identity)}</div>
-              <div class="roster-kind">${esc(kind)} · ${esc(inst.identity)}${inst.petSlug ? ' · ' + esc(inst.petSlug) : ''}</div>
+              <div class="roster-kind">${esc(kind)} · ${esc(inst.identity)}${modelBit}${inst.petSlug ? ' · ' + esc(inst.petSlug) : ''}</div>
             </span>
             <span class="roster-status">${esc(statusText(agent))}</span>
           </button>`;
@@ -285,12 +292,16 @@ const AgentDock = (() => {
       <span class="roster-step">2 · Name & pet</span>
     </div>
     <div class="create-provider-chip">
-      ${providerLogoHtml(p)}
+      ${providerLogoHtml(p)} 
       <span>${esc(p.label)}</span>
     </div>
     <label class="create-field">
       <span>Instance name</span>
       <input id="spawn-name" type="text" maxlength="40" placeholder="e.g. design, research, petdex" autocomplete="off" />
+    </label>
+    <label class="create-field">
+      <span>Model ${p.defaultModel ? '<em style="opacity:0.6">(default: ' + esc(p.defaultModel) + ')</em>' : ''}</span>
+      <input id="spawn-model" type="text" maxlength="80" placeholder="${p.defaultModel ? esc(p.defaultModel) : 'provider/model'}" autocomplete="off" />
     </label>
     <div class="create-field">
       <span>Pet / character</span>
@@ -358,6 +369,8 @@ const AgentDock = (() => {
     }
     const identity = makeIdentity(name);
     const label = String(name).trim();
+    const modelInput = document.getElementById('spawn-model');
+    const model = (modelInput && modelInput.value.trim()) || (p.defaultModel || '');
     const petSlug =
       selectedPetSlug ||
       (typeof Petdex !== 'undefined' && Petdex.INSTALLED_PETS[0]) ||
@@ -369,6 +382,7 @@ const AgentDock = (() => {
       providerId: p.id,
       petSlug,
       label,
+      model,
       createdAt: Date.now(),
     });
     saveInstances(list);
@@ -377,9 +391,10 @@ const AgentDock = (() => {
       petSlug,
       providerId: p.id,
       label,
+      model,
     });
     if (agent) {
-      if (agent.setSnippet) agent.setSnippet(`${p.label} · ready for task`);
+      if (agent.setSnippet) agent.setSnippet(`${p.label}${model ? ' · ' + model : ''} · ready`);
       agent.status = 'ready';
       agent.statusHoldUntil = Date.now() + 4000;
     }
@@ -491,5 +506,8 @@ const AgentDock = (() => {
     isOpen,
     hydrateInstancesOntoFloor,
     ensureAgentOnFloor,
+    loadInstances,
+    saveInstances,
+    providerById,
   };
 })();
