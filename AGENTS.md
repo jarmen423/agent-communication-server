@@ -221,3 +221,4 @@ CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 - `docs/DATABASE_PLAN.md` — database architecture and implementation roadmap
 - `docs/WORKER_BACKENDS.md` — Python worker backend types and event/wave integration
 - `docs/REMOTE_AGENTS.md` — WebSocket remote agent adapter for distributed teams
+- `docs/VISUALIZER.md` — visualizer startup, browser commands, and troubleshooting
