@@ -44,7 +44,9 @@ PROVIDER_CMDS: dict[str, list[str]] = {
     "agy": [PY, str(REPO / "agy_worker.py")],
     "cursor": [PY, str(REPO / "cursor_worker.py")],
     "kilo": [PY, str(REPO / "kilo_worker.py")],
+    "kilo-acp": [PY, str(REPO / "kilo_acp_worker.py")],
     "opencode": [PY, str(REPO / "opencode_worker.py")],
+    "opencode-acp": [PY, str(REPO / "opencode_acp_worker.py")],
     # codex / claude: use echo as safe dogfood fallback until dedicated workers land
     "codex": [PY, str(REPO / "echo_worker.py")],
     "claude": [PY, str(REPO / "echo_worker.py")],

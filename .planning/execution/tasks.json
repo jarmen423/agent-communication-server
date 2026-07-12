@@ -1,0 +1,41 @@
+{
+  "wave_id": "wave-1-remote-connectivity",
+  "tasks": [
+    {
+      "task_id": "W1-A",
+      "title": "ACP HTTP transport abstraction",
+      "status": "pending",
+      "wave": "wave-1a",
+      "owned": ["worker_backends/acp_http.py"],
+      "depends_on": [],
+      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1a-acp-http.md"
+    },
+    {
+      "task_id": "W1-B",
+      "title": "OpenCode ACP stdio backend",
+      "status": "pending",
+      "wave": "wave-1a",
+      "owned": ["worker_backends/opencode_acp.py", "opencode_acp_worker.py"],
+      "depends_on": [],
+      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1b-opencode-acp.md"
+    },
+    {
+      "task_id": "W1-C",
+      "title": "Kilo ACP HTTP backend",
+      "status": "pending",
+      "wave": "wave-1b",
+      "owned": ["worker_backends/kilo_acp.py", "kilo_acp_worker.py"],
+      "depends_on": ["W1-A"],
+      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1c-kilo-acp.md"
+    },
+    {
+      "task_id": "W1-D",
+      "title": "TLS + auth config for NATS WebSocket",
+      "status": "pending",
+      "wave": "wave-1a",
+      "owned": ["config/nats-server.conf", "docs/REMOTE_AGENTS.md"],
+      "depends_on": [],
+      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1d-tls-auth.md"
+    }
+  ]
+}

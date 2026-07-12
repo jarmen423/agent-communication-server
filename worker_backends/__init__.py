@@ -5,7 +5,8 @@ Worker backend types for nats-hub.
 |------|----------|-----------|
 | **HeadlessCli** | agy, hermes chat -q, grok -p | subprocess, prompt on argv |
 | **SdkAgent** | Cursor SDK | in-process API; blocking work in thread pool |
-| **AcpAgent** | hermes acp, grok agent stdio | protocol adapter over JSON-RPC |
+| **AcpAgent** | hermes acp, grok agent stdio, opencode acp | protocol adapter over JSON-RPC |
+| **AcpHttp** | kilo acp --port | ACP over streamable HTTP (POST/SSE) |
 | **StdinCli** | hub-worker --execute | Rust; prompt on stdin, one-shot |
 
 All types implement WorkerBackend.run(prompt, ctx) -> (text, ctx).
