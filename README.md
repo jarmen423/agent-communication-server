@@ -1,4 +1,4 @@
-# nats-hub
+# Agent Communication Server
 
 A NATS-based communication layer with control plane routing for agent-to-agent and human-to-agent messaging. Built in Rust with `async-nats` and optional SurrealDB persistence.
 
