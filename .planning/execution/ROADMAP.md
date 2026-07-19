@@ -66,3 +66,10 @@ test -f docs/REMOTE_INSTALL.md && test -f packaging/remote/README.md
 ### Handoffs
 
 `.planning/execution/handoffs/wave-2-distributed-hub/<task_id>.md`
+
+## Wave 2 gate (parent)
+
+- wave-2a committed: `cce1b7a`
+- wave-2b parent dogfood: `bash scripts/dogfood_token_auth.sh` → **PASS** (neg control Authorization Violation + ping-wave2e echo)
+- Full hub-tui still deferred to `docs/TUI_PLAN.md`
+- Pre-existing test flakes (unrelated): `test_agent_activity`, `test_list_pending_storage`

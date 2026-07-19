@@ -5,7 +5,7 @@
     {
       "task_id": "W2-A",
       "title": "Python NATS connect auth/TLS",
-      "status": "in_progress",
+      "status": "completed",
       "wave": "wave-2a",
       "owned": [
         "nats_connect.py",
@@ -21,7 +21,7 @@
     {
       "task_id": "W2-B",
       "title": "Rust HubClient auth via ConnectOptions + env",
-      "status": "in_progress",
+      "status": "completed",
       "wave": "wave-2a",
       "owned": [
         "src/client.rs",
@@ -33,7 +33,7 @@
     {
       "task_id": "W2-C",
       "title": "systemd units + prod NATS example + SECURITY/JOIN docs",
-      "status": "in_progress",
+      "status": "completed",
       "wave": "wave-2a",
       "owned": [
         "deploy/systemd/",
@@ -48,32 +48,37 @@
     {
       "task_id": "W2-D",
       "title": "Remote install DX packaging",
-      "status": "pending",
+      "status": "completed",
       "wave": "wave-2b",
       "owned": [
         "packaging/remote/",
         "requirements-remote.txt",
         "docs/REMOTE_INSTALL.md"
       ],
-      "depends_on": ["W2-A"],
+      "depends_on": [
+        "W2-A"
+      ],
       "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2d-remote-dx.md"
     },
     {
       "task_id": "W2-E",
       "title": "Token+WS dogfood scripts with evidence",
-      "status": "pending",
+      "status": "completed",
       "wave": "wave-2b",
       "owned": [
         "scripts/dogfood_token_auth.sh",
         "scripts/dogfood_remote_ws.sh"
       ],
-      "depends_on": ["W2-A", "W2-B"],
+      "depends_on": [
+        "W2-A",
+        "W2-B"
+      ],
       "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2e-dogfood.md"
     },
     {
       "task_id": "W2-F",
       "title": "Discord bridge (Phase 5 expansion)",
-      "status": "pending",
+      "status": "completed",
       "wave": "wave-2b",
       "owned": [
         "discord_bridge.py",

@@ -28,7 +28,7 @@ see envelopes on `inbox.<identity>`.
 
 ### Dry-run mode (no credentials needed)
 
-Without a `--telegram-token`, the bridge runs in `--dry-run` mode: it logs every
+Without the `--telegram-token`, the bridge runs in `--dry-run` mode: it logs every
 message it *would* send instead of calling the API. This lets you verify the
 NATS wiring end-to-end without a Telegram bot token:
 
@@ -54,6 +54,57 @@ python3 telegram_bridge.py \
     --chat-id 123456789 \
     --recipient orchestrator
 ```
+
+## Discord bridge: `discord_bridge.py`
+
+`discord_bridge.py` is the same shape applied to Discord. It subscribes to
+`channel.inbox.<identity>`, forwards envelopes to a Discord channel
+(`channel.send`), and publishes inbound channel messages to
+`inbox.<recipient-agent>` via `hub.send.<channel>`.
+
+It is an **optional dependency** bridge: it needs `discord.py`
+(`pip install discord.py`) only in live mode. Dry-run works without the SDK —
+the import is wrapped in `try/except`, so the script still loads and
+exercises the NATS wiring with no Discord credentials and no `discord.py`
+installed.
+
+> Note: the bot must have the **Message Content Intent** enabled on the
+> [Discord Developer Portal](https://discord.com/developers/applications), and
+> the intent is requested at startup (`intents.message_content = True`).
+
+### Dry-run mode (no credentials needed)
+
+```bash
+# terminal 1 — router
+./target/debug/hub-server --db-path nats_hub.db
+
+# terminal 2 — bridge (dry-run; no token, no discord.py required)
+python3 discord_bridge.py --identity human-bridge-discord --dry-run
+
+# terminal 3 — send a message that should reach the human
+./target/debug/hub-publish --channel inbox.human-bridge-discord \
+    --to human-bridge-discord --from agentA --message "Hello human"
+# → bridge logs: [dry-run] → Discord channel None: Hello human
+```
+
+### Live mode
+
+```bash
+export DISCORD_BOT_TOKEN="<bot token>"
+export DISCORD_CHANNEL_ID="123456789012345678"
+python3 discord_bridge.py \
+    --identity human-bridge-discord \
+    --recipient orchestrator
+```
+
+Live mode requires `discord.py`:
+
+```bash
+pip install discord.py
+```
+
+If `discord.py` is missing and `--dry-run` is not set, the bridge exits with an
+install hint rather than crashing inside the import.
 
 ## Adding another bridge (SMS, Email, Slack, …)
 

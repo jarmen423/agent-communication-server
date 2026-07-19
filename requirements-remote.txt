@@ -1,0 +1,28 @@
+# requirements-remote.txt
+#
+# Minimal Python deps for running remote_agent_adapter.py on a teammate's
+# laptop. This is NOT the full hermes/worker venv — it is the smallest
+# install that lets a remote machine join the hub as a worker over
+# WebSocket.
+#
+# Why so short: remote_agent_adapter.py -> worker_runtime.run_worker()
+# -> nats_connect.connect_nats() is the entire import closure for the
+# shell/kilo/opencode backends, and the only third-party package that
+# closure pulls in is nats-py. (Verified by importing the adapter in a
+# clean interpreter and listing sys.modules.)
+#
+# The ACP/HTTP backends (acp_http.py, kilo_acp.py, opencode_acp.py,
+# hermes_acp.py, grok_acp.py) additionally need httpx, but those modules
+# are NOT imported by remote_agent_adapter.py at module top level — they
+# are only pulled in by named backends the adapter never instantiates.
+# If you start using an ACP-over-HTTP backend remotely, add:
+#
+#     httpx>=0.27
+#
+# Install with:
+#
+#     python3 -m venv .venv
+#     source .venv/bin/activate
+#     pip install -r requirements-remote.txt
+
+nats-py>=2.6.0
