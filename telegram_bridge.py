@@ -40,6 +40,8 @@ except Exception:  # pragma: no cover - depends on environment
 import nats
 from nats.aio.msg import Msg
 
+from nats_connect import connect_nats
+
 
 def make_envelope(identity: str, channel: str, payload: dict) -> bytes:
     """Build a NATS envelope (same wire format as the Rust side)."""
@@ -83,6 +85,22 @@ async def main() -> None:
         action="store_true",
         help="Log intended Telegram sends instead of calling the API",
     )
+    # ── Auth + TLS (NATS_* env vars are the defaults; flags win) ──────
+    parser.add_argument("--token", default=None, help="NATS token. Env: NATS_TOKEN")
+    parser.add_argument("--user", default=None, help="NATS username. Env: NATS_USER")
+    parser.add_argument("--password", default=None, help="NATS password. Env: NATS_PASSWORD")
+    parser.add_argument("--ca-file", default=None, help="CA bundle. Env: NATS_CA_FILE")
+    parser.add_argument("--cert-file", default=None, help="mTLS cert. Env: NATS_CERT_FILE")
+    parser.add_argument("--key-file", default=None, help="mTLS key. Env: NATS_KEY_FILE")
+    parser.add_argument(
+        "--credentials-file", default=None, help="NATS .creds. Env: NATS_CREDENTIALS_FILE"
+    )
+    parser.add_argument("--nkeys-seed", default=None, help="NATS NKEY seed. Env: NATS_NKEYS_SEED")
+    parser.add_argument(
+        "--tls-insecure",
+        action="store_true",
+        help="Disable cert verification. Refused unless NATS_ALLOW_INSECURE=1.",
+    )
     args = parser.parse_args()
 
     token = args.telegram_token
@@ -93,7 +111,19 @@ async def main() -> None:
             f"token_present={bool(token)} telegram_sdk={_HAVE_TELEGRAM}"
         )
 
-    nc = await nats.connect(args.nats_url)
+    nc = await connect_nats(
+        args.nats_url,
+        token=args.token,
+        user=args.user,
+        password=args.password,
+        ca_file=args.ca_file,
+        cert_file=args.cert_file,
+        key_file=args.key_file,
+        credentials_file=args.credentials_file,
+        nkeys_seed=args.nkeys_seed,
+        tls_insecure=args.tls_insecure,
+        name=args.identity,
+    )
     inbox = f"inbox.{args.identity}"
     inbox_subject = f"channel.{inbox}"
 

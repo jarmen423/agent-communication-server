@@ -20,9 +20,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
-from nats.aio.client import Client as NATSClient
+from nats.aio.client import Client as NATSClient  # noqa: F401  (re-exported)
 from nats.aio.msg import Msg
 
+from nats_connect import connect_nats
 from worker_events import execute_with_events, publish_event as emit_event
 
 
@@ -64,11 +65,16 @@ class WorkerConfig:
     log_prefix: str = "worker"
     broadcast_channel: str | None = None
     extra_heartbeat: dict[str, Any] = field(default_factory=dict)
+    # Auth/TLS kwargs forwarded to nats_connect.connect_nats(). When None,
+    # connect_nats resolves from NATS_* env vars. Built by callers from CLI.
+    nats_auth: dict[str, Any] | None = None
 
 
 async def run_worker(cfg: WorkerConfig) -> None:
-    nc = NATSClient()
-    await nc.connect(servers=cfg.nats_url)
+    connect_kwargs: dict[str, Any] = {"name": cfg.identity}
+    if cfg.nats_auth:
+        connect_kwargs.update(cfg.nats_auth)
+    nc = await connect_nats(cfg.nats_url, **connect_kwargs)
     log = cfg.log_prefix
     print(f"[{log}] connected to NATS as {cfg.identity}")
 

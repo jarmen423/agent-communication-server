@@ -187,6 +187,61 @@ Examples:
     p.add_argument("--opencode-bin", default=None, help="Path to opencode binary")
     p.add_argument("--timeout", type=float, default=600.0, help="Per-prompt timeout (seconds)")
     p.add_argument("--channel", default=None, help="Broadcast channel to also subscribe to")
+
+    # ── Auth + TLS ────────────────────────────────────────────────────
+    # All optional. Env vars (NATS_TOKEN, NATS_USER, ...) are the defaults;
+    # any CLI flag here wins over the env var. See nats_connect.connect_nats.
+    auth = p.add_argument_group(
+        "authentication & TLS",
+        "Options forwarded to nats_connect.connect_nats(). "
+        "Each has a NATS_* env var fallback (CLI flag wins).",
+    )
+    auth.add_argument(
+        "--token",
+        default=None,
+        help="NATS token auth. Env: NATS_TOKEN",
+    )
+    auth.add_argument(
+        "--user",
+        default=None,
+        help="NATS username. Env: NATS_USER",
+    )
+    auth.add_argument(
+        "--password",
+        default=None,
+        help="NATS password. Env: NATS_PASSWORD",
+    )
+    auth.add_argument(
+        "--ca-file",
+        default=None,
+        help="CA bundle file for verifying the server cert. Env: NATS_CA_FILE",
+    )
+    auth.add_argument(
+        "--cert-file",
+        default=None,
+        help="Client cert (mTLS). Requires --key-file. Env: NATS_CERT_FILE",
+    )
+    auth.add_argument(
+        "--key-file",
+        default=None,
+        help="Client key (mTLS). Requires --cert-file. Env: NATS_KEY_FILE",
+    )
+    auth.add_argument(
+        "--credentials-file",
+        default=None,
+        help="NATS .creds file (JWT/NKEY). Env: NATS_CREDENTIALS_FILE",
+    )
+    auth.add_argument(
+        "--nkeys-seed",
+        default=None,
+        help="NATS NKEY seed file. Env: NATS_NKEYS_SEED",
+    )
+    auth.add_argument(
+        "--tls-insecure",
+        action="store_true",
+        help="Disable cert verification. Refused unless NATS_ALLOW_INSECURE=1. "
+        "Env: NATS_TLS_INSECURE=1",
+    )
     args = p.parse_args()
 
     try:
@@ -201,12 +256,32 @@ Examples:
         flush=True,
     )
 
+    # Build auth/TLS kwargs for nats_connect.connect_nats(). Only non-None
+    # values are forwarded; connect_nats resolves env-var fallbacks itself.
+    nats_auth: dict[str, Any] = {}
+    for key in (
+        "token",
+        "user",
+        "password",
+        "ca_file",
+        "cert_file",
+        "key_file",
+        "credentials_file",
+        "nkeys_seed",
+    ):
+        v = getattr(args, key)
+        if v is not None:
+            nats_auth[key] = v
+    if args.tls_insecure:
+        nats_auth["tls_insecure"] = True
+
     cfg = WorkerConfig(
         identity=args.identity,
         backend=backend,
         nats_url=args.nats_url,
         log_prefix=f"remote:{args.identity}",
         broadcast_channel=args.channel,
+        nats_auth=nats_auth or None,
     )
 
     try:

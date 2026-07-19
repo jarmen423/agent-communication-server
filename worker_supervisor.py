@@ -28,6 +28,7 @@ from typing import Any
 
 try:
     from nats.aio.client import Client as NATSClient
+    from nats_connect import connect_nats
 except ModuleNotFoundError:
     sys.stderr.write(
         "Missing nats-py. Use:\n"
@@ -66,17 +67,25 @@ class Child:
 
 
 class Supervisor:
-    def __init__(self, nats_url: str, repo: Path, python: str) -> None:
+    def __init__(
+        self, nats_url: str, repo: Path, python: str,
+        nats_auth: dict[str, Any] | None = None,
+    ) -> None:
         self.nats_url = nats_url
         self.repo = repo
         self.python = python
+        # Auth/TLS kwargs for the supervisor's own connection. When empty,
+        # connect_nats resolves NATS_* env vars at connect time. Spawned
+        # child workers inherit NATS_* env vars via create_subprocess_exec.
+        self.nats_auth: dict[str, Any] = nats_auth or {}
         self.nc = NATSClient()
         self.children: dict[str, Child] = {}
         self._presence_waiters: dict[str, list[asyncio.Future[bool]]] = {}
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
-        await self.nc.connect(servers=self.nats_url)
+        connect_kwargs: dict[str, Any] = {"name": "supervisor", **self.nats_auth}
+        self.nc = await connect_nats(self.nats_url, **connect_kwargs)
         await self.nc.subscribe("hub.worker.ensure", cb=self._on_ensure)
         await self.nc.subscribe("hub.worker.stop", cb=self._on_stop)
         await self.nc.subscribe("hub.worker.list", cb=self._on_list)
@@ -351,10 +360,25 @@ class Supervisor:
 
 
 async def _amain(args: argparse.Namespace) -> None:
+    # Build auth kwargs for the supervisor's own connection. Child workers
+    # inherit NATS_* env vars via create_subprocess_exec, so no per-child
+    # forwarding is needed here.
+    nats_auth: dict[str, Any] = {}
+    for key in (
+        "token", "user", "password", "ca_file",
+        "cert_file", "key_file", "credentials_file", "nkeys_seed",
+    ):
+        v = getattr(args, key)
+        if v is not None:
+            nats_auth[key] = v
+    if args.tls_insecure:
+        nats_auth["tls_insecure"] = True
+
     sup = Supervisor(
         nats_url=args.nats_url,
         repo=Path(args.repo).resolve(),
         python=args.python or sys.executable,
+        nats_auth=nats_auth or None,
     )
     await sup.run_forever()
 
@@ -364,6 +388,24 @@ def main() -> None:
     p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--repo", default=str(REPO))
     p.add_argument("--python", default=None, help="Python for child workers (default: this interpreter)")
+    # Auth + TLS flags. NATS_* env vars are the defaults; flags win.
+    # Spawned child workers inherit NATS_* env vars automatically.
+    for flag, env, help_text in (
+        ("--token", "NATS_TOKEN", "NATS token"),
+        ("--user", "NATS_USER", "NATS username"),
+        ("--password", "NATS_PASSWORD", "NATS password"),
+        ("--ca-file", "NATS_CA_FILE", "CA bundle"),
+        ("--cert-file", "NATS_CERT_FILE", "mTLS cert"),
+        ("--key-file", "NATS_KEY_FILE", "mTLS key"),
+        ("--credentials-file", "NATS_CREDENTIALS_FILE", "NATS .creds"),
+        ("--nkeys-seed", "NATS_NKEYS_SEED", "NATS NKEY seed"),
+    ):
+        p.add_argument(flag, default=None, help=f"{help_text}. Env: {env}")
+    p.add_argument(
+        "--tls-insecure",
+        action="store_true",
+        help="Disable cert verification. Refused unless NATS_ALLOW_INSECURE=1.",
+    )
     args = p.parse_args()
     try:
         asyncio.run(_amain(args))

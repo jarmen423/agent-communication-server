@@ -235,23 +235,102 @@ name clients will actually connect to.
    the operating system trust store. The server name in the `wss://` URL must
    match a certificate SAN.
 
-5. Connect the remote adapter to the secure endpoint. The current adapter does
-   not yet expose token/TLS-file CLI flags, so production deployment must first
-   wire the equivalent `nats-py` options (`token=...` and `tls=tls_context`) into
-   its connection configuration. Once available, the intended invocation is:
+5. Connect the remote adapter to the secure endpoint. The adapter and every
+   other Python entrypoint (`telegram_bridge.py`, `worker_supervisor.py`,
+   any `*_worker.py` using `worker_runtime.run_worker`) share a single
+   connect helper (`nats_connect.connect_nats`) that accepts token,
+   user/password, mTLS, NKEY/JWT credentials, and a CA file. The same flags
+   are exposed on the CLI of the adapter, the bridge, and the supervisor;
+   every flag has a `NATS_*` environment variable fallback (CLI flag wins).
+
+   Worked example — token auth over `wss://` with a private-CA certificate:
 
    ```bash
+   export NATS_TOKEN="$(vault read -field=token nats/prod)"
    python3 remote_agent_adapter.py \
        --identity remote-agent-1 \
        --nats-url wss://hub.example.com:8080 \
+       --ca-file /etc/nats/ca/nats-server.crt \
        --token "$NATS_TOKEN" \
        --backend shell \
        --execute "my-agent-cli --prompt"
    ```
 
-   Do not deploy this command unchanged until `remote_agent_adapter.py --help`
-   lists the token and CA/TLS options; editing that adapter is outside this
-   security-documentation task's ownership.
+   Equivalent using only environment variables (e.g. for a systemd unit):
+
+   ```bash
+   NATS_URL=wss://hub.example.com:8080 \
+   NATS_TOKEN=... \
+   NATS_CA_FILE=/etc/nats/ca/nats-server.crt \
+   python3 remote_agent_adapter.py --identity remote-agent-1 --backend shell \
+       --execute "my-agent-cli --prompt"
+   ```
+
+   mTLS (mutual TLS) is enabled whenever both `--cert-file` and `--key-file`
+   are supplied. NKEY/JWT auth is enabled when `--credentials-file`
+   (a `.creds` file) or `--nkeys-seed` (a `.nk` seed file) is supplied.
+   See the Authentication reference below for the full flag/env matrix.
+
+## Authentication
+
+Every Python client in this repo (remote adapter, telegram bridge, worker
+supervisor, and any worker built on `worker_runtime.run_worker`) connects
+through `nats_connect.connect_nats()`. The helper resolves auth/TLS settings
+with a single rule: **explicit CLI flag wins; otherwise the `NATS_*`
+environment variable is used; otherwise the value is unset**.
+
+TLS is enabled automatically when the URL scheme is `wss://` or `tls://`, or
+when any of `--ca-file`, `--cert-file`, `--key-file` is supplied. When TLS is
+enabled and no `--ca-file` is given, the system default trust store is used,
+so publicly trusted certificates work out of the box.
+
+### CLI flags
+
+| Flag | Env var | Purpose |
+|------|---------|---------|
+| `--token` | `NATS_TOKEN` | Token authentication (single shared secret). |
+| `--user` | `NATS_USER` | Username for user/password auth. |
+| `--password` | `NATS_PASSWORD` | Password for user/password auth. |
+| `--ca-file` | `NATS_CA_FILE` | CA bundle to verify the server certificate. |
+| `--cert-file` | `NATS_CERT_FILE` | Client certificate (mTLS). Requires `--key-file`. |
+| `--key-file` | `NATS_KEY_FILE` | Client key (mTLS). Requires `--cert-file`. |
+| `--credentials-file` | `NATS_CREDENTIALS_FILE` | NATS `.creds` file (JWT/NKEY auth). |
+| `--nkeys-seed` | `NATS_NKEYS_SEED` | NATS NKEY seed file (`.nk`). |
+| `--tls-insecure` | `NATS_TLS_INSECURE=1` | Disable certificate verification. **Refused unless `NATS_ALLOW_INSECURE=1` is also set.** |
+
+Notes:
+
+- Token and user/password are mutually exclusive; supplying both raises
+  `ValueError`.
+- `--tls-insecure` fails closed. It only takes effect when the operator has
+  set `NATS_ALLOW_INSECURE=1` in the environment, which forces an explicit,
+  visible acknowledgement that verification is disabled. Do not use this in
+  production.
+- The supervisor spawns child workers as subprocesses that inherit the
+  supervisor's environment, so any `NATS_*` env var set on the supervisor is
+  picked up by the spawned workers automatically.
+
+### Worked example: `wss://` + token + private CA
+
+```bash
+# 1. Put the hub's CA cert on the remote machine.
+sudo install -m 0644 nats-server.crt /etc/nats/ca/nats-server.crt
+
+# 2. Export the token out of band (secret manager, not Git).
+export NATS_TOKEN="REPLACE_WITH_A_LONG_RANDOM_TOKEN"
+
+# 3. Launch the adapter.
+python3 remote_agent_adapter.py \
+    --identity remote-agent-1 \
+    --nats-url wss://hub.example.com:8080 \
+    --ca-file /etc/nats/ca/nats-server.crt \
+    --backend shell \
+    --execute "my-agent-cli --prompt"
+```
+
+For mTLS deployments, add `--cert-file` and `--key-file`; for NKEY/JWT
+deployments, add `--credentials-file`. The same flags work verbatim on
+`telegram_bridge.py` and `worker_supervisor.py`.
 
 ## Verified end-to-end flow
 
@@ -262,3 +341,7 @@ name clients will actually connect to.
 5. Adapter picks up task, runs backend, publishes result
 6. Router delivers result to `channel.<task_channel>`
 7. Delegator receives `completed` event with result
+
+---
+
+See `docs/OPERATOR_HUB.md` for full deploy, `docs/JOIN_HUB.md` for joining, `docs/SECURITY.md` for the security model.

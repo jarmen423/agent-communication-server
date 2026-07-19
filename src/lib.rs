@@ -63,6 +63,7 @@
 //! - `list_pending()` — unanswered messages for an agent
 
 pub mod client;
+pub mod connect_opts;
 pub mod events;
 pub mod protocol;
 pub mod query_api;
@@ -75,6 +76,7 @@ pub mod ws_bridge;
 // ── Public API: core types ────────────────────────────────────
 
 pub use client::{AgentInfo, AgentRegistry, HubClient};
+pub use connect_opts::HubConnectOptions;
 pub use events::{
     event_payload, event_summary, format_event_line, resolve_watch_target, WatchQuery, WatchTarget,
 };
@@ -105,5 +107,5 @@ pub use analytics::metrics::MetricsCollector;
 
 pub use wave::{evaluate_merge_gate, spawn_wave, validate_tasks, SpawnOutcome, WaveTaskInput};
 
-pub use query_api::{ApiResponse, ApiRequest};
+pub use query_api::{ApiRequest, ApiResponse};
 pub use query_api_client::ApiClient;

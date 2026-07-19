@@ -1,0 +1,113 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# nats-hub production config — EXAMPLE TEMPLATE
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy to /etc/nats/nats-server.conf and replace every REPLACE_* placeholder.
+# Secrets (token, user passwords) should come from a secrets manager or env
+#subst, NOT from this file. See docs/OPERATOR_HUB.md and docs/SECURITY.md.
+#
+# Validate before deploying:  nats-server -t -c /etc/nats/nats-server.conf
+# ─────────────────────────────────────────────────────────────────────────────
+
+server_name: "nats-hub-prod"
+
+# Plain TCP listener — used only by hub-server and other localhost clients.
+# Remote agents should NEVER reach this port; keep it behind the firewall on
+# VPN/LAN only (see docs/OPERATOR_HUB.md "Firewall").
+port: 4222
+host: "127.0.0.1"   # bind loopback by default; set 0.0.0.0 only behind a firewall
+
+# Monitoring / varz endpoint. NATS binds the monitoring port to the same
+# address family as `host`; if you need it on a different interface, use the
+# `http: "host:port"` form. Keep on loopback and reverse-proxy with auth if
+# a Prometheus scrape is needed.
+http_port: 8222
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WebSocket gateway — the only listener remote agents should reach.
+# ─────────────────────────────────────────────────────────────────────────────
+websocket {
+    port: 8080
+    # TLS: REQUIRED for any non-loopback exposure. wss:// terminates here.
+    # nats-server expects cert/key inside a nested `tls {}` block (NOT as
+    # flat keys on the websocket block). See docs/OPERATOR_HUB.md §3.
+    # Repo-relative example certs so `nats-server -t -c thisfile` validates
+    # from a git checkout. On a real host, copy to /etc/nats/tls/ and rewrite:
+    #   cert_file: "/etc/nats/tls/nats-server.crt"
+    #   key_file:  "/etc/nats/tls/nats-server.key"
+    tls {
+        cert_file: "config/tls-example/nats-server.crt"
+        key_file:  "config/tls-example/nats-server.key"
+    }
+    same_origin: false
+    handshake_timeout: "5s"
+    # Comment out the next line ONLY for a transitional mixed deployment:
+    # no_tls: true
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Authentication & Authorization
+# ─────────────────────────────────────────────────────────────────────────────
+# Enable EXACTLY ONE of the two authorization blocks below.
+# See docs/SECURITY.md for when to pick token vs users.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# --- Option A: shared token (simplest; small teams, trusted members) ---------
+# authorization {
+#     token: "REPLACE_WITH_LONG_RANDOM_TOKEN_FROM_SECRETS_MANAGER"
+# }
+
+# --- Option B: per-agent users with subject allowlists (recommended) ---------
+# Individually revocable; each agent gets least-privilege subject access.
+# allowed_connection_types:["WEBSOCKET"] prevents these credentials from being
+# reused against the plain TCP listener on :4222.
+authorization {
+    users: [
+        {
+            user: "remote-agent"
+            password: "REPLACE_WITH_LONG_RANDOM_PASSWORD"
+            allowed_connection_types: ["WEBSOCKET"]
+            permissions: {
+                publish: {
+                    allow: [
+                        "hub.send.>"
+                        "hub.register"
+                        "hub.presence"
+                        "hub.events.>"
+                    ]
+                }
+                subscribe: {
+                    allow: [
+                        "channel.inbox.>"
+                        "channel.task.>"
+                        "channel.session.>"
+                        "channel.wave.>"
+                    ]
+                }
+            }
+        }
+    ]
+}
+
+# Repeat the users{} block above for each named agent you want to issue
+# individually revocable credentials to. The allowlist above is the default
+# shape for a generic remote worker; tighten it further per agent (e.g. scope
+# channel.inbox.<identity> instead of channel.inbox.>) when you can.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Capacity & safety limits
+# ─────────────────────────────────────────────────────────────────────────────
+max_connections: 500        # raise if you have a large fleet; remote + local
+max_payload: 10485760       # 10 MiB — room for large agent envelopes
+max_pending: 67108864       # 64 MiB per connection buffering ceiling
+
+# Write pidfile so the systemd unit and monitoring can find the daemon.
+pid_file: "/run/nats-hub/nats-server.pid"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging — rotate via logrotate (see deploy/systemd/README.md).
+# ─────────────────────────────────────────────────────────────────────────────
+log_file:    "/var/log/nats-hub/nats-server.log"
+logtime:     true
+debug:       false
+trace:       false
+max_traced_msg_len: 0

@@ -1,41 +1,86 @@
 {
-  "wave_id": "wave-1-remote-connectivity",
+  "wave_id": "wave-2-distributed-hub",
+  "goal": "Six pieces: Python auth/TLS, Rust auth, deploy/systemd, remote DX, dogfood, Discord bridge",
   "tasks": [
     {
-      "task_id": "W1-A",
-      "title": "ACP HTTP transport abstraction",
-      "status": "pending",
-      "wave": "wave-1a",
-      "owned": ["worker_backends/acp_http.py"],
+      "task_id": "W2-A",
+      "title": "Python NATS connect auth/TLS",
+      "status": "in_progress",
+      "wave": "wave-2a",
+      "owned": [
+        "nats_connect.py",
+        "worker_runtime.py",
+        "remote_agent_adapter.py",
+        "telegram_bridge.py",
+        "worker_supervisor.py",
+        "docs/REMOTE_AGENTS.md"
+      ],
       "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1a-acp-http.md"
+      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2a-python-auth-tls.md"
     },
     {
-      "task_id": "W1-B",
-      "title": "OpenCode ACP stdio backend",
-      "status": "pending",
-      "wave": "wave-1a",
-      "owned": ["worker_backends/opencode_acp.py", "opencode_acp_worker.py"],
+      "task_id": "W2-B",
+      "title": "Rust HubClient auth via ConnectOptions + env",
+      "status": "in_progress",
+      "wave": "wave-2a",
+      "owned": [
+        "src/client.rs",
+        "tests/hub_connect_opts.rs"
+      ],
       "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1b-opencode-acp.md"
+      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2b-rust-auth.md"
     },
     {
-      "task_id": "W1-C",
-      "title": "Kilo ACP HTTP backend",
-      "status": "pending",
-      "wave": "wave-1b",
-      "owned": ["worker_backends/kilo_acp.py", "kilo_acp_worker.py"],
-      "depends_on": ["W1-A"],
-      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1c-kilo-acp.md"
+      "task_id": "W2-C",
+      "title": "systemd units + prod NATS example + SECURITY/JOIN docs",
+      "status": "in_progress",
+      "wave": "wave-2a",
+      "owned": [
+        "deploy/systemd/",
+        "config/nats-server.prod.conf.example",
+        "docs/SECURITY.md",
+        "docs/JOIN_HUB.md",
+        "docs/OPERATOR_HUB.md"
+      ],
+      "depends_on": [],
+      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2c-deploy-docs.md"
     },
     {
-      "task_id": "W1-D",
-      "title": "TLS + auth config for NATS WebSocket",
+      "task_id": "W2-D",
+      "title": "Remote install DX packaging",
       "status": "pending",
-      "wave": "wave-1a",
-      "owned": ["config/nats-server.conf", "docs/REMOTE_AGENTS.md"],
+      "wave": "wave-2b",
+      "owned": [
+        "packaging/remote/",
+        "requirements-remote.txt",
+        "docs/REMOTE_INSTALL.md"
+      ],
+      "depends_on": ["W2-A"],
+      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2d-remote-dx.md"
+    },
+    {
+      "task_id": "W2-E",
+      "title": "Token+WS dogfood scripts with evidence",
+      "status": "pending",
+      "wave": "wave-2b",
+      "owned": [
+        "scripts/dogfood_token_auth.sh",
+        "scripts/dogfood_remote_ws.sh"
+      ],
+      "depends_on": ["W2-A", "W2-B"],
+      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2e-dogfood.md"
+    },
+    {
+      "task_id": "W2-F",
+      "title": "Discord bridge (Phase 5 expansion)",
+      "status": "pending",
+      "wave": "wave-2b",
+      "owned": [
+        "discord_bridge.py",
+        "docs/BRIDGES.md"
+      ],
       "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-1-remote-connectivity/w1d-tls-auth.md"
+      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2f-discord-bridge.md"
     }
   ]
 }

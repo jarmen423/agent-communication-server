@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# systemd unit for the NATS server (the bus).
+# The hub-server depends on this unit. Install per deploy/systemd/README.md.
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=nats-hub NATS server (bus)
+Documentation=https://docs.nats.io/running-a-nats-service/configuration
+Wants=network-online.target
+After=network-online.target
+# Cap the restart rate so a bad config doesn't hot-loop the unit.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=nats
+Group=nats
+
+# Config is installed at /etc/nats/nats-server.conf (see config/nats-server.prod.conf.example).
+ExecStart=/usr/local/bin/nats-server -c /etc/nats/nats-server.conf
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy — bounce on crash.
+Restart=on-failure
+RestartSec=2s
+
+# Sandboxing / hardening. ReadWritePaths is the minimal set of paths the
+# daemon actually needs to touch: its log directory, the pidfile location,
+# and the TLS cert/key (the key is 0600 nats:nats so we don't need broader
+# perms).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/log/nats-hub /run/nats-hub
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Open file descriptors — NATS uses a FD per connection.
+LimitNOFILE=65536
+
+# /run is tmpfs; create our subdirectory there at start.
+RuntimeDirectory=nats-hub
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

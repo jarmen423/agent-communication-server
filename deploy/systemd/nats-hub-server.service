@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# systemd unit for hub-server (the nats-hub control-plane router).
+# The binary must already be installed at /usr/local/bin/hub-server.
+# Install per deploy/systemd/README.md.
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=nats-hub control-plane router (hub-server)
+Documentation=https://github.com/nousresearch/nats-hub/blob/main/docs/PRODUCT_VISION.md
+Wants=network-online.target nats-hub-nats.service
+After=network-online.target nats-hub-nats.service
+# Cap the restart rate so a bad config doesn't hot-loop the unit.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=nats-hub
+Group=nats-hub
+
+# hub-server is a router: it connects to the NATS bus on 127.0.0.1:4222 and
+# mirrors envelopes into an embedded SurrealDB (RocksDB) at --db-path.
+ExecStart=/usr/local/bin/hub-server \
+    --db-path /var/lib/nats-hub/nats_hub.db
+
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy — same guardrails as the NATS unit.
+Restart=on-failure
+RestartSec=2s
+
+# Sandboxing. ReadWritePaths = the DB directory + log directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/nats-hub /var/log/nats-hub
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# hub-server opens a few hundred sockets at most; 4k is plenty.
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

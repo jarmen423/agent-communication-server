@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
 
+use crate::connect_opts::{connect_with_hub_opts, HubConnectOptions};
 use crate::protocol::{subjects, Envelope, MessageKind};
 
 /// Default NATS URL.
@@ -23,13 +24,56 @@ pub struct HubClient {
 }
 
 impl HubClient {
-    /// Connect to a NATS server with a given identity.
+    /// Connect to a NATS server with a given identity (simple path).
+    ///
+    /// Backwards-compatible with the original signature. If any of these
+    /// environment variables are set, they are picked up automatically and
+    /// routed through [`HubClient::connect_with_opts`]:
+    ///
+    /// | Env var                  | Maps to                            |
+    /// |--------------------------|------------------------------------|
+    /// | `NATS_TOKEN`             | `HubConnectOptions::token`         |
+    /// | `NATS_USER`              | `HubConnectOptions::user`          |
+    /// | `NATS_PASSWORD`          | `HubConnectOptions::password`      |
+    /// | `NATS_CREDENTIALS_FILE`  | `HubConnectOptions::credentials_file` |
+    /// | `NATS_REQUIRE_TLS=1`     | `HubConnectOptions::require_tls`   |
+    ///
+    /// If none are set, this behaves exactly like the pre-0.2 `connect`
+    /// (anonymous `async_nats::connect(url)`).
     pub async fn connect(url: &str, identity: impl Into<String>) -> Result<Self> {
         let identity = identity.into();
-        debug!(%url, %identity, "connecting to NATS");
-        let nats = async_nats::connect(url)
-            .await
-            .with_context(|| format!("failed to connect to NATS at {url}"))?;
+        let opts = HubConnectOptions::from_env();
+        if opts.has_auth() || opts.require_tls {
+            debug!(%url, %identity, ?opts, "connect: env-derived auth options present");
+            Self::connect_with_opts(url, identity, opts).await
+        } else {
+            debug!(%url, %identity, "connecting to NATS (anonymous)");
+            let nats = async_nats::connect(url)
+                .await
+                .with_context(|| format!("failed to connect to NATS at {url}"))?;
+            Ok(Self { nats, identity })
+        }
+    }
+
+    /// Connect to a NATS server with explicit auth + TLS options.
+    ///
+    /// Builds an `async_nats::ConnectOptions` from `opts` (auth precedence:
+    /// `credentials_file` > `nkey` > `user`+`password` > `token`), applies
+    /// `require_tls`, then calls `async_nats::connect_with_options`.
+    ///
+    /// Use this when you want programmatic control over auth (CLIs with
+    /// `--token`, `--user/--password`, `--creds`, `--nkey` flags, or embedders
+    /// reading from a secrets manager). For env-var-driven auth, just call
+    /// [`HubClient::connect`].
+    pub async fn connect_with_opts(
+        url: &str,
+        identity: impl Into<String>,
+        opts: HubConnectOptions,
+    ) -> Result<Self> {
+        let identity = identity.into();
+        debug!(%url, %identity, ?opts, "connecting to NATS with options");
+
+        let nats = connect_with_hub_opts(url, &opts).await?;
         Ok(Self { nats, identity })
     }
 
@@ -79,10 +123,13 @@ impl HubClient {
         timeout: std::time::Duration,
     ) -> Result<serde_json::Value> {
         let bytes = serde_json::to_vec(&payload).context("serialize request payload")?;
-        let resp = tokio::time::timeout(timeout, self.nats.request(subject.to_string(), bytes.into()))
-            .await
-            .with_context(|| format!("request {subject} timed out"))?
-            .with_context(|| format!("request {subject} failed"))?;
+        let resp = tokio::time::timeout(
+            timeout,
+            self.nats.request(subject.to_string(), bytes.into()),
+        )
+        .await
+        .with_context(|| format!("request {subject} timed out"))?
+        .with_context(|| format!("request {subject} failed"))?;
         let v: serde_json::Value =
             serde_json::from_slice(&resp.payload).context("decode request reply JSON")?;
         Ok(v)
