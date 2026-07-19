@@ -15,9 +15,17 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    /// Connect to NATS for query-API request/reply.
+    ///
+    /// Uses [`crate::HubConnectOptions::from_env`] so CLIs honor the same
+    /// `NATS_TOKEN` / user / credentials / TLS env vars as `HubClient`.
     pub async fn connect(nats_url: &str) -> Result<Self> {
-        let nats = async_nats::connect(nats_url).await?;
-        Ok(Self { nats, timeout: Duration::from_secs(10) })
+        let opts = crate::HubConnectOptions::from_env();
+        let nats = crate::connect_opts::connect_with_hub_opts(nats_url, &opts).await?;
+        Ok(Self {
+            nats,
+            timeout: Duration::from_secs(10),
+        })
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -36,7 +44,9 @@ impl ApiClient {
 
         let reply = tokio::time::timeout(self.timeout, self.nats.request(subject, payload.into()))
             .await
-            .map_err(|_| anyhow::anyhow!("query API timeout ({:?}) for op '{op}'", self.timeout))??;
+            .map_err(|_| {
+                anyhow::anyhow!("query API timeout ({:?}) for op '{op}'", self.timeout)
+            })??;
 
         let resp: crate::query_api::ApiResponse = serde_json::from_slice(&reply.payload)?;
 

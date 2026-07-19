@@ -73,3 +73,10 @@ test -f docs/REMOTE_INSTALL.md && test -f packaging/remote/README.md
 - wave-2b parent dogfood: `bash scripts/dogfood_token_auth.sh` → **PASS** (neg control Authorization Violation + ping-wave2e echo)
 - Full hub-tui still deferred to `docs/TUI_PLAN.md`
 - Pre-existing test flakes (unrelated): `test_agent_activity`, `test_list_pending_storage`
+
+## wave-3 (follow-on residuals)
+
+- ControlPlane + ApiClient + query_api use `HubConnectOptions::from_env`
+- Fixed `list_pending` (Surreal 2 graph IS NONE was empty)
+- `scripts/dogfood_wss_tls.sh` parent PASS
+- README distributed hub section

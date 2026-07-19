@@ -74,6 +74,16 @@ struct EnvelopeRowWithId {
 }
 
 impl SurrealStorage {
+    /// Strip Surreal record id form (`envelopes:uuid` / backticks) down to the
+    /// raw uuid string stored in `meta.id` / `reply_to`.
+    fn raw_envelope_id(id: &str) -> String {
+        let s = id.trim().trim_matches('`');
+        s.strip_prefix("envelopes:")
+            .unwrap_or(s)
+            .trim_matches('`')
+            .to_string()
+    }
+
     /// Connect to an embedded SurrealDB instance at the given path.
     /// Creates the database file if it doesn't exist.
     pub async fn connect(path: &str) -> Result<Self> {
@@ -439,21 +449,34 @@ impl Storage for SurrealStorage {
     async fn list_pending(&self, identity: &str) -> Result<Vec<EnvelopeRecord>> {
         debug!(%identity, "listing pending messages");
 
+        // Surreal 2.x graph inbound `<-reply_to<-envelopes IS NONE` does not
+        // reliably match unreplied rows (returns empty). Match get_thread():
+        // use the stored reply_to *field* (raw uuid string) instead of graph.
         let mut result = self
             .db
             .query(
                 "SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
                  FROM envelopes \
-                 WHERE to_identity = $identity \
-                 AND <-reply_to<-envelopes IS NONE"
+                 WHERE to_identity = $identity; \
+                 SELECT VALUE reply_to FROM envelopes WHERE reply_to IS NOT NONE",
             )
             .bind(("identity", identity.to_string()))
             .await?;
 
         let rows: Vec<EnvelopeRowWithId> = result.take(0)?;
+        let answered: Vec<Option<String>> = result.take(1).unwrap_or_default();
+        let answered: std::collections::HashSet<String> = answered
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect();
 
         Ok(rows
             .into_iter()
+            .filter(|r| {
+                let raw = Self::raw_envelope_id(&r.id.to_string());
+                !answered.contains(&raw)
+            })
             .map(|r| EnvelopeRecord {
                 id: r.id.to_string(),
                 from_identity: r.from_identity,

@@ -49,7 +49,7 @@ node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
 
 ## Communication Patterns
 
-### Broadcast (Twitter feed)
+### Broadcast (Like an X feed)
 
 All subscribers on a channel see every message.
 
@@ -326,3 +326,30 @@ BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apac
 - [`docs/DATABASE_PLAN.md`](docs/DATABASE_PLAN.md) — Database and persistence design
 - [`docs/WORKER_BACKENDS.md`](docs/WORKER_BACKENDS.md) — Python worker backend types
 - [`AGENTS.md`](AGENTS.md) — Guidance for AI agents working on this codebase
+## Distributed hub (one VPS, many machines)
+
+Install **nats-server + hub-server once** on a host you control. Laptops and
+remote workers **dial in as clients** — they do not run their own NATS or DB.
+
+| Doc | Audience |
+|-----|----------|
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Plain-language auth model (token, TLS, allowlists) |
+| [`docs/OPERATOR_HUB.md`](docs/OPERATOR_HUB.md) | Stand up the hub (systemd, firewall, TLS) |
+| [`docs/JOIN_HUB.md`](docs/JOIN_HUB.md) | Join an existing hub from a laptop |
+| [`docs/REMOTE_INSTALL.md`](docs/REMOTE_INSTALL.md) | Thin remote package (`packaging/remote/`) |
+| [`docs/REMOTE_AGENTS.md`](docs/REMOTE_AGENTS.md) | WebSocket adapter + auth flags |
+
+```bash
+# Prove token + WS remote adapter (loopback)
+bash scripts/dogfood_token_auth.sh
+
+# Prove wss:// + CA + token on hub-server + adapter
+bash scripts/dogfood_wss_tls.sh
+
+# Thin install on a remote machine
+bash packaging/remote/install.sh ~/nats-hub-remote
+```
+
+Auth for all Rust clients and hub-server: set `NATS_TOKEN` (or user/password /
+credentials file). Python adapters accept the same via CLI or env — see
+`nats_connect.py` / `remote_agent_adapter.py --help`.

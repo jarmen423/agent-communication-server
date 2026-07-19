@@ -74,8 +74,13 @@ pub struct ControlPlane {
 
 impl ControlPlane {
     /// Create a new control plane connected to the given NATS URL.
+    ///
+    /// Auth/TLS follow [`crate::HubConnectOptions::from_env`] (`NATS_TOKEN`,
+    /// `NATS_USER`/`NATS_PASSWORD`, `NATS_CREDENTIALS_FILE`, `NATS_REQUIRE_TLS`, …)
+    /// so hub-server can join a token-gated or TLS hub without a custom flag surface.
     pub async fn connect(url: &str) -> Result<Self> {
-        let nats = async_nats::connect(url)
+        let opts = crate::HubConnectOptions::from_env();
+        let nats = crate::connect_opts::connect_with_hub_opts(url, &opts)
             .await
             .with_context(|| format!("control plane: connect to {url} failed"))?;
         Ok(Self {
