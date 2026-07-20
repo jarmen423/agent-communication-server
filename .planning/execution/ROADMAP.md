@@ -1,82 +1,50 @@
 # Execution roadmap — distributed hub readiness
 
-## Prior wave (done — docs/config only)
+**Status: COMPLETE** (waves 1–3 landed on `main`, July 2026)
 
-**wave-1-remote-connectivity:** ACP HTTP, OpenCode/Kilo ACP, NATS WS TLS/auth *config comments*.  
-Gap left by W1-D: clients still cannot pass token/TLS on the CLI.
+| Commit | Wave | What |
+|--------|------|------|
+| (wave-1 era) | remote connectivity | ACP HTTP, OpenCode/Kilo ACP, NATS WS TLS/auth **config** examples |
+| `cce1b7a` | wave-2a | Python `nats_connect` + Rust `HubConnectOptions` + systemd/SECURITY/JOIN/OPERATOR docs |
+| `357f8f3` | wave-2b | Remote install DX, token/WS dogfood, Discord bridge |
+| `3849bdf` | wave-3 | Full-stack env auth (hub-server/ApiClient), `list_pending` fix, `dogfood_wss_tls.sh` |
 
-## wave-2 — Distributed hub “six pieces”
+## Product outcome (done)
 
-**Goal:** One hub VPS + many client machines can join safely and talk through it.
+One central hub (`nats-server` + `hub-server`); remote machines dial in as **clients**
+with token/TLS (`remote_agent_adapter`, bridges, CLIs via `NATS_*` env).
 
-| # | Piece | Task | Wave |
-|---|--------|------|------|
-| 1 | Python auth/TLS connect path | W2-A | wave-2a |
-| 2 | Prod NATS conf + systemd + operator docs | W2-C | wave-2a |
-| 3 | Live dogfood (token + WS round-trip script) | W2-E | wave-2b |
-| 4 | Rust `HubClient` auth (env + opts) | W2-B | wave-2a |
-| 5 | Remote install DX | W2-D | wave-2b |
-| 6 | Human bridge expansion (Discord; TUI stays plan-only) | W2-F | wave-2b |
-
-**Explicitly out of wave-2:** full `hub-tui` (see `docs/TUI_PLAN.md`) — multi-phase, not required for distributed messaging.
-
-### Write scope (collision-safe)
-
-| Task | Owned paths | Must not touch |
-|------|-------------|----------------|
-| **W2-A** | `nats_connect.py` (NEW), `worker_runtime.py`, `remote_agent_adapter.py`, `telegram_bridge.py`, `worker_supervisor.py`, `docs/REMOTE_AGENTS.md` (client flag section only) | Rust, deploy/, discord |
-| **W2-B** | `src/client.rs`, optional `tests/hub_connect_opts.rs` (NEW), `docs/SECURITY.md` section *Rust env vars* if file exists else skip | Python, deploy |
-| **W2-C** | `deploy/systemd/*` (NEW), `config/nats-server.prod.conf.example` (NEW), `docs/SECURITY.md` (NEW), `docs/JOIN_HUB.md` (NEW), `docs/OPERATOR_HUB.md` (NEW) | Python connect code, src/ |
-| **W2-D** | `packaging/remote/*` (NEW), `requirements-remote.txt` (NEW), `docs/REMOTE_INSTALL.md` (NEW) | core runtime logic (may *document* flags from W2-A) |
-| **W2-E** | `scripts/dogfood_remote_ws.sh` (NEW), `scripts/dogfood_token_auth.sh` (NEW), handoff with run evidence | product code except tiny fixture conf under `/tmp` |
-| **W2-F** | `discord_bridge.py` (NEW), `docs/BRIDGES.md` (EDIT) | telegram_bridge.py body (reference only) |
-
-### Dependencies
-
-```
-wave-2a (parallel):  W2-A ║ W2-B ║ W2-C
-        │
-        ▼  parent gate: syntax + cargo test + conf validate
-wave-2b (parallel):  W2-D ║ W2-E ║ W2-F
-        │                (W2-E may use W2-A flags; W2-D docs after 2a)
-        ▼  parent gate: dogfood script green + handoffs
-```
-
-### Parent merge gates
-
-**After wave-2a:**
+**Prove anytime:**
 
 ```bash
-export CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats
-python3 -m py_compile nats_connect.py worker_runtime.py remote_agent_adapter.py telegram_bridge.py worker_supervisor.py
-nats-server -t -c config/nats-server.conf
-nats-server -t -c config/nats-server.prod.conf.example   # if example is valid standalone
-cargo test
-cargo fmt --check
+bash scripts/dogfood_token_auth.sh   # ws:// + token
+bash scripts/dogfood_wss_tls.sh      # wss:// + CA + full-stack token
 ```
 
-**After wave-2b:**
+**Living docs (prefer these over handoffs):**
 
-```bash
-bash scripts/dogfood_token_auth.sh   # local token + WS + echo remote adapter
-python3 -m py_compile discord_bridge.py
-test -f docs/REMOTE_INSTALL.md && test -f packaging/remote/README.md
-```
+| Doc | Role |
+|-----|------|
+| [`docs/SECURITY.md`](../../docs/SECURITY.md) | Auth model |
+| [`docs/OPERATOR_HUB.md`](../../docs/OPERATOR_HUB.md) | Stand up hub |
+| [`docs/JOIN_HUB.md`](../../docs/JOIN_HUB.md) | Join hub |
+| [`docs/REMOTE_INSTALL.md`](../../docs/REMOTE_INSTALL.md) | Thin remote package |
+| [`docs/REMOTE_AGENTS.md`](../../docs/REMOTE_AGENTS.md) | Adapter + flags |
+| [`docs/BRIDGES.md`](../../docs/BRIDGES.md) | Telegram + Discord |
+| [`README.md`](../../README.md) | Distributed hub index |
 
-### Handoffs
+Handoffs under `handoffs/` are **historical evidence** (what each leaf shipped).  
+If a handoff conflicts with living docs, **living docs win**.
 
-`.planning/execution/handoffs/wave-2-distributed-hub/<task_id>.md`
+## Explicitly still out of scope (not wave 1–3)
 
-## Wave 2 gate (parent)
+| Item | Where |
+|------|--------|
+| **`hub-tui`** (ratatui daily driver) | [`docs/TUI_PLAN.md`](../../docs/TUI_PLAN.md) — plan only |
+| Real public VPS cutover (Let’s Encrypt, secrets manager) | Operator runbook; not automated here |
+| SMS/Slack/Email bridges | Copy Discord/Telegram pattern in `docs/BRIDGES.md` |
+| Per-agent NATS users in dogfood (uses shared token) | Prod conf example supports users |
 
-- wave-2a committed: `cce1b7a`
-- wave-2b parent dogfood: `bash scripts/dogfood_token_auth.sh` → **PASS** (neg control Authorization Violation + ping-wave2e echo)
-- Full hub-tui still deferred to `docs/TUI_PLAN.md`
-- Pre-existing test flakes (unrelated): `test_agent_activity`, `test_list_pending_storage`
+## Historical task tables
 
-## wave-3 (follow-on residuals)
-
-- ControlPlane + ApiClient + query_api use `HubConnectOptions::from_env`
-- Fixed `list_pending` (Surreal 2 graph IS NONE was empty)
-- `scripts/dogfood_wss_tls.sh` parent PASS
-- README distributed hub section
+Preserved in git history and per-task handoffs. `tasks.json` is marked all-completed.

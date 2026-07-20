@@ -403,29 +403,37 @@ serves a zero-dependency Prometheus exposition format (`natshub_messages_total`,
 
 Two surfaces for observing and steering agent work:
 
-**Arcade Visualizer** (HTML/p5.js, served by hub-server's WS bridge):
+**Arcade Visualizer** (HTML/p5.js, served by hub-server's WS bridge) — **shipped**:
 - Retro CRT aesthetic: scanlines, neon grid, pixel-art agent characters
 - Each agent = a square with glow, trail, status color, session_id label
 - Thought bubbles show real stdout/event snippets
 - Click agent → action popup (message, view session, stop, resume)
 - Particle bursts on task completion/error/start
-- Hooks: future petdex sprite integration (same tech as Hermes/Codex pets)
+- Hooks: petdex sprite integration (same tech as Hermes/Codex pets)
 - WebSocket: hub-server pushes every routed envelope to all browser clients
 
-**TUI** (ratatui, `hub-tui` binary):
+**TUI** (ratatui, `hub-tui` binary) — **planned, not implemented**:
 - Clean modern daily driver — keyboard-driven, not bloated
 - Live agent dashboard, sessions, wave status, message feed
 - Subscribes to NATS directly + uses query API for persistent data
+- Spec: `docs/TUI_PLAN.md`
 
-### Phase 5: Human bridges
+### Phase 5: Human bridges — **partial**
 
-Telegram, SMS, email, social media bridges. Each is a specialized `hub-worker`
-with a transport-specific `--execute` command.
+- **Shipped:** `telegram_bridge.py`, `discord_bridge.py` (standalone inbox adapters; dry-run without SDK tokens). See `docs/BRIDGES.md`.
+- **Not shipped:** SMS, Slack, Email, Postiz — copy the same bridge shape.
 
 ### Phase 6: Multi-project portability
 
 Package nats-hub as a portable crate dependency. Feature flags for storage
-backends. Documentation for embedding in other Rust projects.
+backends. Documentation for embedding in other Rust projects (`docs/PORTABILITY.md`).
+
+### Distributed teams + auth (cross-cutting, shipped July 2026)
+
+- NATS native WebSocket + remote adapter (`docs/REMOTE_AGENTS.md`)
+- Token/TLS on Python (`nats_connect`) and Rust (`HubConnectOptions` / env)
+- Operator/join docs: `docs/SECURITY.md`, `OPERATOR_HUB.md`, `JOIN_HUB.md`, `REMOTE_INSTALL.md`
+- Dogfood: `scripts/dogfood_token_auth.sh`, `scripts/dogfood_wss_tls.sh`
 
 ## What nats-hub is NOT
 

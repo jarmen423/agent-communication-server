@@ -334,8 +334,17 @@ deployments, add `--credentials-file`. The same flags work verbatim on
 
 ## Verified end-to-end flow
 
+Two automated dogfoods cover both transports:
+
+| Script | Transport | What it proves |
+|--------|-----------|----------------|
+| `scripts/dogfood_token_auth.sh` | `ws://` + token (split-auth: anonymous TCP for hub-server, token WS for adapter) | WS rejects tokenless; adapter joins; `hub-delegate` round-trip echoes |
+| `scripts/dogfood_wss_tls.sh` | `wss://` + CA + token (full-stack auth: hub-server + adapter both token-gated, TLS on WS) | Tokenless `wss` rejected; full `hub-delegate` → adapter echo over TLS |
+
+Manual flow (the underlying semantics both scripts exercise):
+
 1. NATS server starts with `websocket {}` block → port 8080
-2. `remote_agent_adapter.py` connects via `ws://localhost:8080`
+2. `remote_agent_adapter.py` connects via `ws[s]://<host>:8080` (+ `--token` / `--ca-file`)
 3. Delegator sends task to `hub.send.<channel>` with `to: remote-worker`
 4. Router routes to `channel.inbox.remote-worker`
 5. Adapter picks up task, runs backend, publishes result

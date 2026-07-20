@@ -1,7 +1,11 @@
 # hub-tui — Implementation Plan
 
-**Status:** Plan only (no code yet)  
+**Status:** Plan only (no code yet) — **not part of distributed-hub waves 1–3**  
 **Goal:** A ratatui-based **clean, modern daily driver** for nats-hub — keyboard-driven operations dashboard, not the arcade WebSocket visualizer.
+
+> Distributed auth, remote install, and bridges are already shipped. See  
+> `.planning/execution/ROADMAP.md` (COMPLETE) and `docs/SECURITY.md` / `JOIN_HUB.md`.  
+> This file remains the sole plan for the TUI surface until implementation starts.
 
 **Prerequisites:** `nats-server` + `hub-server` running with `--db-path` (query API requires persisted storage). `--ws-addr` is **not** required.
 

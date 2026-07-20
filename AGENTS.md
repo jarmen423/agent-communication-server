@@ -33,6 +33,7 @@ src/
 ├── lib.rs                    — module root, public API exports, doc comments
 ├── protocol.rs               — Envelope, Meta, MessageKind, subject conventions
 ├── client.rs                 — HubClient + AgentRegistry (in-memory cache)
+├── connect_opts.rs           — HubConnectOptions (token/creds/TLS) + env fallback
 ├── events/                   — structured progress events (MessageKind::Event)
 ├── wave/                     — wave validation + spawn orchestration
 ├── router.rs                 — ControlPlane (routing daemon, async DB mirror, WS bridge push)
@@ -63,6 +64,18 @@ src/
 
 Python workers: `worker_runtime.py`, `worker_events.py`, `worker_backends/`, `hub_worker.js`.
 Remote agents: `remote_agent_adapter.py` (WebSocket-connected workers for distributed teams).
+Auth helper (Python): `nats_connect.py` — shared token/TLS/creds connect used by all Python clients.
+
+## Distributed hub + auth (shipped)
+
+One central `nats-server` + `hub-server`; remote machines join as NATS **clients** over `ws://` or `wss://`.
+
+- Python clients: `nats_connect.py` (`--token`, `--user/--password`, `--ca-file`, `--credentials-file`, …; `NATS_*` env fallback)
+- Rust clients + hub-server: `HubConnectOptions::from_env` (same `NATS_*` env)
+- Docs: `docs/SECURITY.md`, `OPERATOR_HUB.md`, `JOIN_HUB.md`, `REMOTE_INSTALL.md`, `REMOTE_AGENTS.md`
+- Deploy: `deploy/systemd/*`, `config/nats-server.prod.conf.example`
+- Dogfood: `scripts/dogfood_token_auth.sh`, `scripts/dogfood_wss_tls.sh`
+- Execution archive: `.planning/execution/ROADMAP.md` (status COMPLETE)
 
 ## Key Types
 

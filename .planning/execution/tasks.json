@@ -1,91 +1,94 @@
 {
-  "wave_id": "wave-2-distributed-hub",
-  "goal": "Six pieces: Python auth/TLS, Rust auth, deploy/systemd, remote DX, dogfood, Discord bridge",
+  "wave_id": "wave-1-through-3-distributed-hub",
+  "status": "completed",
+  "closed": "2026-07-19",
+  "commits": ["cce1b7a", "357f8f3", "3849bdf"],
+  "note": "All distributed-hub readiness tasks complete. See ROADMAP.md. Living docs: docs/SECURITY.md, OPERATOR_HUB, JOIN_HUB, REMOTE_*. Handoffs are historical only.",
   "tasks": [
+    {
+      "task_id": "W1-A",
+      "title": "ACP HTTP transport abstraction",
+      "status": "completed",
+      "wave": "wave-1"
+    },
+    {
+      "task_id": "W1-B",
+      "title": "OpenCode ACP stdio backend",
+      "status": "completed",
+      "wave": "wave-1"
+    },
+    {
+      "task_id": "W1-C",
+      "title": "Kilo ACP HTTP backend",
+      "status": "completed",
+      "wave": "wave-1"
+    },
+    {
+      "task_id": "W1-D",
+      "title": "TLS + auth config for NATS WebSocket (docs/config only)",
+      "status": "completed",
+      "wave": "wave-1",
+      "superseded_client_gap_by": ["W2-A", "W2-B", "W3-A"]
+    },
     {
       "task_id": "W2-A",
       "title": "Python NATS connect auth/TLS",
       "status": "completed",
-      "wave": "wave-2a",
-      "owned": [
-        "nats_connect.py",
-        "worker_runtime.py",
-        "remote_agent_adapter.py",
-        "telegram_bridge.py",
-        "worker_supervisor.py",
-        "docs/REMOTE_AGENTS.md"
-      ],
-      "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2a-python-auth-tls.md"
+      "wave": "wave-2a"
     },
     {
       "task_id": "W2-B",
       "title": "Rust HubClient auth via ConnectOptions + env",
       "status": "completed",
-      "wave": "wave-2a",
-      "owned": [
-        "src/client.rs",
-        "tests/hub_connect_opts.rs"
-      ],
-      "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2b-rust-auth.md"
+      "wave": "wave-2a"
     },
     {
       "task_id": "W2-C",
       "title": "systemd units + prod NATS example + SECURITY/JOIN docs",
       "status": "completed",
-      "wave": "wave-2a",
-      "owned": [
-        "deploy/systemd/",
-        "config/nats-server.prod.conf.example",
-        "docs/SECURITY.md",
-        "docs/JOIN_HUB.md",
-        "docs/OPERATOR_HUB.md"
-      ],
-      "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2c-deploy-docs.md"
+      "wave": "wave-2a"
     },
     {
       "task_id": "W2-D",
       "title": "Remote install DX packaging",
       "status": "completed",
-      "wave": "wave-2b",
-      "owned": [
-        "packaging/remote/",
-        "requirements-remote.txt",
-        "docs/REMOTE_INSTALL.md"
-      ],
-      "depends_on": [
-        "W2-A"
-      ],
-      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2d-remote-dx.md"
+      "wave": "wave-2b"
     },
     {
       "task_id": "W2-E",
-      "title": "Token+WS dogfood scripts with evidence",
+      "title": "Token+WS dogfood scripts",
       "status": "completed",
-      "wave": "wave-2b",
-      "owned": [
-        "scripts/dogfood_token_auth.sh",
-        "scripts/dogfood_remote_ws.sh"
-      ],
-      "depends_on": [
-        "W2-A",
-        "W2-B"
-      ],
-      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2e-dogfood.md"
+      "wave": "wave-2b"
     },
     {
       "task_id": "W2-F",
-      "title": "Discord bridge (Phase 5 expansion)",
+      "title": "Discord bridge",
       "status": "completed",
-      "wave": "wave-2b",
-      "owned": [
-        "discord_bridge.py",
-        "docs/BRIDGES.md"
-      ],
-      "depends_on": [],
-      "handoff": ".planning/execution/handoffs/wave-2-distributed-hub/w2f-discord-bridge.md"
+      "wave": "wave-2b"
+    },
+    {
+      "task_id": "W3-A",
+      "title": "ControlPlane + ApiClient + query_api env auth",
+      "status": "completed",
+      "wave": "wave-3"
+    },
+    {
+      "task_id": "W3-B",
+      "title": "list_pending Surreal 2 fix",
+      "status": "completed",
+      "wave": "wave-3"
+    },
+    {
+      "task_id": "W3-C",
+      "title": "WSS TLS dogfood",
+      "status": "completed",
+      "wave": "wave-3"
+    },
+    {
+      "task_id": "W3-D",
+      "title": "README distributed hub section",
+      "status": "completed",
+      "wave": "wave-3"
     }
   ]
 }

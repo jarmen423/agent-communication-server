@@ -1,5 +1,11 @@
 # W2-E — Token auth + WebSocket remote adapter round-trip (local dogfood)
 
+> **Partial residual closed in W3:** Residual #1 (“hub-server does not thread token”)
+> was fixed in wave-3 (`ControlPlane` / query API / `ApiClient` use
+> `HubConnectOptions::from_env`). Full-stack token + `wss://` is proven by
+> `scripts/dogfood_wss_tls.sh`. This handoff remains valid as the **ws:// +
+> split-auth** dogfood design note.
+
 ## Outcome
 
 **PASS.** Self-contained bash dogfood proves the end-to-end round-trip:
@@ -114,29 +120,22 @@ script writes lives under `/data/tmp/nats-dogfood-*` and is `rm -rf`'d on exit.
 
 ## Residual risks / known gaps
 
-1. **hub-server daemon does not yet thread a token through to NATS.** W2-B
-   added auth support to `HubClient` and `HubConnectOptions`, but
-   `src/bin/hub_server.rs` → `ControlPlane::connect` (src/router.rs:77) still
-   calls raw `async_nats::connect(url)`, so the daemon cannot connect to a
-   server that requires a token on the TCP listener. The dogfood works around
-   this by using split-authorization (anonymous TCP + token-gated WS), which
-   is the realistic deployment pattern anyway. If/when the daemon gains
-   `--token` (one-line change: `connect_with_hub_opts(url, &HubConnectOptions::from_env())`),
-   the script can switch to a top-level `authorization { token: ... }` block
-   with no other changes.
+1. **~~hub-server daemon does not yet thread a token through to NATS.~~ CLOSED in W3.**
+   `ControlPlane::connect`, query API listener, and `ApiClient` all use
+   `HubConnectOptions::from_env()`. Set `NATS_TOKEN` (or user/creds) for the
+   hub process. See `scripts/dogfood_wss_tls.sh`.
 
 2. **Token is shared-secret, not per-agent.** The prod example in
-   `config/nats-server.conf` sketches `authorization { users = [...] }` with
+   `config/nats-server.prod.conf.example` sketches `authorization { users = [...] }` with
    per-agent credentials and `allowed_connection_types: ["WEBSOCKET"]`. The
    dogfood uses a single shared token for simplicity; the nats_connect +
    remote_agent_adapter surfaces already support `--user/--password`,
    `--credentials-file`, and `--nkeys-seed`, so upgrading to per-agent creds
    is a script-only change.
 
-3. **No TLS.** The dogfood uses `no_tls: true` on the WS listener because
-   this is a loopback test. The adapter's TLS path (`--ca-file`, wss://) is
-   exercised in W2-A's unit tests; a follow-up dogfood could add a
-   self-signed-cert variant.
+3. **~~No TLS.~~ Separate dogfood:** `scripts/dogfood_wss_tls.sh` covers
+   `wss://` + example CA. This script (`dogfood_token_auth.sh`) stays
+   loopback `ws://` + split-auth for a faster smoke path.
 
 4. **Shell backend only.** The round-trip uses `--backend shell --execute echo`.
    Named backends (kilo, opencode) are not exercised here; they have their

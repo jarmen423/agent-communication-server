@@ -1,5 +1,10 @@
 # W1-D — NATS WebSocket TLS and Authentication
 
+> **SUPERSEDED (client gap):** This handoff only added **commented server config + docs**.
+> Client token/TLS CLI was delivered in **W2-A** (`nats_connect.py`) and **W2-B/W3-A**
+> (Rust `HubConnectOptions` + hub-server/ApiClient). See `docs/REMOTE_AGENTS.md`
+> Authentication and `scripts/dogfood_wss_tls.sh`. Keep this file as historical evidence.
+
 ## Outcome
 
 Completed the owned configuration and documentation work without changing the
