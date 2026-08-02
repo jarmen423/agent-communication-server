@@ -78,6 +78,11 @@ name = "hub-stats"
 path = "src/bin/hub_stats.rs"
 required-features = ["storage-surreal"]
 
+[[bin]]
+name = "hub-tui"
+path = "src/bin/hub_tui.rs"
+required-features = ["storage-surreal", "tui"]
+
 # ── Library dependencies (what downstream crates pull in) ──────
 [dependencies]
 async-nats = "0.38"
@@ -98,6 +103,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # ── WebSocket bridge (for visualizer) ──────────────────────────
 tokio-tungstenite = "0.24"
 
+# ── TUI dashboard (optional, feature = "tui") ─────────────────
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+
 # ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
 
@@ -107,6 +116,7 @@ tempfile = "3"
 [features]
 default = ["storage-surreal"]
 storage-surreal = ["dep:surrealdb"]
+tui = ["dep:ratatui", "dep:crossterm"]
 # No-storage mode: pure NATS transport, no persistence layer.
 # Use this when embedding nats-hub as a messaging dependency
 # without needing SurrealDB (e.g. ephemeral agents, testing).

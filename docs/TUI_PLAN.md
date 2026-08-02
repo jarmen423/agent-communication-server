@@ -1,11 +1,22 @@
 # hub-tui — Implementation Plan
 
-**Status:** Plan only (no code yet) — **not part of distributed-hub waves 1–3**  
+**Status:** ✅ **v1 implemented & verified** (Phases 1–4 complete; Phases 5–6 stretch, not started)  
 **Goal:** A ratatui-based **clean, modern daily driver** for nats-hub — keyboard-driven operations dashboard, not the arcade WebSocket visualizer.
 
 > Distributed auth, remote install, and bridges are already shipped. See  
-> `.planning/execution/ROADMAP.md` (COMPLETE) and `docs/SECURITY.md` / `JOIN_HUB.md`.  
-> This file remains the sole plan for the TUI surface until implementation starts.
+> `.planning/execution/ROADMAP.md` (COMPLETE) and `docs/SECURITY.md` / `JOIN_HUB.md`.
+
+**Build & run:**
+
+```bash
+export CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats
+cargo build --bin hub-tui --features tui
+$CARGO_TARGET_DIR/debug/hub-tui            # needs nats-server + hub-server --db-path up
+```
+
+**Verified against live stack (2026-08-02):** agents render from `agent.find`, live
+messages hit the feed within 1s, `q` exits cleanly (code 0, terminal restored).
+18 unit tests in `src/tui/{model,handler}.rs`. All files ≤ 400 LOC.
 
 **Prerequisites:** `nats-server` + `hub-server` running with `--db-path` (query API requires persisted storage). `--ws-addr` is **not** required.
 
@@ -211,11 +222,13 @@ async fn refresh_snapshot(api: &ApiClient) -> Result<Snapshot> {
     let (ping, agents, sessions, waves, rate) = tokio::join!(
         api.request("ping", json!({})),
         api.request("agent.find", json!(AgentFilter::default().limit(200))),
-        api.request("session.list", json!(SessionFilter::new().status("active").limit(50))),
+        api.request("session.list", json!(SessionFilter::default().status("active").limit(50))),
         api.request("wave.list", json!({})),  // optional status filter
-        api.request("stats.message_rate", json!({"secs": 300, "interval_secs": 60})),
+        api.request("stats.message_rate", json!({"secs": 300, "interval": "minute"})),
     );
-    // deserialize into Snapshot
+    // NOTE: ApiClient::request returns `data` as Value; records are wrapped —
+    // unwrap data["agents"] / data["sessions"] / data["waves"] / data["data"]
+    // before deserializing into Snapshot
 }
 ```
 
@@ -233,7 +246,7 @@ async fn refresh_snapshot(api: &ApiClient) -> Result<Snapshot> {
 
 ## 4. Implementation phases
 
-### Phase 1 — Skeleton & wiring (MVP shell)
+### Phase 1 — Skeleton & wiring (MVP shell) ✅
 
 - Add dependencies + `hub-tui` binary + `tui` feature.
 - `hub_tui.rs`: terminal setup, empty `Paragraph` "connecting…", clean exit.
@@ -241,20 +254,20 @@ async fn refresh_snapshot(api: &ApiClient) -> Result<Snapshot> {
 - Unified loop: quit key, NATS messages counted but not displayed.
 - **Done when:** `CARGO_TARGET_DIR=... cargo run --bin hub-tui` runs against live stack without panic.
 
-### Phase 2 — Dashboard panels (read-only)
+### Phase 2 — Dashboard panels (read-only) ✅
 
 - Implement `Snapshot` refresh on interval + manual `r`.
 - Render Agents, Sessions, Waves tables from API.
 - Focus + selection navigation.
 - Footer: last refresh time, agent count.
 
-### Phase 3 — Live message feed
+### Phase 3 — Live message feed ✅
 
 - `VecDeque<FeedLine>` with cap; ingest all `channel.>` envelopes.
 - Feed panel scroll + `/` filter.
 - Merge live events into `AgentLiveState` for status column.
 
-### Phase 4 — Stats chrome & polish
+### Phase 4 — Stats chrome & polish ✅
 
 - Header: `stats.message_rate` sparkline or numeric msgs/min.
 - Stale/error banners; NATS reconnect.

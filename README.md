@@ -161,6 +161,7 @@ hub-thread pending --agent worker-1
 | `hub-watch` | Watch structured progress events in real time |
 | `hub-wave` | Parallel wave orchestration with merge gates |
 | `hub-thread` | View conversation threads and pending messages |
+| `hub-tui` | ratatui terminal dashboard — agents/sessions/waves + live feed (feature `tui`) |
 
 ## Embedding in Your Project
 

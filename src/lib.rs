@@ -73,6 +73,9 @@ pub mod storage;
 pub mod wave;
 pub mod ws_bridge;
 
+#[cfg(feature = "tui")]
+pub mod tui;
+
 // ── Public API: core types ────────────────────────────────────
 
 pub use client::{AgentInfo, AgentRegistry, HubClient};

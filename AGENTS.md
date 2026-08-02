@@ -60,6 +60,21 @@ src/
     ├── hub_wave.rs           — parallel wave orchestration with merge gates
     └── hub_thread.rs         — view conversation threads and pending messages
     └── hub_stats.rs          — observability/analytics CLI (Phase 4a: rates, latency, activity, hotspots, error rate)
+    └── hub_tui.rs            — ratatui terminal dashboard (feature = "tui")
+```
+
+TUI library modules (`src/tui/`, feature-gated behind `tui`):
+
+```
+src/tui/
+├── mod.rs        — run() entry + unified tokio::select! event loop
+├── app.rs        — App state (focus, selections, feed ring buffer, live map)
+├── model.rs      — AgentRow/FeedLine/PanelFocus/Snapshot + status-merge logic
+├── api.rs        — refresh_snapshot() batched query-API calls (tokio::join!)
+├── nats_live.rs  — spawn_live_listener() over HubClient::subscribe_all()
+├── event.rs      — AppEvent enum
+├── handler.rs    — apply_event() pure state transitions
+└── ui/           — ratatui renderers (layout, agents, sessions, waves, feed, chrome)
 ```
 
 Python workers: `worker_runtime.py`, `worker_events.py`, `worker_backends/`, `hub_worker.js`.
@@ -154,6 +169,7 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 | `hub-stats [--since DUR] [--agent ID] [--top-channels N] [--json]` | Analytics: rates, latency, activity, hotspots, error rate (Phase 4a) |
 | `hub-server --ws-addr ADDR --static-dir DIR` | WebSocket bridge + visualizer static files |
 | `hub-worker.js --type <cline\|agy\|hermes\|cursor> --identity <name>` | Universal worker (single CLI, all backend types) |
+| `hub-tui [--nats-url URL] [--refresh-secs N] [--alive-secs N] [--feed-cap N]` | ratatui terminal dashboard (feature `tui`) — agents/sessions/waves + live feed |
 
 ## Python workers (typed backends)
 
@@ -216,6 +232,7 @@ CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
 | `default` (includes `storage-surreal`) | SurrealDB persistence |
 | `storage-surreal` | SurrealDB with embedded RocksDB; also enables the `Analytics` trait + `hub-stats` (Phase 4a) |
 | `no-storage` | Pure NATS transport, no persistence; `hub-server --metrics-addr` (Phase 4b `MetricsCollector`) still available |
+| `tui` | ratatui + crossterm for the `hub-tui` terminal dashboard (off by default; library consumers don't pull TUI deps) |
 
 **Analytics layering**: the live `MetricsCollector` (Phase 4b) is always compiled and has no storage dependency — it works in `--features no-storage`. The historical `Analytics`/`SurrealAnalytics` trait (Phase 4a, `hub-stats`) lives behind `storage-surreal` since it reads persisted `envelopes`.
 
