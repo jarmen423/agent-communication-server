@@ -1,5 +1,10 @@
 # nats-hub — Architecture Decision: DB Access Pattern
 
+> **Status: ✅ Resolved.** Option A (query API over NATS) was implemented.
+> `hub-server` is the single DB owner; all CLI tools route queries through
+> `hub.api.>` request-reply subjects via `query_api.rs` / `query_api_client.rs`.
+> The RocksDB LOCK contention problem described below no longer applies.
+
 ## Problem
 
 SurrealDB with embedded RocksDB allows only **one process** to hold the LOCK

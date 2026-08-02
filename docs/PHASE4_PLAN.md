@@ -4,9 +4,9 @@
 
 | Sub-phase | Status | Deliverable |
 |---|---|---|
-| **4a** Analytics trait + `SurrealAnalytics` + `hub-stats` | 📋 Planned | `src/analytics/`, `hub-stats` CLI |
-| **4b** Prometheus metrics exporter | 📋 Planned | `MetricsCollector`, `hub-server --metrics-addr` |
-| **4c** DuckDB OLAP backend (optional) | 📋 Stretch | `DuckdbAnalytics` behind `analytics-duckdb` |
+| **4a** Analytics trait + `SurrealAnalytics` + `hub-stats` | ✅ Done | `src/analytics/`, `hub-stats` CLI |
+| **4b** Prometheus metrics exporter | ✅ Done | `MetricsCollector`, `hub-server --metrics-addr` |
+| **4c** DuckDB OLAP backend (optional) | 📋 Deferred | `DuckdbAnalytics` behind `analytics-duckdb` — trait is backend-agnostic; add when heavy analytical workloads appear |
 
 **Verification target:** `CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test` — all existing + new tests pass; `cargo build` clean.
 

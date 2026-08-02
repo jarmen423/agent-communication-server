@@ -412,10 +412,11 @@ Two surfaces for observing and steering agent work:
 - Hooks: petdex sprite integration (same tech as Hermes/Codex pets)
 - WebSocket: hub-server pushes every routed envelope to all browser clients
 
-**TUI** (ratatui, `hub-tui` binary) — **planned, not implemented**:
+**TUI** (ratatui, `hub-tui` binary) — **v1 shipped** (Phases 1–4 complete; Phases 5–6 stretch, not started):
 - Clean modern daily driver — keyboard-driven, not bloated
 - Live agent dashboard, sessions, wave status, message feed
 - Subscribes to NATS directly + uses query API for persistent data
+- Verified against live stack 2026-08-02; 18 unit tests in `src/tui/`
 - Spec: `docs/TUI_PLAN.md`
 
 ### Phase 5: Human bridges — **partial**
@@ -448,16 +449,20 @@ backends. Documentation for embedding in other Rust projects (`docs/PORTABILITY.
 - ❌ **Not a replacement for HTTP/gRPC** — it's for agent-to-agent and
   agent-to-human messaging, not for serving web requests.
 
-## File Layout (current + planned)
+## File Layout (current)
 
 ```
 src/
 ├── lib.rs                    — module root, re-exports
 ├── protocol.rs               — Envelope, Meta, MessageKind, subjects
 ├── client.rs                 — HubClient + AgentRegistry (in-memory cache)
+├── connect_opts.rs           — HubConnectOptions (token/creds/TLS) + env fallback
 ├── events/                   — structured progress events (Phase 3b)
 ├── wave/                     — wave validation + spawn orchestration (Phase 3c)
-├── router.rs                 — ControlPlane (routing daemon, async DB mirror)
+├── router.rs                 — ControlPlane (routing daemon, async DB mirror, WS bridge push)
+├── query_api.rs              — NATS request-reply API (hub.api.>) — DB ops routed through server
+├── query_api_client.rs       — ApiClient for CLI tools (avoids RocksDB lock contention)
+├── ws_bridge.rs              — WebSocket bridge + static file server (for visualizer)
 ├── storage/
 │   ├── mod.rs                — Storage trait + query types
 │   ├── surreal.rs            — SurrealStorage impl (embedded RocksDB)
@@ -467,8 +472,17 @@ src/
 │   ├── mod.rs                — Analytics trait (read-side peer to Storage)
 │   ├── surreal.rs            — SurrealAnalytics impl (reads envelopes history)
 │   └── metrics.rs            — MetricsCollector (atomic, hot-path-safe)
+├── tui/                      — ratatui terminal dashboard (feature = "tui")
+│   ├── mod.rs                — run() entry + unified tokio::select! event loop
+│   ├── app.rs                — App state (focus, selections, feed ring buffer, live map)
+│   ├── model.rs              — AgentRow/FeedLine/PanelFocus/Snapshot + status-merge logic
+│   ├── api.rs                — refresh_snapshot() batched query-API calls (tokio::join!)
+│   ├── nats_live.rs          — spawn_live_listener() over HubClient::subscribe_all()
+│   ├── event.rs              — AppEvent enum
+│   ├── handler.rs            — apply_event() pure state transitions
+│   └── ui/                   — ratatui renderers (layout, agents, sessions, waves, feed, chrome)
 └── bin/
-    ├── hub_server.rs         — runs the control plane router (daemon)
+    ├── hub_server.rs         — runs the control plane router (daemon, --db-path + --metrics-addr flags)
     ├── hub_publish.rs        — send a message on a channel (broadcast or --to DM)
     ├── hub_observe.rs        — watch messages on channels (read-only)
     ├── hub_interact.rs       — interactive REPL for human messaging
@@ -481,9 +495,14 @@ src/
     ├── hub_watch.rs          — watch structured progress events (Phase 3b)
     ├── hub_wave.rs           — parallel wave orchestration (Phase 3c)
     ├── hub_thread.rs         — view conversation threads + pending messages
-    └── hub_stats.rs          — observability / analytics CLI (Phase 4a)
+    ├── hub_stats.rs          — observability / analytics CLI (Phase 4a)
+    └── hub_tui.rs            — ratatui terminal dashboard (feature = "tui")
 
 worker_runtime.py             — shared Python worker (oneshot + session + wave)
 worker_events.py              — structured event publishing
 worker_backends/              — HeadlessCli, SdkAgent, AcpAgent backends
+telegram_bridge.py            — Telegram human bridge (Phase 5)
+discord_bridge.py             — Discord human bridge (Phase 5)
+remote_agent_adapter.py       — WebSocket remote agent adapter (distributed teams)
+nats_connect.py               — shared Python NATS connect helper (token/TLS/creds)
 ```
