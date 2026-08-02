@@ -126,7 +126,10 @@ async fn main() -> Result<()> {
     // Set up the WS bridge for the visualizer (browser can also publish commands).
     let ws_tx = nats_hub::ws_bridge::create_event_channel(1024);
     if let Some(ref ws_addr) = args.ws_addr {
-        let static_dir = args.static_dir.as_ref().map(|s| std::path::PathBuf::from(s));
+        let static_dir = args
+            .static_dir
+            .as_ref()
+            .map(|s| std::path::PathBuf::from(s));
         let ws_tx_clone = ws_tx.clone();
         let ws_addr_clone = ws_addr.clone();
         let nats_url = args.nats_url.clone();
@@ -169,7 +172,9 @@ async fn main() -> Result<()> {
             let api_storage = storage.clone();
             let api_nats = args.nats_url.clone();
             tokio::spawn(async move {
-                if let Err(e) = nats_hub::query_api::start_api_listener(api_storage, &api_nats).await {
+                if let Err(e) =
+                    nats_hub::query_api::start_api_listener(api_storage, &api_nats).await
+                {
                     eprintln!("[hub-server] query API error: {e}");
                 }
             });

@@ -363,10 +363,7 @@ async fn handle_client_command(client: &HubClient, text: &str) -> Result<String>
                 .get("provider")
                 .and_then(|t| t.as_str())
                 .context("list_models requires provider")?;
-            let refresh = v
-                .get("refresh")
-                .and_then(|t| t.as_bool())
-                .unwrap_or(false);
+            let refresh = v.get("refresh").and_then(|t| t.as_bool()).unwrap_or(false);
             match client
                 .request_json(
                     "hub.worker.models",
@@ -450,8 +447,14 @@ async fn handle_http(
         let mime = mime_type(&file_path);
         write_http_response(&mut stream, 200, "OK", mime, &content).await?;
     } else {
-        write_http_response(&mut stream, 404, "Not Found", "text/plain", b"404 Not Found")
-            .await?;
+        write_http_response(
+            &mut stream,
+            404,
+            "Not Found",
+            "text/plain",
+            b"404 Not Found",
+        )
+        .await?;
     }
 
     Ok(())
