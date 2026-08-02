@@ -17,6 +17,7 @@ from acp import (
     PromptRequest,
     LoadSessionRequest,
     spawn_stdio_connection,
+    text_block,
 )
 from acp.schema import (
     AgentMessageChunk,
@@ -81,31 +82,35 @@ class HermesAcpBackend:
             return None
 
         async def _observer(event) -> None:
-            """Collect streamed agent message chunks."""
+            """Collect streamed agent message chunks via session/update notifications."""
             msg = event.message
-            if isinstance(msg, dict):
-                method = msg.get("method", "")
-                params = msg.get("params", {})
+            if not isinstance(msg, dict):
+                return
+            method = msg.get("method", "")
+            params = msg.get("params", {})
 
-                # Agent message chunks (the actual response text)
-                if method == "agent/message":
-                    delta = params.get("delta", {})
-                    if isinstance(delta, dict) and "text" in delta:
-                        collected_chunks.append(delta["text"])
+            # New protocol: session/update notifications carry typed updates
+            if method == "session/update":
+                update = params.get("update", {})
+                update_type = update.get("sessionUpdate", "")
 
-                # Agent thought chunks (thinking/reasoning)
-                elif method == "agent/thought":
-                    delta = params.get("delta", {})
-                    if isinstance(delta, dict) and "text" in delta:
-                        # Log thinking but don't include in output
-                        logger.debug("[thinking] %s", delta["text"][:200])
+                if update_type == "agent_message_chunk":
+                    content = update.get("content", {})
+                    if isinstance(content, dict) and content.get("type") == "text":
+                        collected_chunks.append(content.get("text", ""))
+
+                elif update_type == "agent_thought_chunk":
+                    content = update.get("content", {})
+                    if isinstance(content, dict) and content.get("type") == "text":
+                        logger.debug("[thinking] %s", content.get("text", "")[:200])
 
         # Spawn the ACP server
         logger.info("[%s] spawning %s", self.log_label, " ".join(cmd))
 
         self._conn_ctx = spawn_stdio_connection(
-            handler=_handler,
-            *cmd,
+            _handler,
+            cmd[0],
+            *cmd[1:],
             cwd=self.cwd,
             observers=[_observer],
         )
@@ -144,8 +149,8 @@ class HermesAcpBackend:
             logger.info("[%s] resuming session %s", self.log_label, session_id[:12])
             try:
                 await self._send_request(
-                    "sessions/load",
-                    LoadSessionRequest(sessionId=session_id, cwd=self.cwd).model_dump(),
+                    "session/load",
+                    LoadSessionRequest(sessionId=session_id, cwd=self.cwd, mcpServers=[]).model_dump(by_alias=True),
                 )
             except Exception as e:
                 # Session may have expired or been cleaned up — create new
@@ -155,8 +160,8 @@ class HermesAcpBackend:
         if not session_id:
             # Create new session
             logger.info("[%s] creating new ACP session", self.log_label)
-            new_req = NewSessionRequest(cwd=self.cwd)
-            resp = await self._send_request("sessions/new", new_req.model_dump())
+            new_req = NewSessionRequest(cwd=self.cwd, mcpServers=[])
+            resp = await self._send_request("session/new", new_req.model_dump(by_alias=True))
             session_id = resp.get("sessionId") if isinstance(resp, dict) else getattr(resp, "session_id", None)
             if not session_id:
                 raise RuntimeError(f"No sessionId in new_session response: {resp}")
@@ -167,8 +172,8 @@ class HermesAcpBackend:
         if self.model and self.model != ctx.get("acp_model"):
             try:
                 await self._send_request(
-                    "sessions/set_model",
-                    {"sessionId": session_id, "model": self.model},
+                    "session/set_model",
+                    {"sessionId": session_id, "modelId": self.model},
                 )
                 ctx["acp_model"] = self.model
             except Exception:
@@ -182,11 +187,11 @@ class HermesAcpBackend:
         prompt_req = PromptRequest(
             messageId=msg_id,
             sessionId=session_id,
-            prompt=prompt,
+            prompt=[text_block(prompt)],
         )
 
         logger.info("[%s] prompt: %s", self.log_label, prompt[:80])
-        resp = await self._send_request("prompt", prompt_req.model_dump())
+        resp = await self._send_request("session/prompt", prompt_req.model_dump(by_alias=True))
 
         # Build the response text from collected chunks
         if self._collected:
