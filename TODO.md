@@ -1,3 +1,10 @@
+[ ] For all configured subagent providers/models:
+- MCP tool shows the orchestrator model or human user which are active and pass a test (e.g., have credits left and are usable) before they choose
+
+[ ] Automated check - broadcast when an agent is actively working on a file
+- when agent goes to work on file being actively worked on gets notification
+- wait until signal is gone. 
+
 [ ] Incorporate concepts from jarmen423/checklist-ledger AND
     jarmen423/skills/my-created-skills/wave-execution
     - need to think about best method of incorporation?
