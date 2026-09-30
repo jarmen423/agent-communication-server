@@ -3,16 +3,27 @@
 //! Split from `surreal.rs` to keep files under 400 LOC. Implements the
 //! message-history and conversation-threading methods of the `Storage`
 //! trait on `SurrealStorage`.
+//!
+//! Reply links use the stored `reply_to` *field* (the parent's raw message
+//! id, indexed by `idx_env_reply_to`). The `reply_to` graph edge is still
+//! written for graph queries, but Surreal 2.x inbound traversal
+//! (`<-reply_to<-envelopes`) does not reliably match, so reads don't use it.
+
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb::RecordId;
 use tracing::{debug, warn};
 
 use crate::protocol::Envelope;
+use crate::storage::dbtime::{db_time, DbTime};
 use crate::storage::surreal::Db;
 use crate::storage::{EnvelopeRecord, HistoryQuery};
+
+/// Columns selected for every envelope read.
+const COLUMNS: &str =
+    "id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at";
 
 /// Internal row type for envelopes table (without ID — ID is the record key).
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,51 +31,57 @@ struct EnvelopeRow {
     from_identity: String,
     channel: String,
     to_identity: Option<String>,
-    timestamp: DateTime<Utc>,
+    timestamp: DbTime,
     kind: String,
     reply_to: Option<String>,
     payload: serde_json::Value,
-    stored_at: DateTime<Utc>,
+    stored_at: DbTime,
 }
 
 /// Row type that includes the record ID (for queries that return it).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct EnvelopeRowWithId {
     id: RecordId,
     from_identity: String,
     channel: String,
+    #[serde(default)]
     to_identity: Option<String>,
-    timestamp: DateTime<Utc>,
+    timestamp: DbTime,
     kind: String,
+    #[serde(default)]
     reply_to: Option<String>,
+    #[serde(default)]
     payload: serde_json::Value,
-    stored_at: DateTime<Utc>,
+    stored_at: DbTime,
 }
 
 impl EnvelopeRowWithId {
+    /// The raw message id (`meta.id`), i.e. the record key without the
+    /// `envelopes:` table prefix or SurrealDB quoting.
+    fn key(&self) -> String {
+        String::try_from(self.id.key().clone())
+            .unwrap_or_else(|_| self.id.key().to_string().trim_matches('`').to_string())
+    }
+
     fn into_record(self) -> EnvelopeRecord {
         EnvelopeRecord {
             id: self.id.to_string(),
             from_identity: self.from_identity,
             channel: self.channel,
             to_identity: self.to_identity,
-            timestamp: self.timestamp,
+            timestamp: self.timestamp.into(),
             kind: self.kind,
             reply_to: self.reply_to,
             payload: self.payload,
-            stored_at: self.stored_at,
+            stored_at: self.stored_at.into(),
         }
     }
 }
 
-/// Strip Surreal record id form (`envelopes:uuid` / backticks) down to the
-/// raw uuid string stored in `meta.id` / `reply_to`.
-fn raw_envelope_id(id: &str) -> String {
-    let s = id.trim().trim_matches('`');
-    s.strip_prefix("envelopes:")
-        .unwrap_or(s)
-        .trim_matches('`')
-        .to_string()
+fn into_records(rows: Vec<EnvelopeRowWithId>) -> Vec<EnvelopeRecord> {
+    rows.into_iter()
+        .map(EnvelopeRowWithId::into_record)
+        .collect()
 }
 
 // ── Message History ─────────────────────────────────────────
@@ -77,11 +94,11 @@ pub async fn store_envelope(db: &Db, env: &Envelope) -> Result<()> {
         from_identity: record.from_identity,
         channel: record.channel,
         to_identity: record.to_identity,
-        timestamp: record.timestamp,
+        timestamp: db_time(record.timestamp),
         kind: record.kind,
         reply_to: record.reply_to,
         payload: record.payload,
-        stored_at: record.stored_at,
+        stored_at: db_time(record.stored_at),
     };
 
     let _: Option<EnvelopeRow> = db
@@ -103,7 +120,7 @@ pub async fn store_envelope(db: &Db, env: &Envelope) -> Result<()> {
 pub async fn query_history(db: &Db, q: &HistoryQuery) -> Result<Vec<EnvelopeRecord>> {
     debug!(?q, "querying history");
 
-    let mut query = String::from("SELECT * FROM envelopes");
+    let mut query = format!("SELECT {COLUMNS} FROM envelopes");
     let mut conditions: Vec<String> = vec![];
 
     if q.channel.is_some() {
@@ -151,32 +168,31 @@ pub async fn query_history(db: &Db, q: &HistoryQuery) -> Result<Vec<EnvelopeReco
         q_builder = q_builder.bind(("kind", kind.clone()));
     }
     if let Some(since) = q.since {
-        q_builder = q_builder.bind(("since", since));
+        q_builder = q_builder.bind(("since", db_time(since)));
     }
     if let Some(until) = q.until {
-        q_builder = q_builder.bind(("until", until));
+        q_builder = q_builder.bind(("until", db_time(until)));
     }
 
-    let rows: Vec<EnvelopeRowWithId> = q_builder.await?.take(0)?;
-    Ok(rows
-        .into_iter()
-        .map(EnvelopeRowWithId::into_record)
-        .collect())
+    let rows: Vec<EnvelopeRowWithId> = q_builder.await?.check()?.take(0)?;
+    Ok(into_records(rows))
 }
 
 pub async fn get_envelope(db: &Db, id: &str) -> Result<Option<EnvelopeRecord>> {
     debug!(%id, "getting envelope");
 
-    let mut result = db
-        .query("SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at FROM type::thing('envelopes', $id)")
+    let rows: Vec<EnvelopeRowWithId> = db
+        .query(format!(
+            "SELECT {COLUMNS} FROM type::thing('envelopes', $id)"
+        ))
         .bind(("id", id.to_string()))
-        .await?;
-
-    let rows: Vec<EnvelopeRowWithId> = result.take(0)?;
+        .await?
+        .check()?
+        .take(0)?;
     Ok(rows.into_iter().next().map(EnvelopeRowWithId::into_record))
 }
 
-// ── Conversation Threading (graph) ──────────────────────────
+// ── Conversation Threading ──────────────────────────────────
 
 pub async fn link_reply(db: &Db, reply_id: &str, parent_id: &str) -> Result<()> {
     debug!(%reply_id, %parent_id, "linking reply edge");
@@ -196,63 +212,97 @@ pub async fn link_reply(db: &Db, reply_id: &str, parent_id: &str) -> Result<()> 
     Ok(())
 }
 
-pub async fn get_thread(db: &Db, root_id: &str) -> Result<Vec<EnvelopeRecord>> {
-    debug!(%root_id, "fetching thread (graph traversal)");
+/// Full reply tree under `root_id`, breadth-first: the root (if stored)
+/// first, then each level of replies in timestamp order. Walks at most
+/// `max_depth` levels of replies and returns at most `limit` envelopes
+/// (`None` = unbounded). Each level is one indexed `reply_to IN $ids` query.
+pub async fn get_thread(
+    db: &Db,
+    root_id: &str,
+    max_depth: usize,
+    limit: Option<usize>,
+) -> Result<Vec<EnvelopeRecord>> {
+    debug!(%root_id, max_depth, ?limit, "fetching thread");
+    if limit == Some(0) {
+        return Ok(vec![]);
+    }
 
-    // Get root + all envelopes that have reply_to = root_id
-    // (Simpler than graph traversal, works reliably in v2)
-    let mut result = db
-        .query(
-            "SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
-             FROM type::thing('envelopes', $root); \
-             SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
-             FROM envelopes WHERE reply_to = $root"
-        )
+    let mut out: Vec<EnvelopeRowWithId> = db
+        .query(format!(
+            "SELECT {COLUMNS} FROM type::thing('envelopes', $root)"
+        ))
         .bind(("root", root_id.to_string()))
-        .await?;
+        .await?
+        .check()?
+        .take(0)?;
 
-    let root_rows: Vec<EnvelopeRowWithId> = result.take(0)?;
-    let reply_rows: Vec<EnvelopeRowWithId> = result.take(1)?;
+    let mut seen: HashSet<String> = HashSet::from([root_id.to_string()]);
+    let mut frontier: Vec<String> = vec![root_id.to_string()];
 
-    let mut rows = root_rows;
-    rows.extend(reply_rows);
+    for _ in 0..max_depth {
+        let remaining = limit.map(|l| l.saturating_sub(out.len()));
+        if frontier.is_empty() || remaining == Some(0) {
+            break;
+        }
+        let mut sql = format!(
+            "SELECT {COLUMNS} FROM envelopes WHERE reply_to IN $ids ORDER BY timestamp ASC"
+        );
+        if let Some(remaining) = remaining {
+            sql.push_str(&format!(" LIMIT {remaining}"));
+        }
+        let level: Vec<EnvelopeRowWithId> = db
+            .query(sql)
+            .bind(("ids", std::mem::take(&mut frontier)))
+            .await?
+            .check()?
+            .take(0)?;
 
-    Ok(rows
-        .into_iter()
-        .map(EnvelopeRowWithId::into_record)
-        .collect())
+        for row in level {
+            let key = row.key();
+            // `seen` guards against cycles (a reply_to pointing back up).
+            if seen.insert(key.clone()) {
+                frontier.push(key);
+                out.push(row);
+            }
+        }
+    }
+
+    if let Some(limit) = limit {
+        out.truncate(limit);
+    }
+    Ok(into_records(out))
 }
 
-pub async fn list_pending(db: &Db, identity: &str) -> Result<Vec<EnvelopeRecord>> {
-    debug!(%identity, "listing pending messages");
+/// Envelopes addressed to `identity` (`kind` message or human) that have no
+/// `kind = message` reply pointing at them via `reply_to`. Progress
+/// (`status`/`event`) envelopes don't count as answers. Newest first.
+///
+/// A single query: the correlated subquery is an indexed lookup on
+/// `reply_to` (`idx_env_reply_to`), the outer filter uses `idx_env_to`.
+pub async fn list_pending(
+    db: &Db,
+    identity: &str,
+    limit: Option<usize>,
+) -> Result<Vec<EnvelopeRecord>> {
+    debug!(%identity, ?limit, "listing pending messages");
 
-    // Surreal 2.x graph inbound `<-reply_to<-envelopes IS NONE` does not
-    // reliably match unreplied rows (returns empty). Match get_thread():
-    // use the stored reply_to *field* (raw uuid string) instead of graph.
-    let mut result = db
-        .query(
-            "SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
-             FROM envelopes \
-             WHERE to_identity = $identity; \
-             SELECT VALUE reply_to FROM envelopes WHERE reply_to IS NOT NONE",
-        )
+    let mut sql = format!(
+        "SELECT {COLUMNS} FROM envelopes \
+         WHERE to_identity = $identity \
+           AND kind IN ['message', 'human'] \
+           AND array::len((SELECT VALUE id FROM envelopes \
+                 WHERE reply_to = record::id($parent.id) AND kind = 'message' LIMIT 1)) = 0 \
+         ORDER BY timestamp DESC"
+    );
+    if let Some(limit) = limit {
+        sql.push_str(&format!(" LIMIT {limit}"));
+    }
+
+    let rows: Vec<EnvelopeRowWithId> = db
+        .query(sql)
         .bind(("identity", identity.to_string()))
-        .await?;
-
-    let rows: Vec<EnvelopeRowWithId> = result.take(0)?;
-    let answered: Vec<Option<String>> = result.take(1).unwrap_or_default();
-    let answered: std::collections::HashSet<String> = answered
-        .into_iter()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    Ok(rows
-        .into_iter()
-        .filter(|r| {
-            let raw = raw_envelope_id(&r.id.to_string());
-            !answered.contains(&raw)
-        })
-        .map(EnvelopeRowWithId::into_record)
-        .collect())
+        .await?
+        .check()?
+        .take(0)?;
+    Ok(into_records(rows))
 }

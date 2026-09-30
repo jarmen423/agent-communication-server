@@ -21,11 +21,12 @@ use crate::protocol::Envelope;
 use crate::storage::{agents, envelopes, schema, session, wave};
 use crate::storage::{
     AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
-    WaveRecord, WaveTaskRecord,
+    WaveRecord, WaveTaskRecord, MAX_THREAD_DEPTH,
 };
 
-/// Embedded SurrealDB handle used by all storage submodules.
-pub(crate) type Db = Surreal<surrealdb::engine::local::Db>;
+/// Embedded SurrealDB client handle (what [`SurrealStorage::from_client`]
+/// takes, and what every storage submodule queries through).
+pub type Db = Surreal<surrealdb::engine::local::Db>;
 
 /// SurrealDB-backed storage. Embedded RocksDB, zero-config.
 /// In v2, `Surreal::new::<RocksDb>(path)` returns `Surreal<Db>`.
@@ -46,6 +47,14 @@ impl SurrealStorage {
         db.use_ns("nats_hub").use_db("messaging").await?;
 
         info!(%path, "SurrealDB connected");
+        Ok(Self { db })
+    }
+
+    /// Wrap an existing embedded SurrealDB client (selects the `nats_hub`
+    /// namespace and `messaging` database on it). Useful for sharing one
+    /// connection, and for tests that need to seed raw rows.
+    pub async fn from_client(db: Db) -> Result<Self> {
+        db.use_ns("nats_hub").use_db("messaging").await?;
         Ok(Self { db })
     }
 
@@ -106,11 +115,28 @@ impl Storage for SurrealStorage {
     }
 
     async fn get_thread(&self, root_id: &str) -> Result<Vec<EnvelopeRecord>> {
-        envelopes::get_thread(&self.db, root_id).await
+        envelopes::get_thread(&self.db, root_id, MAX_THREAD_DEPTH, None).await
+    }
+
+    async fn get_thread_bounded(
+        &self,
+        root_id: &str,
+        max_depth: usize,
+        limit: usize,
+    ) -> Result<Vec<EnvelopeRecord>> {
+        envelopes::get_thread(&self.db, root_id, max_depth, Some(limit)).await
     }
 
     async fn list_pending(&self, identity: &str) -> Result<Vec<EnvelopeRecord>> {
-        envelopes::list_pending(&self.db, identity).await
+        envelopes::list_pending(&self.db, identity, None).await
+    }
+
+    async fn list_pending_bounded(
+        &self,
+        identity: &str,
+        limit: usize,
+    ) -> Result<Vec<EnvelopeRecord>> {
+        envelopes::list_pending(&self.db, identity, Some(limit)).await
     }
 
     // ── Sessions ─────────────────────────────────────────────
