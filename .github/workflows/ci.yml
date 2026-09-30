@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]   # every branch: task branches are verified by CI before a local merge
   pull_request:
 
 concurrency:

@@ -131,7 +131,8 @@ lists which agent CLIs it can find. See `docs/WORKER_BACKENDS.md`.
 
 - Read `AGENTS.md` (architecture, conventions) and `refocus.md` (current sprint,
   **write-scope ownership**, and the reply contract in §6).
-- Branch per task (`refocus/<id>-<slug>`) and open a PR against `main`.
+- Branch per task (`refocus/<id>-<slug>`). Push the branch so CI runs on it, then merge
+  into `main` once it's verified. This is a solo repo: GitHub PRs are optional.
 - Keep files under about 400 LOC. Async everywhere (tokio / asyncio). No blocking calls.
 - Before pushing: `make lint && make test`.
 - Never commit machine-specific paths (`/home/<you>`, custom target dirs).
