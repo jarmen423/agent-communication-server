@@ -59,12 +59,30 @@ make lint         # cargo fmt --check + clippy
 | `.tools/run/` | `make up` state: DB, JetStream, logs (`make clean-run` wipes it) | ignored |
 | `.venv/` | Python venv | ignored |
 
-**Disk:** a full debug build plus tests is about 10–30 GB. If your root disk is
-tight, point cargo somewhere bigger. The scripts respect it:
+### Build cache and disk (read this if you use worktrees)
 
-```bash
-export CARGO_TARGET_DIR=/big/disk/cargo-targets/nats-hub
-```
+- **One target dir per checkout or worktree.** The default is `./target`,
+  which is the right choice. Never point two clones or worktrees at the same
+  `CARGO_TARGET_DIR`: the crate's own artifacts collide, and cargo can silently
+  link and test the *other* checkout's code.
+- **Dependencies are shared through a compile cache instead.** If
+  [kache](https://crates.io/crates/kache) (preferred; it also caches the RocksDB
+  C++ build via `kache install-shims`) or `sccache` is on `PATH`, every `make`
+  target and `scripts/dev/*` script sets `RUSTC_WRAPPER` automatically. A new
+  worktree then reuses SurrealDB, RocksDB, tokio and the rest from the cache,
+  and only compiles nats-hub itself. Opt out with `NATS_HUB_NO_BUILD_CACHE=1`.
+
+  ```bash
+  cargo install kache && kache install-shims   # one-time, per machine
+  ```
+
+- **Artifacts are slim.** Dependencies build without debuginfo, and our code
+  keeps line tables only (`[profile.dev]` in `Cargo.toml`). Backtraces still
+  show file:line.
+- **Clean up after yourself.** `make prune` removes git worktrees that are
+  merged into `origin/main`, along with their `target/`, and garbage-collects
+  the shared cache. `make clean` wipes this checkout's target dir.
+  `scripts/dev/prune.sh --dry-run` shows what would go.
 
 ## 3. How tests work
 

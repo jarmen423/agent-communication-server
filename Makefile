@@ -7,7 +7,7 @@ DEV   := scripts/dev
 ENV   := source $(DEV)/lib.sh &&
 PY    := .venv/bin/python
 
-.PHONY: help doctor setup setup-extras setup-js build build-release test test-rust test-py lint fmt up clean-run
+.PHONY: help doctor setup setup-extras setup-js build build-release test test-rust test-py lint fmt up clean-run clean prune
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -49,3 +49,10 @@ up: ## Local stack: nats-server + hub-server + visualizer + 2 echo workers (Ctrl
 
 clean-run: ## Delete local dev-stack state (.tools/run: DB, JetStream, logs)
 	rm -rf .tools/run
+
+clean: ## cargo clean for THIS checkout's target dir
+	@$(ENV) cargo clean
+
+prune: ## Remove merged git worktrees (+ their target dirs) and GC the shared build cache
+	@$(DEV)/prune.sh
+
