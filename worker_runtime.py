@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -83,6 +84,23 @@ def extract_prompt(payload: dict) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def install_stop_signals(task: asyncio.Task) -> None:
+    """SIGTERM/SIGHUP → cancel ``task`` so run_worker closes NATS cleanly.
+
+    Skipped for any signal that already has a handler, so an entrypoint that
+    installs its own (e.g. forwarding to CLI process groups) keeps it.
+    """
+    loop = asyncio.get_running_loop()
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None or signal.getsignal(sig) is not signal.SIG_DFL:
+            continue
+        try:
+            loop.add_signal_handler(sig, task.cancel)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass  # non-main thread or unsupported platform
 
 
 def is_task_result(payload: dict) -> bool:
@@ -325,6 +343,9 @@ async def run_worker(cfg: WorkerConfig) -> None:
     await send_heartbeat()
     await nc.flush()
     heartbeat_task = asyncio.create_task(heartbeat_loop())
+    current = asyncio.current_task()
+    if current is not None:
+        install_stop_signals(current)
     print(f"[{log}] ready")
 
     try:
