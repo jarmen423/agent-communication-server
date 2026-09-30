@@ -6,10 +6,34 @@ All workers use **`worker_runtime.run_worker()`** (NATS inbox, hub-delegate, hub
 
 | Type | Module | Mechanism |
 |------|----------|-----------|
-| **HeadlessCli** | `worker_backends/headless_cli.py` | Subprocess, prompt on argv/stdin; supports resume/continue |
+| **HeadlessCli** | `worker_backends/headless_cli.py` | Subprocess per turn, prompt on argv; supports resume/continue and streaming (stream-json / JSONL) parsers |
 | **SdkAgent** | `worker_backends/sdk_agent.py` | In-process SDK; blocking calls run in thread pool |
-| **AcpAgent** | `worker_backends/acp_agent.py` | Protocol transport when stdio/HTTP/WebSocket ACP is available |
+| **AcpAgent** | `worker_backends/acp_agent.py`, `acp_stdio.py` | Long-lived ACP agent over JSON-RPC (stdio: grok, opencode; HTTP: kilo) |
 | **$ExecCli** | one-off Rust `hub-worker --execute` | Stdin prompt; one-shot unless the command is session-aware |
+
+The Claude Code and Codex workers are HeadlessCli subclasses
+(`worker_backends/claude_code.py`, `worker_backends/codex_cli.py`); see
+[Claude Code](#claude-code) and [Codex](#codex) below.
+
+## Process safety (all subprocess backends)
+
+Shared plumbing lives in `worker_backends/proc.py`:
+
+| Guarantee | Detail |
+|---|---|
+| Timeout | Every HeadlessCli turn has a limit (default **900 s**; `--timeout-secs` on the claude/codex/grok workers). |
+| No orphans | The CLI runs in its own process group. On timeout or cancellation the whole group gets SIGTERM, then SIGKILL, and is reaped before the error is raised. |
+| Worker shutdown | Worker entrypoints call `install_worker_signal_handlers()`: SIGTERM/SIGHUP is forwarded to every live CLI group, and an `atexit` hook SIGKILLs anything left. (The supervisor's `killpg` of the worker does not reach the CLI's separate group on its own.) |
+| Exit codes | A non-zero exit is always an error, with a stderr tail in the message, even if stdout was produced. |
+| Pipes | stderr is drained concurrently into a bounded tail buffer. stdout is read in chunks (no 64 KiB line limit) and streamed line by line to the backend's parser. |
+| `--` | `HeadlessCliSpec(end_of_options=True)` puts `--` before a positional prompt, so a prompt that starts with `-` is never parsed as a flag (claude, codex, kilo, opencode). |
+
+ACP stdio backends (`worker_backends/acp_stdio.py`, used by `grok_acp.py` and `opencode_acp.py`):
+
+- stderr is drained into a bounded buffer and quoted in errors when the agent dies.
+- The client advertises **no** `fs`/`terminal` capabilities, and any agent→client request it doesn't implement gets JSON-RPC `-32601`.
+- `session/request_permission` is answered by picking from the offered `options` **by kind**, per `permission_policy` (`allow_once` | `allow_always` | `reject`; `--permission-policy` on the ACP workers, default `allow_always`). If nothing matches, the answer is `cancelled`.
+- When stdout hits EOF, the backend is marked dead and pending requests fail with the stderr tail. The next turn restarts the agent and opens a fresh session, because sessions from the dead process are not reused.
 
 ## Runtime modes
 
@@ -50,6 +74,10 @@ See `worker_backends/presets.py`:
 ## Starting a worker
 
 ```bash
+# Claude Code / Codex (see sections below)
+.venv/bin/python claude_worker.py --identity claude-1 --repo /path/to/repo
+.venv/bin/python codex_worker.py  --identity codex-1  --repo /path/to/repo
+
 # Python (any backend)
 python3 cursor_worker.py --identity cursor-worker-1 --repo /path/to/repo
 python3 hermes_acp_worker.py --identity hermes-worker-1
@@ -89,7 +117,9 @@ browser  →  WS list_models {provider}
 | `opencode`, `opencode-acp` | `opencode models` |
 | `cursor` | `agent models` (or `cursor-agent models`) |
 | `agy` | `agy models` |
-| `hermes`, `grok`, `claude`, `codex` | no stable list yet → empty + **Other…** |
+| `claude` | static list of `claude --model` aliases (`opus`, `sonnet`, `haiku`, `fable`); full names via **Other…** |
+| `codex` | `codex debug models` (JSON; hidden entries skipped) |
+| `hermes`, `grok` | no stable list yet → empty + **Other…** |
 | `echo` | static empty (ignores models) |
 
 ### Add / configure a future provider
@@ -111,6 +141,7 @@ Edit `config/provider_models.json` (merged over built-ins):
 
 `kind` options:
 - `cli` — run a command; parsers: `plain_ids`, `id_dash_label`, `plain_lines`
+  (plus `codex_models_json` for the `codex debug models` catalog)
 - `static` — embed `models: [{value,label}, ...]`
 - `none` — empty list with a `reason` string for the UI
 
@@ -133,6 +164,93 @@ python3 -c "import asyncio; from worker_backends.model_catalog import list_model
 Operator reference for configuring each supported agent CLI. Covers model
 strings, auth requirements, and CLI-specific quirks discovered during
 integration testing.
+
+### Claude Code
+
+**Binary:** `claude` (Claude Code CLI, checked against v2.1.x). Authenticate once with `claude auth` (or `ANTHROPIC_API_KEY`).
+
+**Worker:** `claude_worker.py` → `worker_backends/claude_code.py`. Each turn runs:
+
+```
+claude -p --output-format stream-json --verbose --permission-mode <mode> \
+       [--model M] [--allowed-tools=T1,T2] [--resume <session_id>] -- <prompt>
+```
+
+with cwd = `--repo`. The `session_id` comes from the stream (`system/init` or
+`result`) and is stored in the hub-session ctx (`claude_session_id`), so later
+turns of a `hub-session` continue the same Claude conversation. One-shot
+delegations always start fresh.
+
+Stream-json handling: `assistant` text blocks become `progress` events
+(`phase: message`), `thinking` becomes `phase: thinking`, and `tool_use`
+becomes `phase: tool`. The task result is the `result` event's text.
+`is_error: true` or an `error_*` subtype fails the task, as does a non-zero exit.
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--repo` | cwd | working directory for `claude` |
+| `--model` | CLI default | alias (`opus`, `sonnet`, `haiku`, `fable`) or full model name |
+| `--permission-mode` | `acceptEdits` | `acceptEdits`, `auto`, `manual`, `dontAsk`, `plan` |
+| `--dangerously-skip-permissions` | off | the **only** way to get `bypassPermissions`; sandboxes only |
+| `--allowed-tools` | none | comma list, e.g. `"Read,Edit,Bash(git *)"` (passed as `--allowed-tools=…` because the flag is variadic) |
+| `--timeout-secs` | 900 | per turn; the claude process group is killed on timeout |
+| `--claude-bin` | `$CLAUDE_BIN` or `claude` | |
+
+**Safety defaults:** `acceptEdits` auto-approves file edits in `--repo`, but
+not arbitrary shell commands. The worker runs headless with no permission-prompt
+host, so tool calls that would need approval are not auto-approved. Grant them
+explicitly with `--allowed-tools`. `bypassPermissions` via `--permission-mode`
+is refused.
+
+```bash
+.venv/bin/python claude_worker.py --identity claude-1 --repo ~/code/project --model sonnet
+```
+
+### Codex
+
+**Binary:** `codex` (Codex CLI, checked against v0.159). Log in with `codex login`.
+
+**Worker:** `codex_worker.py` → `worker_backends/codex_cli.py`. Turns run:
+
+```
+first turn:   codex exec --json -C <repo> -s <sandbox> [-m M] -o <tmpfile> -- <prompt>
+session turn: codex exec resume --json -c sandbox_mode="<sandbox>" [-m M] -o <tmpfile> -- <thread_id> <prompt>
+```
+
+`codex exec resume` accepts neither `-C` nor `-s`, so session turns run with cwd
+= `--repo` and set the sandbox through a config override. The `thread_id` comes
+from `thread.started` and is stored as `codex_thread_id`.
+
+JSONL handling: `reasoning` items become `phase: thinking`, while
+`command_execution`, `file_change`, `mcp_tool_call` and `web_search` become
+`phase: tool`, and a completed `agent_message` becomes `phase: message`. The
+result is the last `agent_message`, with the `-o` last-message file as a
+fallback. `turn.failed`, a non-zero exit, or no final message fails the task.
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--repo` | cwd | Codex working root |
+| `--model` | CLI default | a slug from `codex debug models` |
+| `--sandbox` / `-s` | `workspace-write` | `read-only`, `workspace-write`, `danger-full-access` |
+| `--skip-git-repo-check` | off | needed when `--repo` is not a git repo |
+| `--dangerously-bypass-approvals-and-sandbox` | off | the **only** way to drop sandbox + approvals; externally sandboxed hosts only |
+| `--timeout-secs` | 900 | per turn; the codex process group is killed on timeout |
+| `--codex-bin` | `$CODEX_BIN` or `codex` | |
+
+```bash
+.venv/bin/python codex_worker.py --identity codex-1 --repo ~/code/project
+```
+
+### Supervisor (`worker_supervisor.py`)
+
+`hub.worker.ensure {identity, provider, model?}` spawns the worker for a
+provider (`claude` → `claude_worker.py`, `codex` → `codex_worker.py`, …; there
+is no silent echo fallback).
+
+- **Logs:** each child's stdout+stderr is appended to `.tools/run/workers/<identity>.log` (`--log-dir`). A failed ensure includes a log tail.
+- **Ready:** when the runtime logs its inbox subscription, or on the first `hub.presence` heartbeat, whichever comes first. Heartbeats only start after 30 s. A worker that exits during start is reported as `ok: false`.
+- **Restarts:** a crashed child restarts with exponential backoff (1 s, 2 s, 4 s, … ≤ 30 s), at most `--max-restarts` (default 5) per 5 minutes, then it is abandoned (logged).
+- **Shutdown:** SIGINT/SIGTERM/SIGHUP SIGTERM every child's process group, then SIGKILL after 5 s. `hub.worker.stop` does the same for one child.
 
 ### Kilo
 
