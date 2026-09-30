@@ -6,6 +6,16 @@
 
 ## 1. TL;DR
 
+> **Sprint outcome (2026-09-30): complete.** Every task (S0, L1–L3, R1–R2, the
+> R1/R2 review follow-ups, and the build-cache work) is merged to `main`. CI on
+> the combined `main` is green: **155 Rust tests and 93 Python tests, 0
+> failures**. The goal works end to end: an orchestrator (Claude Code via the
+> MCP plugin) delegates to a real Claude Code or Codex worker through an
+> authenticated bridge, gets the result back under one reply contract, and a
+> human can watch it. The two big remaining gaps are **durable delivery**
+> (JetStream) and **identity bound to credentials**. See §3 (before/after) and
+> §7 (next sprint).
+
 Between Jun 29 and Aug 2 2026 (52 commits) we built very widely: transport,
 persistence, sessions, waves, events, analytics, metrics, a TUI, an arcade
 visualizer, about 14 worker entrypoints, 2 bridges, 3 agent plugins, and
@@ -41,25 +51,27 @@ B and C both work better once A is solid, and the sprint below serves all three.
 
 ## 3. Where we are vs. the vision
 
-| Area | Docs claim | Reality (evidence) | ~% |
+| Area | Before the sprint (2026-09-29) | After the sprint (2026-09-30) | ~% before → after |
 |---|---|---|---|
-| Routing: broadcast, DM, task channels | ✅ | Works. Core NATS only (no JetStream), so a DM to an offline agent or a send while hub-server is down is silently lost | 70 |
-| Persistence | ✅ | Store/query works, but **the schema is never applied**: `DEFINE FIELD … AT` should be `ON` (`src/storage/surreal.rs:559`), and the errors are logged only at debug level | 50 |
-| Delegation loop | ✅ | **Broken.** `hub-worker` replies to the sender's inbox while `hub-delegate` listens only on the task channel, so it times out. MCP `delegate_task` treats the first `started` event as the answer | 35 |
-| Sessions / waves | ✅ | Wave state lives in the CLI process (a wave stays "running" forever if that process exits). The hub never runs `verify_cmd`. No cycle detection. Worker sessions are memory-only | 40 |
-| Workers | ✅ | Many backends, but **no Claude Code or Codex worker**: `worker_supervisor.py:53` maps both to `echo_worker.py`. The JS workers can't run from a fresh clone | 35 |
-| Orchestrator surface (MCP plugin) | ✅ | 20 tools, copied byte-for-byte into 3 plugins. Delegation is broken, there's no way to read an inbox or wait for a result, auth is ignored, and `from` is a free parameter | 30 |
-| Distributed + auth | ✅ | Connecting remotely with token/TLS works. **Identity doesn't:** anyone can set `meta.from`, the default ACL lets any agent read every inbox, and `hub.api.*` writes and the WS bridge have no authentication | 30 |
-| Observability (TUI, visualizer, stats, `/metrics`) | ✅ | Strongest area. The visualizer is one 3,400-line HTML file and ships about 5.8 MB of third-party fan-art sprites | 75 |
-| Portability / install | ✅ | `no-storage` doesn't compile. No LICENSE (plugins say MIT, crate says BSL). No CI. `jfrie` paths in 21 files | 15 |
+| Routing: broadcast, DM, task channels | Works. Core NATS only (no JetStream), so a DM to an offline agent or a send while hub-server is down is silently lost | Unchanged semantics. Routing is now a pure, tested `route_subject()`, and there's no per-message `flush()`. **Offline DMs are still lost** (JetStream is next sprint) | 70 → 75 |
+| Persistence | Store/query works, but **the schema is never applied** (`DEFINE FIELD … AT`), and errors are logged only at debug level | Schema applied (v2) with loud migration errors. Native datetimes, with a one-time legacy conversion verified on a real pre-L2 DB. Indexes added; `list_pending`/`get_thread` are bounded and indexed; a single-writer mirror with a drop metric (#9) | 50 → 85 |
+| Delegation loop | **Broken.** `hub-worker` replies to the sender's inbox while `hub-delegate` listens only on the task channel. MCP `delegate_task` takes the `started` event as the answer | One reply contract (§6) across Rust worker, `hub-delegate`, Python runtime and MCP. Covered by end-to-end tests: timeout, 1 MB prompt, DM replies (#8, #3) | 35 → 90 |
+| Sessions / waves | Wave state lives in the CLI process. The hub never runs `verify_cmd`. No cycle detection. Worker sessions are memory-only | Claude/Codex workers resume by session id, and the MCP wave spawn fails fast. **Server-side wave orchestration is still to do** | 40 → 50 |
+| Workers | No Claude Code or Codex worker (the supervisor mapped both to echo). JS workers can't run from a fresh clone | Real Claude Code and Codex workers; real-CLI smoke tests returned `pong`. Hardened backends: timeouts, process-group kill, non-zero exit counts as an error. Shared ACP client. The supervisor logs, restarts and cleans up children (#2). `package.json` added | 35 → 80 |
+| Orchestrator surface (MCP plugin) | Copied 3×. Delegation broken, no inbox or wait tools, auth ignored, `from` is a free parameter | One canonical source with a drift check. `delegate_async`/`task_status`/`wait_for_task`/`read_inbox`/`wait_for_message`. Auth via `connect_nats`; identity from env or the plugin manifest. Bounded buffers; survives reconnects. Verified on a token-auth hub (#3, #5) | 30 → 85 |
+| Distributed + auth | Remote token/TLS connect works. **Identity doesn't:** anyone can set `meta.from`. `hub.api.*` writes and the WS bridge are unauthenticated | The WS bridge is authenticated: token, Origin allowlist, traversal fix, and it refuses to start on a non-loopback bind without a token (#4, #6). MCP and hooks work on an auth hub. **Still open:** `meta.from` is self-asserted, and `hub.api.*` writes are unauthenticated | 30 → 50 |
+| Observability (TUI, visualizer, stats, `/metrics`) | Strongest area. The visualizer is one 3,400-line HTML file with third-party sprites | Added a storage-mirror drop metric. Visualizer unchanged (split/theming is backlog) | 75 → 75 |
+| Portability / install | `no-storage` doesn't compile. No LICENSE. No CI. `jfrie` paths in 21 files | `make setup/doctor/build/test/up/prune`, CI on every branch, requirements files, no machine paths. `no-storage` compiles. Shared kache build cache and a slim dev profile. **Still open:** LICENSE, release binaries | 15 → 60 |
 
-**Build/test on the dev box (2026-09-29):** the default build failed because
+**Baseline build/test on the dev box (2026-09-29):** the default build failed because
 RocksDB bindgen couldn't find `stdbool.h`. With the fix, about 95 Rust tests
 pass (0 fail, 2 ignored). NATS-dependent tests silently skipped because no
 `nats-server` was installed. `ControlPlane`, the query API, the WS bridge and a
 real delegate↔worker round-trip have **zero** tests. There are no Python tests.
 
 ### Security issues (these matter before any network exposure)
+
+Status after the sprint: 1 and 2 are **fixed** (#4, #6, live-probed); 3 is **open** (next sprint).
 
 1. **Path traversal in the static file server:** a lexical `starts_with` check after `dir.join(path)` (`src/ws_bridge.rs:427`).
 2. **The WS bridge has no Origin check or token.** Any web page you visit can open `ws://127.0.0.1:9191/ws`, read all traffic, and spawn always-approve workers via `ensure_worker`.
@@ -77,16 +89,16 @@ paths, CI.
 
 **Week 1 — correctness**
 
-1. One reply contract (§6) across the Rust worker, delegate, Python runtime and MCP, plus an end-to-end test harness.
-2. Storage correctness: schema `ON`, loud migration failures, heartbeat `touch()`, default limits, a sane `list_pending`.
-3. Real Claude Code and Codex workers, with timeouts, process-group kill, and non-zero exit treated as an error.
-4. One shared MCP server for all plugins: `delegate_async`, `task_status`, `wait_for_message`, auth, identity from env.
+1. ✅ One reply contract (§6) across the Rust worker, delegate, Python runtime and MCP, plus an end-to-end test harness.
+2. ✅ Storage correctness: schema `ON`, loud migration failures, heartbeat `touch()`, default limits, a sane `list_pending`.
+3. ✅ Real Claude Code and Codex workers, with timeouts, process-group kill, and non-zero exit treated as an error.
+4. ✅ One shared MCP server for all plugins: `delegate_async`, `task_status`, `wait_for_message`, auth, identity from env.
 
 **Week 2 — trustworthy and installable**
 
-5. WS bridge hardening (path traversal, Origin check, token), then identity binding (`hub.send.<identity>.<channel>` plus NATS permissions).
-6. JetStream-backed inboxes, so offline agents and router restarts stop losing messages.
-7. Onboarding: `make up` demo, workflow SKILL, archive of historical docs.
+5. ◐ WS bridge hardening (path traversal, Origin check, token) is ✅ done. Identity binding (`hub.send.<identity>.<channel>` plus NATS permissions) is ⬜ **next sprint**.
+6. ⬜ **Next sprint:** JetStream-backed inboxes, so offline agents and router restarts stop losing messages.
+7. ◐ Onboarding: `make up` demo ✅, workflow SKILL ✅ (rewritten in #3), archive of historical docs ⬜.
 
 **Deferred:** more bridges, visualizer theming and the customization skill, the
 DuckDB OLAP backend, TUI phases 5–6. The file-lock broadcast (`TODO.md`) is the
@@ -100,17 +112,15 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|---|---|
 | S0 | Dev environment fixes + collaborator setup (`CONTRIBUTING.md`, `make doctor/setup/test`, CI) | local (orchestrator) | `refocus/dev-env` | ✅ | **PR #1** — CI green on GitHub (clean Ubuntu, 14m). 2026-09-29: fresh clone → `make setup && make build && make test` green (28 Rust result groups ok, 0 failed; pytest 5 passed incl. live echo round-trip). NATS tests now actually run under `with_stack.sh`. `make up` + `hub-delegate --to echo-1` → `echo: olleh`; visualizer HTTP 200. Zero compiler warnings; fmt clean. Fixed a timing-flaky liveness test. |
 | L1 | Reply contract + end-to-end delegation harness | local subagent | `refocus/l1-reply-contract` | ✅ | **Merged to main (#8)** 2026-09-30. Verified by the orchestrator on main+L1 in an isolated build: 115 Rust passed / 0 failed. Two Python live tests were load-sensitive (fixed sleep / spawn-time clock); both now wait on the worker's first registration (`5a2d394`), then 34/34 passed twice at load ~18. Known: register+presence write conflicts in SurrealDB. They're harmless, and L2's single-writer mirror removes them. Brief: `.planning/refocus/L1-reply-contract.md` |
-| L2 | Storage + router correctness (schema, heartbeat, limits, `list_pending`, `no-storage` build) | local subagent | `refocus/l2-storage` | ✅ | **Merged to main (#9)** 2026-09-30. Live-verified by Devin (session 4d2ddd2b):
-- **Pre-L2 DB upgrade:** migration v0→2, 0 unconvertible rows, idempotent on restart; old agents/history/sessions/waves/threads/pending read back and new writes work.
-- **Combined L1+L2:** 147 Rust / 34 Python passed, `no-storage` compiles.
-- **~97s soak with 4 re-registering workers:** 0 write conflicts, 0 warnings.
-- **Pending:** cleared only by a `kind=message` reply.
-- **`natshub_storage_mirror_dropped_total`:** exported, reads 0.
-
-Brief: `.planning/refocus/L2-storage.md` |
+| L2 | Storage + router correctness (schema, heartbeat, limits, `list_pending`, `no-storage` build) | local subagent | `refocus/l2-storage` | ✅ | **Merged to main (#9)** 2026-09-30. Live-verified by Devin (session 4d2ddd2b). **Pre-L2 DB upgrade:** migration v0→2, 0 unconvertible rows, idempotent on restart; old data reads back and new writes work. **Combined L1+L2:** 147 Rust / 34 Python passed, and `no-storage` compiles. **~97s soak with 4 re-registering workers:** 0 write conflicts. **Pending:** cleared only by a `kind=message` reply. `natshub_storage_mirror_dropped_total` is exported. Brief: `.planning/refocus/L2-storage.md` |
 | L3 | Claude Code + Codex workers, backend hardening, Python tests | local subagent | `refocus/l3-workers` | ✅ | **Merged to main (#2)** 2026-09-30. Updated to current main (`b0ceb7b`) and live-verified in a Devin session: make lint/test green (76 Python passed). Behind the authenticated bridge, `ensure_worker` with a valid token and Origin spawned the Claude worker, and a delegate round-trip returned the result; no token or a wrong token → 401, evil Origin → 403; stop mid-turn left no orphaned processes. Earlier: real claude/codex smoke tests → `pong`. Brief: `.planning/refocus/L3-workers.md` |
-| R1 | Unified MCP orchestrator server (one copy, fixed delegate, async tools, auth) | remote agent | `refocus/r1-mcp` | ✅ | **Merged (PR #3)** 2026-09-30. The review found 4 majors, all fixed before merge (`d54f965`): reconnect survival, bounded subscriptions and trackers, Hermes per-call timeout, `mcp>=1.19`. Also wave fail-fast. Verified on main+R1+R2 in an isolated target dir: 104 Rust / 24 Python passed, plugin copies in sync. Minor follow-ups are in §7. Brief: `.planning/refocus/R1-mcp.md` |
-| R2 | WS bridge + visualizer transport hardening (traversal, Origin, token) | remote agent | `refocus/r2-ws-bridge` | ✅ | **Merged (PR #4)** 2026-09-30. Probed against a live server: traversal (plain and encoded) returns 403 with no leak; bad Origin → 403; missing or wrong token → 401; valid token → 101; a 0.0.0.0 bind without a token refuses to start. Minor follow-ups are in §7. Brief: `.planning/refocus/R2-ws-bridge.md` |
+| R1 | Unified MCP orchestrator server (one copy, fixed delegate, async tools, auth) | remote agent | `refocus/r1-mcp` | ✅ | **Merged (PR #3)** 2026-09-30. The review found 4 majors, all fixed before merge (`d54f965`): reconnect survival, bounded subscriptions and trackers, Hermes per-call timeout, `mcp>=1.19`. Also wave fail-fast. Verified on main+R1+R2 in an isolated target dir: 104 Rust / 24 Python passed, plugin copies in sync. Follow-ups done in F1 (#5). Brief: `.planning/refocus/R1-mcp.md` |
+| R2 | WS bridge + visualizer transport hardening (traversal, Origin, token) | remote agent | `refocus/r2-ws-bridge` | ✅ | **Merged (PR #4)** 2026-09-30. Probed against a live server: traversal (plain and encoded) returns 403 with no leak; bad Origin → 403; missing or wrong token → 401; valid token → 101; a 0.0.0.0 bind without a token refuses to start. Follow-ups done in F2 (#6). Brief: `.planning/refocus/R2-ws-bridge.md` |
+| F1 | R1 review follow-ups: hooks via `connect_nats`, identity defaults, drift check covers hooks/skills, fresh-only `wait_for_message`, `start_session` errors | remote agent (Devin) | `refocus/r1-followups` | ✅ | **Merged (#5).** Independently live-verified by a second Devin session on a real token-auth hub (5/5 checks). The orchestrator found and fixed a marketplace-install bug: identity was derived from the dir name, which is a version string in `~/.claude/plugins/cache/…` (`bf6deba`). |
+| F2 | R2 review follow-ups: Origin normalization, NATS connect retry, `--ws-identity` coverage, URL-encoded/constant-time token, testable startup guards | remote agent (Devin) | `refocus/r2-followups` | ✅ | **Merged (#6).** Orchestrator review requested 2 fixes (scheme-case default port, Hermes `?`/`&`); both landed (`f07c973`). CI green. |
+| B1 | Build cache + disk: kache/sccache via `lib.sh`, slim dev debuginfo, `make prune`/`make clean`, CI on every branch | local (orchestrator) | `refocus/status` | ✅ | **Merged (#7).** Triggered by the disk filling up (~20–40 GB per checkout; hub-server alone was 787 MB). |
+
+**Final (2026-09-30):** all tasks merged; CI on combined `main` is green (**155 Rust / 93 Python, 0 failed**).
 
 **Process (solo repo):** each task works on its own branch. The orchestrator
 verifies it independently (self-reports alone are not trusted), then merges it
@@ -175,34 +185,26 @@ Every task that sends or receives task results implements this exactly:
    `meta.from` (`meta.to = <sender>`, `meta.reply_to = <id>`), using the same
    result payload shape.
 
-## 7. Backlog after the sprint
+## 7. Backlog / next sprint candidates
 
-**Review follow-ups from R1 (MCP, PR #3), all minor:**
-- Plugin hooks bypass `connect_nats`, so they report "unreachable" on an auth hub.
-- `.mcp.json` hardcodes the identity and URL (should use `${NATS_HUB_IDENTITY:-…}` and `${NATS_URL:-…}`).
-- `hooks/` and `SKILL.md` aren't covered by `sync_plugins.sh --check`. `hermes-plugin/hooks/` is dead code.
-- `wait_for_message` returns stale messages by default (it should default to `last_seq`).
-- `start_session` ignores a failed `session.create`.
-- `tracker.error` isn't surfaced for waves.
-- The Codex and Hermes hook output formats are unverified.
+The R1/R2 review follow-ups are done (F1/F2 in §5). What's left, roughly in priority order:
 
-**Review follow-ups from R2 (WS bridge, PR #4), all minor:**
-- The default Origin list misses `127.0.0.1` for `localhost`/`0.0.0.0` binds and misses port 80. Allow-list entries aren't normalized.
-- A token containing `+` breaks in the browser. URL-encode the banner, or restrict the token charset.
-- The token comparison isn't constant-time. An Origin that isn't valid UTF-8 skips the check.
-- `--ws-identity` doesn't cover stop/resume. The shared NATS connection doesn't retry its first connect.
-- Startup guards should be testable. `make up` and the Hermes plugin should append `?token=` when `HUB_WS_TOKEN` is set.
-- The docs should prefer `HUB_WS_TOKEN` over `--ws-token`, which is visible in `ps`.
+**Next sprint ("make it trustworthy"):**
+1. **JetStream-backed inboxes.** DMs to offline agents and sends during a router restart are still lost (sprint item 6).
+2. **Identity bound to credentials.** Publish on `hub.send.<identity>.<channel>`, enforce it with NATS permissions, and have the router overwrite `meta.from`. Lock `hub.api.*` writes to a privileged user. Fix the default ACL that lets any agent read every inbox (sprint item 5b).
+3. **Server-side wave orchestration.** State lives in hub-server; add cycle detection, event-sender checks, liveness TTL → task failure, and surface `tracker.error` for waves in the MCP server.
 
-**Other:**
-- `hub-delegate` writes INFO logs to **stdout** when `RUST_LOG` is set, which breaks piping its result and 2 e2e tests. Logs should go to stderr (found by the L2 live check).
+**Small fixes:**
+- `hub-delegate` writes INFO logs to **stdout** when `RUST_LOG` is set, which breaks piping its result and 2 e2e tests. Send logs to stderr (found by the L2 live check).
 - Add `cargo check --lib --no-default-features --features no-storage` to CI (proposed by L2).
-- Analytics loads whole time ranges into memory; push the aggregation down into the DB (L2 follow-up).
+- `hub-delegate --prompt-file` / stdin: the command-line argument limit is 128 KiB (L1).
+- Per-turn progress handlers can cross-talk between concurrent session turns (L1/L3).
+- `worker_supervisor.py` (403 LOC) and `src/client.rs` (452 LOC) are over the size guideline.
+- `test_session_start_hook_output_shape` may flake under heavy load (timeout raised to 30s; watch it).
 
-- JetStream inbox durability (sprint item 6)
-- Identity binding via subject plus NATS permissions (second half of sprint item 5)
-- `no-storage` feature compiles; `query_api` goes behind `dyn Storage`
-- Server-side wave orchestration (state in hub-server, cycle detection, event-sender checks, liveness TTL)
-- Split the visualizer into modules; replace third-party sprites with a theme manifest
-- Resolve the license (BSL vs MIT) and add a LICENSE file
-- File-lock broadcast (`TODO.md`)
+**Later:**
+- Analytics loads whole time ranges into memory; push the aggregation down into the DB (L2).
+- Split the visualizer into modules; replace third-party sprites with a theme manifest (this enables the customization skill in `TODO.md`).
+- Resolve the license (BSL vs MIT) and add a LICENSE file; add release binaries.
+- Archive historical planning docs (`docs/PHASE*`, `.planning/execution`).
+- **File-lock broadcast** (`TODO.md`): the first *new* feature once the trust items land.
