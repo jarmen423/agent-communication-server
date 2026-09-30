@@ -66,6 +66,10 @@ async def _get_wave_task(args: dict) -> dict:
     })
 
 
+async def _wave_status(args: dict) -> dict:
+    return await conn.api_request("wave.status", {"wave_id": args["wave_id"]})
+
+
 async def _get_analytics(args: dict) -> dict:
     op_map = {
         "message_rate": "stats.message_rate",
@@ -101,5 +105,6 @@ QUERY_HANDLERS = {
     "get_wave": _get_wave,
     "list_wave_tasks": _list_wave_tasks,
     "get_wave_task": _get_wave_task,
+    "wave_status": _wave_status,
     "get_analytics": _get_analytics,
 }

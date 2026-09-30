@@ -180,12 +180,16 @@ pub async fn handle_request(
         "wave.list_tasks" => wave_list_tasks(s, p).await,
         "wave.update_task_status" => wave_update_task_status(s, p).await,
         "wave.get_task" => wave_get_task(s, p).await,
+        "wave.spawn" => wave_spawn(s, p).await,
+        "wave.status" => wave_status(s, p).await,
+        "wave.cancel" => wave_cancel(s, p).await,
 
         // ── Sessions ───────────────────────────────────────────
         "session.create" => session_create(s, p).await,
         "session.update_status" => session_update_status(s, p).await,
         "session.get" => session_get(s, p).await,
         "session.list" => session_list(s, p).await,
+        "session.set_backend_ctx" => session_set_backend_ctx(s, p).await,
 
         // ── Agents ─────────────────────────────────────────────
         "agent.find" => agent_find(s, p).await,

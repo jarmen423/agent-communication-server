@@ -187,14 +187,3 @@ class ChannelBuffer:
                 pass
 
 
-class WaveTracker:
-    """In-process wave spawn orchestration (spawn_via_api equivalent)."""
-
-    def __init__(self, wave_id: str, tasks: list[dict]) -> None:
-        self.wave_id = wave_id
-        self.tasks: dict[str, dict] = {t["task_id"]: dict(t) for t in tasks}
-        self.completed: set[str] = set()
-        self.state = "running"  # running | completed | failed | timeout
-        self.error: str | None = None
-        self.done = asyncio.Event()
-        self._bg: asyncio.Task | None = None

@@ -107,10 +107,11 @@ QUERY_TOOLS = [
     Tool(
         name="spawn_wave",
         description=(
-            "Spawn a wave created by create_wave: marks it running, DMs each "
-            "ready task's worker a session_start on its wave task channel "
-            "(respecting dependencies), and drives the wave to "
-            "completed/failed in the background. Watch progress with "
+            "Spawn a wave created by create_wave: hands it to the hub-server "
+            "orchestrator, which DMs each ready task's worker a session_start "
+            "on its wave task channel (respecting dependencies), enforces "
+            "worker liveness, and drives the wave to completed/failed — even "
+            "across hub-server restarts. Watch progress with wave_status / "
             "list_wave_tasks / get_wave."
         ),
         inputSchema={
@@ -120,6 +121,31 @@ QUERY_TOOLS = [
                 "wave_id": {"type": "string"},
                 "timeout": {"type": "integer", "description": "Overall wave timeout secs", "default": 3600},
             },
+        },
+    ),
+    Tool(
+        name="cancel_wave",
+        description=(
+            "Cancel a running or pending wave: non-terminal tasks are marked "
+            "cancelled and each running task's worker gets a cancel DM."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["wave_id"],
+            "properties": {"wave_id": {"type": "string"}},
+        },
+    ),
+    Tool(
+        name="wave_status",
+        description=(
+            "Full wave snapshot: the wave record, all task records "
+            "(incl. verify results), and a summary with per-status counts "
+            "and the merge gate."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["wave_id"],
+            "properties": {"wave_id": {"type": "string"}},
         },
     ),
     Tool(
