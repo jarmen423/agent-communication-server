@@ -6,84 +6,35 @@
 //!
 //! SurrealDB is always behind the `Storage` trait — third parties never
 //! get direct database access (BSL safeguard).
+//!
+//! The per-domain queries live in sibling modules (`agents`, `envelopes`,
+//! `session`, `wave`, `schema`); this file owns the connection and the
+//! `Storage` trait wiring.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use surrealdb::engine::local::RocksDb;
-use surrealdb::RecordId;
 use surrealdb::Surreal;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::protocol::Envelope;
-use crate::storage::session;
-use crate::storage::wave;
+use crate::storage::{agents, envelopes, schema, session, wave};
 use crate::storage::{
     AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
     WaveRecord, WaveTaskRecord,
 };
 
+/// Embedded SurrealDB handle used by all storage submodules.
+pub(crate) type Db = Surreal<surrealdb::engine::local::Db>;
+
 /// SurrealDB-backed storage. Embedded RocksDB, zero-config.
 /// In v2, `Surreal::new::<RocksDb>(path)` returns `Surreal<Db>`.
 #[derive(Clone)]
 pub struct SurrealStorage {
-    db: Surreal<surrealdb::engine::local::Db>,
-}
-
-/// Internal row type for agents table.
-/// `id` is the SurrealDB record ID (e.g. `agents:agent-gamma`).
-#[derive(Debug, Serialize, Deserialize)]
-struct AgentRow {
-    #[serde(default)]
-    id: Option<RecordId>,
-    #[serde(default)]
-    identity: String,
-    capabilities: Vec<String>,
-    last_seen: DateTime<Utc>,
-    registered_at: DateTime<Utc>,
-    #[serde(default)]
-    metadata: serde_json::Value,
-}
-
-/// Internal row type for envelopes table (without ID — ID is the record key).
-#[derive(Debug, Serialize, Deserialize)]
-struct EnvelopeRow {
-    from_identity: String,
-    channel: String,
-    to_identity: Option<String>,
-    timestamp: DateTime<Utc>,
-    kind: String,
-    reply_to: Option<String>,
-    payload: serde_json::Value,
-    stored_at: DateTime<Utc>,
-}
-
-/// Row type that includes the record ID (for queries that return it).
-#[derive(Debug, Serialize, Deserialize)]
-struct EnvelopeRowWithId {
-    id: RecordId,
-    from_identity: String,
-    channel: String,
-    to_identity: Option<String>,
-    timestamp: DateTime<Utc>,
-    kind: String,
-    reply_to: Option<String>,
-    payload: serde_json::Value,
-    stored_at: DateTime<Utc>,
+    db: Db,
 }
 
 impl SurrealStorage {
-    /// Strip Surreal record id form (`envelopes:uuid` / backticks) down to the
-    /// raw uuid string stored in `meta.id` / `reply_to`.
-    fn raw_envelope_id(id: &str) -> String {
-        let s = id.trim().trim_matches('`');
-        s.strip_prefix("envelopes:")
-            .unwrap_or(s)
-            .trim_matches('`')
-            .to_string()
-    }
-
     /// Connect to an embedded SurrealDB instance at the given path.
     /// Creates the database file if it doesn't exist.
     pub async fn connect(path: &str) -> Result<Self> {
@@ -115,380 +66,51 @@ impl Storage for SurrealStorage {
     // ── Agent Registry ──────────────────────────────────────
 
     async fn register_agent(&self, agent: AgentRecord) -> Result<()> {
-        debug!(identity = %agent.identity, "storing agent record");
-
-        let row = AgentRow {
-            id: None,
-            identity: agent.identity.clone(), // sent as content but ignored on store
-            capabilities: agent.capabilities,
-            last_seen: agent.last_seen,
-            registered_at: agent.registered_at,
-            metadata: agent.metadata,
-        };
-
-        let _: Option<AgentRow> = self
-            .db
-            .upsert(("agents", &agent.identity))
-            .content(row)
-            .await
-            .context("failed to upsert agent")?;
-
-        Ok(())
+        agents::register_agent(&self.db, agent).await
     }
 
     async fn deregister_agent(&self, identity: &str) -> Result<()> {
-        debug!(%identity, "deregistering agent");
-
-        let _: Option<AgentRow> = self
-            .db
-            .delete(("agents", identity))
-            .await
-            .context("failed to delete agent")?;
-
-        Ok(())
+        agents::deregister_agent(&self.db, identity).await
     }
 
     async fn touch_agent(&self, identity: &str) -> Result<()> {
-        debug!(%identity, "touching agent liveness");
-
-        let now = Utc::now();
-        let _: Option<AgentRow> = self
-            .db
-            .query("UPDATE type::thing('agents', $id) SET last_seen = $now")
-            .bind(("id", identity.to_string()))
-            .bind(("now", now))
-            .await?
-            .take(0)?;
-
-        Ok(())
+        agents::touch_agent(&self.db, identity).await
     }
 
     async fn find_agents(&self, filter: &AgentFilter) -> Result<Vec<AgentRecord>> {
-        debug!(?filter, "finding agents");
-
-        let mut query = String::from("SELECT id, * FROM agents");
-        let mut conditions: Vec<String> = vec![];
-
-        if let Some(_secs) = filter.alive_within_secs {
-            conditions.push("last_seen > $cutoff".to_string());
-        }
-
-        if !conditions.is_empty() {
-            query.push_str(" WHERE ");
-            query.push_str(&conditions.join(" AND "));
-        }
-
-        if let Some(limit) = filter.limit {
-            query.push_str(&format!(" LIMIT {limit}"));
-        }
-
-        let mut q_builder = self.db.query(query);
-
-        if let Some(secs) = filter.alive_within_secs {
-            let cutoff = Utc::now() - chrono::Duration::seconds(secs);
-            q_builder = q_builder.bind(("cutoff", cutoff));
-        }
-
-        let rows: Vec<AgentRow> = q_builder.await?.take(0)?;
-
-        let agents: Vec<AgentRecord> = rows
-            .into_iter()
-            .filter(|row| {
-                if filter.capabilities.is_empty() {
-                    return true;
-                }
-                filter
-                    .capabilities
-                    .iter()
-                    .all(|cap| row.capabilities.contains(cap))
-            })
-            .map(|row| {
-                let ident = row
-                    .id
-                    .as_ref()
-                    .map(|id| {
-                        let s = id.key().to_string();
-                        // Strip SurrealDB backtick quoting from string keys
-                        s.trim_matches('`').to_string()
-                    })
-                    .unwrap_or_default();
-                AgentRecord {
-                    identity: ident,
-                    capabilities: row.capabilities,
-                    last_seen: row.last_seen,
-                    registered_at: row.registered_at,
-                    metadata: row.metadata,
-                }
-            })
-            .collect();
-
-        Ok(agents)
+        agents::find_agents(&self.db, filter).await
     }
 
     async fn get_agent(&self, identity: &str) -> Result<Option<AgentRecord>> {
-        debug!(%identity, "getting agent");
-
-        let mut result = self
-            .db
-            .query("SELECT * FROM type::thing('agents', $id)")
-            .bind(("id", identity.to_string()))
-            .await?;
-
-        let rows: Vec<AgentRow> = result.take(0)?;
-
-        Ok(rows.into_iter().next().map(|r| {
-            let ident =
-                r.id.as_ref()
-                    .map(|id| {
-                        let s = id.key().to_string();
-                        s.trim_matches('`').to_string()
-                    })
-                    .unwrap_or_default();
-            AgentRecord {
-                identity: ident,
-                capabilities: r.capabilities,
-                last_seen: r.last_seen,
-                registered_at: r.registered_at,
-                metadata: r.metadata,
-            }
-        }))
+        agents::get_agent(&self.db, identity).await
     }
 
     // ── Message History ─────────────────────────────────────
 
     async fn store_envelope(&self, env: &Envelope) -> Result<()> {
-        debug!(id = %env.meta.id, "storing envelope");
-
-        let record = EnvelopeRecord::from_envelope(env);
-        let row = EnvelopeRow {
-            from_identity: record.from_identity,
-            channel: record.channel,
-            to_identity: record.to_identity,
-            timestamp: record.timestamp,
-            kind: record.kind,
-            reply_to: record.reply_to,
-            payload: record.payload,
-            stored_at: record.stored_at,
-        };
-
-        let _: Option<EnvelopeRow> = self
-            .db
-            .create(("envelopes", &record.id))
-            .content(row)
-            .await
-            .context("failed to store envelope")?;
-
-        // If this envelope is a reply, create the graph edge
-        if let Some(parent_id) = &env.meta.reply_to {
-            if let Err(e) = self.link_reply(&env.meta.id, parent_id).await {
-                warn!(error = %e, "failed to link reply edge (non-fatal)");
-            }
-        }
-
-        Ok(())
+        envelopes::store_envelope(&self.db, env).await
     }
 
     async fn query_history(&self, q: &HistoryQuery) -> Result<Vec<EnvelopeRecord>> {
-        debug!(?q, "querying history");
-
-        let mut query = String::from("SELECT * FROM envelopes");
-        let mut conditions: Vec<String> = vec![];
-
-        if q.channel.is_some() {
-            conditions.push("channel = $channel".to_string());
-        }
-        if q.from.is_some() {
-            conditions.push("from_identity = $from".to_string());
-        }
-        if q.to.is_some() {
-            conditions.push("to_identity = $to".to_string());
-        }
-        if q.kind.is_some() {
-            conditions.push("kind = $kind".to_string());
-        }
-        if q.since.is_some() {
-            conditions.push("timestamp > $since".to_string());
-        }
-        if q.until.is_some() {
-            conditions.push("timestamp < $until".to_string());
-        }
-
-        if !conditions.is_empty() {
-            query.push_str(" WHERE ");
-            query.push_str(&conditions.join(" AND "));
-        }
-
-        query.push_str(" ORDER BY timestamp DESC");
-
-        if let Some(limit) = q.limit {
-            query.push_str(&format!(" LIMIT {limit}"));
-        }
-
-        let mut q_builder = self.db.query(query);
-
-        if let Some(ref ch) = q.channel {
-            q_builder = q_builder.bind(("channel", ch.clone()));
-        }
-        if let Some(ref from) = q.from {
-            q_builder = q_builder.bind(("from", from.clone()));
-        }
-        if let Some(ref to) = q.to {
-            q_builder = q_builder.bind(("to", to.clone()));
-        }
-        if let Some(ref kind) = q.kind {
-            q_builder = q_builder.bind(("kind", kind.clone()));
-        }
-        if let Some(since) = q.since {
-            q_builder = q_builder.bind(("since", since));
-        }
-        if let Some(until) = q.until {
-            q_builder = q_builder.bind(("until", until));
-        }
-
-        let rows: Vec<EnvelopeRowWithId> = q_builder.await?.take(0)?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| EnvelopeRecord {
-                id: r.id.to_string(),
-                from_identity: r.from_identity,
-                channel: r.channel,
-                to_identity: r.to_identity,
-                timestamp: r.timestamp,
-                kind: r.kind,
-                reply_to: r.reply_to,
-                payload: r.payload,
-                stored_at: r.stored_at,
-            })
-            .collect())
+        envelopes::query_history(&self.db, q).await
     }
 
     async fn get_envelope(&self, id: &str) -> Result<Option<EnvelopeRecord>> {
-        debug!(%id, "getting envelope");
-
-        let mut result = self
-            .db
-            .query("SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at FROM type::thing('envelopes', $id)")
-            .bind(("id", id.to_string()))
-            .await?;
-
-        let rows: Vec<EnvelopeRowWithId> = result.take(0)?;
-
-        Ok(rows.into_iter().next().map(|r| EnvelopeRecord {
-            id: r.id.to_string(),
-            from_identity: r.from_identity,
-            channel: r.channel,
-            to_identity: r.to_identity,
-            timestamp: r.timestamp,
-            kind: r.kind,
-            reply_to: r.reply_to,
-            payload: r.payload,
-            stored_at: r.stored_at,
-        }))
+        envelopes::get_envelope(&self.db, id).await
     }
 
     // ── Conversation Threading (graph) ──────────────────────
 
     async fn link_reply(&self, reply_id: &str, parent_id: &str) -> Result<()> {
-        debug!(%reply_id, %parent_id, "linking reply edge");
-
-        // SurrealDB 2.x rejects type::thing() inside the RELATE path; resolve record
-        // ids via LET, then RELATE the bound record-id parameters.
-        self.db
-            .query(
-                "LET $reply = type::thing('envelopes', $reply_id);
-                 LET $parent = type::thing('envelopes', $parent_id);
-                 RELATE $reply->reply_to->$parent",
-            )
-            .bind(("reply_id", reply_id.to_string()))
-            .bind(("parent_id", parent_id.to_string()))
-            .await?
-            .check()?;
-
-        Ok(())
+        envelopes::link_reply(&self.db, reply_id, parent_id).await
     }
 
     async fn get_thread(&self, root_id: &str) -> Result<Vec<EnvelopeRecord>> {
-        debug!(%root_id, "fetching thread (graph traversal)");
-
-        // Get root + all envelopes that have reply_to = root_id
-        // (Simpler than graph traversal, works reliably in v2)
-        let mut result = self
-            .db
-            .query(
-                "SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
-                 FROM type::thing('envelopes', $root); \
-                 SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
-                 FROM envelopes WHERE reply_to = $root"
-            )
-            .bind(("root", root_id.to_string()))
-            .await?;
-
-        let root_rows: Vec<EnvelopeRowWithId> = result.take(0)?;
-        let reply_rows: Vec<EnvelopeRowWithId> = result.take(1)?;
-
-        let mut rows = root_rows;
-        rows.extend(reply_rows);
-
-        Ok(rows
-            .into_iter()
-            .map(|r| EnvelopeRecord {
-                id: r.id.to_string(),
-                from_identity: r.from_identity,
-                channel: r.channel,
-                to_identity: r.to_identity,
-                timestamp: r.timestamp,
-                kind: r.kind,
-                reply_to: r.reply_to,
-                payload: r.payload,
-                stored_at: r.stored_at,
-            })
-            .collect())
+        envelopes::get_thread(&self.db, root_id).await
     }
 
     async fn list_pending(&self, identity: &str) -> Result<Vec<EnvelopeRecord>> {
-        debug!(%identity, "listing pending messages");
-
-        // Surreal 2.x graph inbound `<-reply_to<-envelopes IS NONE` does not
-        // reliably match unreplied rows (returns empty). Match get_thread():
-        // use the stored reply_to *field* (raw uuid string) instead of graph.
-        let mut result = self
-            .db
-            .query(
-                "SELECT id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at \
-                 FROM envelopes \
-                 WHERE to_identity = $identity; \
-                 SELECT VALUE reply_to FROM envelopes WHERE reply_to IS NOT NONE",
-            )
-            .bind(("identity", identity.to_string()))
-            .await?;
-
-        let rows: Vec<EnvelopeRowWithId> = result.take(0)?;
-        let answered: Vec<Option<String>> = result.take(1).unwrap_or_default();
-        let answered: std::collections::HashSet<String> = answered
-            .into_iter()
-            .flatten()
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        Ok(rows
-            .into_iter()
-            .filter(|r| {
-                let raw = Self::raw_envelope_id(&r.id.to_string());
-                !answered.contains(&raw)
-            })
-            .map(|r| EnvelopeRecord {
-                id: r.id.to_string(),
-                from_identity: r.from_identity,
-                channel: r.channel,
-                to_identity: r.to_identity,
-                timestamp: r.timestamp,
-                kind: r.kind,
-                reply_to: r.reply_to,
-                payload: r.payload,
-                stored_at: r.stored_at,
-            })
-            .collect())
+        envelopes::list_pending(&self.db, identity).await
     }
 
     // ── Sessions ─────────────────────────────────────────────
@@ -552,79 +174,7 @@ impl Storage for SurrealStorage {
     // ── Lifecycle ───────────────────────────────────────────
 
     async fn migrate(&self) -> Result<()> {
-        info!("running SurrealDB schema migration");
-
-        let queries = [
-            "DEFINE TABLE agents SCHEMALESS",
-            "DEFINE FIELD identity       AT agents TYPE string",
-            "DEFINE FIELD capabilities   AT agents TYPE array<string>",
-            "DEFINE FIELD last_seen      AT agents TYPE datetime",
-            "DEFINE FIELD registered_at  AT agents TYPE datetime",
-            "DEFINE FIELD metadata       AT agents TYPE object",
-            "DEFINE INDEX idx_agents_last_seen ON TABLE agents COLUMNS last_seen",
-            "DEFINE TABLE envelopes SCHEMALESS",
-            "DEFINE FIELD from_identity AT envelopes TYPE string",
-            "DEFINE FIELD channel       AT envelopes TYPE string",
-            "DEFINE FIELD to_identity   AT envelopes TYPE option<string>",
-            "DEFINE FIELD timestamp     AT envelopes TYPE datetime",
-            "DEFINE FIELD kind          AT envelopes TYPE string",
-            "DEFINE FIELD reply_to      AT envelopes TYPE option<string>",
-            "DEFINE FIELD payload       AT envelopes TYPE object",
-            "DEFINE FIELD stored_at     AT envelopes TYPE datetime",
-            "DEFINE INDEX idx_env_channel_time ON TABLE envelopes COLUMNS channel, timestamp",
-            "DEFINE INDEX idx_env_from_time    ON TABLE envelopes COLUMNS from_identity, timestamp",
-            "DEFINE INDEX idx_env_kind_time    ON TABLE envelopes COLUMNS kind, timestamp",
-            "DEFINE TABLE reply_to SCHEMALESS TYPE RELATION FROM envelopes TO envelopes",
-            // Sessions table
-            "DEFINE TABLE sessions SCHEMALESS",
-            "DEFINE FIELD session_id    AT sessions TYPE string",
-            "DEFINE FIELD orchestrator  AT sessions TYPE string",
-            "DEFINE FIELD worker        AT sessions TYPE string",
-            "DEFINE FIELD status        AT sessions TYPE string",
-            "DEFINE FIELD cwd           AT sessions TYPE option<string>",
-            "DEFINE FIELD model         AT sessions TYPE option<string>",
-            "DEFINE FIELD provider      AT sessions TYPE option<string>",
-            "DEFINE FIELD created_at    AT sessions TYPE datetime",
-            "DEFINE FIELD updated_at    AT sessions TYPE datetime",
-            "DEFINE FIELD closed_at     AT sessions TYPE option<datetime>",
-            "DEFINE FIELD metadata      AT sessions TYPE object",
-            "DEFINE INDEX idx_sessions_status ON TABLE sessions COLUMNS status",
-            "DEFINE INDEX idx_sessions_worker ON TABLE sessions COLUMNS worker, status",
-            // Waves
-            "DEFINE TABLE waves SCHEMALESS",
-            "DEFINE FIELD wave_id      AT waves TYPE string",
-            "DEFINE FIELD goal         AT waves TYPE string",
-            "DEFINE FIELD status       AT waves TYPE string",
-            "DEFINE FIELD orchestrator AT waves TYPE string",
-            "DEFINE FIELD created_at   AT waves TYPE datetime",
-            "DEFINE FIELD closed_at    AT waves TYPE option<datetime>",
-            "DEFINE FIELD metadata     AT waves TYPE object",
-            "DEFINE INDEX idx_waves_status ON TABLE waves COLUMNS status",
-            "DEFINE TABLE wave_tasks SCHEMALESS",
-            "DEFINE FIELD wave_id      AT wave_tasks TYPE string",
-            "DEFINE FIELD task_id      AT wave_tasks TYPE string",
-            "DEFINE FIELD worker       AT wave_tasks TYPE string",
-            "DEFINE FIELD goal         AT wave_tasks TYPE string",
-            "DEFINE FIELD status       AT wave_tasks TYPE string",
-            "DEFINE FIELD write_scope  AT wave_tasks TYPE array<string>",
-            "DEFINE FIELD dependencies AT wave_tasks TYPE array<string>",
-            "DEFINE FIELD handoff_path AT wave_tasks TYPE option<string>",
-            "DEFINE FIELD verify_cmd   AT wave_tasks TYPE option<string>",
-            "DEFINE FIELD created_at   AT wave_tasks TYPE datetime",
-            "DEFINE FIELD started_at   AT wave_tasks TYPE option<datetime>",
-            "DEFINE FIELD completed_at AT wave_tasks TYPE option<datetime>",
-            "DEFINE FIELD result       AT wave_tasks TYPE option<string>",
-            "DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status",
-        ];
-
-        for q in &queries {
-            if let Err(e) = self.db.query(*q).await {
-                debug!(error = %e, "migration statement (non-fatal): {q}");
-            }
-        }
-
-        info!("SurrealDB schema migration complete");
-        Ok(())
+        schema::migrate(&self.db).await
     }
 
     async fn ping(&self) -> Result<()> {

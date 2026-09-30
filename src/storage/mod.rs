@@ -364,6 +364,15 @@ pub trait Storage: Send + Sync {
 // ── Module wiring ────────────────────────────────────────────
 
 #[cfg(feature = "storage-surreal")]
+mod agents;
+
+#[cfg(feature = "storage-surreal")]
+mod envelopes;
+
+#[cfg(feature = "storage-surreal")]
+mod schema;
+
+#[cfg(feature = "storage-surreal")]
 pub mod session;
 
 #[cfg(feature = "storage-surreal")]
