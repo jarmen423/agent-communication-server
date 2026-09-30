@@ -48,50 +48,58 @@ websocket {
 # Authentication & Authorization
 # ─────────────────────────────────────────────────────────────────────────────
 # Enable EXACTLY ONE of the two authorization blocks below.
-# See docs/SECURITY.md for when to pick token vs users.
+# Option B + `hub-server --require-bound-identity` is the only configuration
+# that binds identity to credentials end-to-end; Option A is transitional.
+# See docs/SECURITY.md for the full threat model.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# --- Option A: shared token (simplest; small teams, trusted members) ---------
+# --- Option A: shared token (transitional; small trusted teams only) --------
+# A shared token authenticates the CONNECTION but binds no identity: any holder
+# can claim any meta.from and read any inbox. Run hub-server WITHOUT
+# --require-bound-identity in this mode — the router is in permissive mode and
+# every API caller is unscoped (see docs/SECURITY.md §Threat model).
 # authorization {
 #     token: "REPLACE_WITH_LONG_RANDOM_TOKEN_FROM_SECRETS_MANAGER"
 # }
 
-# --- Option B: per-agent users with subject allowlists (recommended) ---------
-# Individually revocable; each agent gets least-privilege subject access.
-# allowed_connection_types:["WEBSOCKET"] prevents these credentials from being
-# reused against the plain TCP listener on :4222.
+# --- Option B: per-agent users with identity-bound permissions (required) ----
+# The recommended shape. Every agent is a users[] entry whose publish
+# permissions are bound to ITS identity (contract §4.1): it can only send as
+# itself, and its inbox is private because no other user may subscribe to
+# channel.inbox.<id>. Pair with:
+#   hub-server --require-bound-identity --api-admin <identity>...
+#
+# GENERATE these entries with the hub-admin tool — do not hand-edit:
+#   hub-admin add-agent echo-1 --role worker --channel chat
+#   hub-admin render-config --agents agents.txt --tls-cert ... --tls-key ...
+# (agents.txt lines: '<id> <role> <pw:pass|nkey:PUB> [extra channels]')
+#
+# allowed_connection_types:["WEBSOCKET"] keeps an agent credential off the
+# loopback TCP listener; the hub-server service user has no such restriction.
 authorization {
     users: [
-        {
-            user: "remote-agent"
-            password: "REPLACE_WITH_LONG_RANDOM_PASSWORD"
-            allowed_connection_types: ["WEBSOCKET"]
-            permissions: {
-                publish: {
-                    allow: [
-                        "hub.send.>"
-                        "hub.register"
-                        "hub.presence"
-                        "hub.events.>"
-                    ]
-                }
-                subscribe: {
-                    allow: [
-                        "channel.inbox.>"
-                        "channel.task.>"
-                        "channel.session.>"
-                        "channel.wave.>"
-                    ]
-                }
-            }
-        }
+        # role: hub-server (router, query API, ws bridge) — keep TCP-local.
+        { user: "hub-server", password: "REPLACE_WITH_LONG_RANDOM_PASSWORD",
+          permissions: {
+            publish:   { allow: ["channel.>", "_INBOX.>", "hub.>"] },
+            subscribe: { allow: ["hub.>", "_INBOX.>"] },
+          } },
+        # role: worker — one entry per agent identity.
+        { user: "echo-1", password: "REPLACE_WITH_PER_AGENT_PASSWORD",
+          allowed_connection_types: ["WEBSOCKET"]
+          permissions: {
+            publish:   { allow: ["hub.pub.echo-1.>", "hub.register.echo-1",
+                                 "hub.presence.echo-1", "hub.api.echo-1.>",
+                                 "_INBOX.>"] },
+            subscribe: { allow: ["channel.inbox.echo-1", "channel.task.>",
+                                 "channel.session.>", "channel.wave.>",
+                                 "_INBOX.>"] },
+          } },
     ]
 }
 
-# Repeat the users{} block above for each named agent you want to issue
-# individually revocable credentials to. The allowlist above is the default
-# shape for a generic remote worker; tighten it further per agent (e.g. scope
-# channel.inbox.<identity> instead of channel.inbox.>) when you can.
+# Add one users{} entry per agent (hub-admin add-agent prints the block).
+# To revoke an agent, delete its entry and reload (nats-server --signal reload).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Capacity & safety limits
