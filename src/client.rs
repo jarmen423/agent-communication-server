@@ -12,6 +12,11 @@ use tracing::debug;
 use crate::connect_opts::{connect_with_hub_opts, HubConnectOptions};
 use crate::protocol::{subjects, Envelope, MessageKind};
 
+mod reply;
+pub use reply::{
+    is_task_result, looks_like_task_result, task_channel, task_result_payload, TaskOutcome,
+};
+
 /// Default NATS URL.
 pub const DEFAULT_NATS_URL: &str = "nats://127.0.0.1:4222";
 
