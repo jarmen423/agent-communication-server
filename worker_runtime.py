@@ -328,31 +328,35 @@ async def run_worker(cfg: WorkerConfig) -> None:
             except Exception as e:  # noqa: BLE001 - keep beating
                 print(f"[{log}] heartbeat failed: {e}")
 
-    # Announce ourselves right after subscribing, so `hub-agents` shows the
-    # worker immediately instead of after the first heartbeat interval.
-    await nc.publish(
-        "hub.register",
-        make_envelope(
-            cfg.identity,
-            None,
-            "system",
-            "control",
-            {"identity": cfg.identity, "capabilities": list(cfg.capabilities)},
-        ),
-    )
-    await send_heartbeat()
-    await nc.flush()
-    heartbeat_task = asyncio.create_task(heartbeat_loop())
+    # Graceful stop must be in place before anyone can see us (and signal us).
     current = asyncio.current_task()
     if current is not None:
         install_stop_signals(current)
-    print(f"[{log}] ready")
 
+    heartbeat_task: asyncio.Task | None = None
     try:
+        # Announce ourselves right after subscribing, so `hub-agents` shows
+        # the worker immediately instead of after the first heartbeat interval.
+        await nc.publish(
+            "hub.register",
+            make_envelope(
+                cfg.identity,
+                None,
+                "system",
+                "control",
+                {"identity": cfg.identity, "capabilities": list(cfg.capabilities)},
+            ),
+        )
+        await send_heartbeat()
+        await nc.flush()
+        heartbeat_task = asyncio.create_task(heartbeat_loop())
+        print(f"[{log}] ready")
+
         while True:
             await asyncio.sleep(1)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
-        heartbeat_task.cancel()
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
         await nc.close()
