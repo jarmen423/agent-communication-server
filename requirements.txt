@@ -4,4 +4,4 @@ nats-py>=2.6,<3
 aiohttp>=3.9        # nats-py WebSocket transport (ws:// / wss:// hubs)
 nkeys>=0.2          # nats-py .creds / NKey auth
 httpx>=0.27         # ACP-over-HTTP backends (kilo_acp, acp_http)
-mcp>=1.10,<2        # agent plugin MCP server (claude-code/codex/hermes plugins)
+mcp>=1.19,<2        # agent plugin MCP server; >=1.19 needed (handlers return CallToolResult)

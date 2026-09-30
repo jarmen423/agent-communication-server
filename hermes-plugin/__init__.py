@@ -17,6 +17,7 @@ Also provides:
 """
 
 import asyncio
+import concurrent.futures
 import importlib.util
 import json
 import os
@@ -65,13 +66,32 @@ _LOOP_THREAD = threading.Thread(target=_LOOP.run_forever, daemon=True)
 _LOOP_STARTED = False
 
 
-def _run_async(coro):
+DEFAULT_CALL_TIMEOUT = 60.0
+CALL_TIMEOUT_MARGIN = 15.0
+
+
+def _call_timeout(action_params: dict) -> float:
+    """Blocking actions (delegate_task, wait_for_task, wait_for_message) carry
+    their own `timeout`; give them that plus a margin instead of a flat 60s."""
+    try:
+        t = float(action_params.get("timeout") or 0)
+    except (TypeError, ValueError):
+        t = 0.0
+    return max(DEFAULT_CALL_TIMEOUT, t + CALL_TIMEOUT_MARGIN)
+
+
+def _run_async(coro, timeout: float = DEFAULT_CALL_TIMEOUT):
     """Run a coroutine on the plugin's dedicated loop (one NATS conn)."""
     global _LOOP_STARTED
     if not _LOOP_STARTED:
         _LOOP_THREAD.start()
         _LOOP_STARTED = True
-    return asyncio.run_coroutine_threadsafe(coro, _LOOP).result(timeout=60)
+    fut = asyncio.run_coroutine_threadsafe(coro, _LOOP)
+    try:
+        return fut.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        fut.cancel()
+        raise TimeoutError(f"nats-hub call did not finish within {timeout:.0f}s") from None
 
 
 # ── Register with Hermes ──────────────────────────────────────────
@@ -132,7 +152,7 @@ def register(ctx):
             handler = _mcp().HANDLERS.get(action)
             if handler is None:
                 return json.dumps({"ok": False, "error": f"Unknown action: {action}"})
-            result = _run_async(handler(action_params))
+            result = _run_async(handler(action_params), _call_timeout(action_params))
             return json.dumps(result, indent=2, default=str)
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)})

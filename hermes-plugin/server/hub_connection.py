@@ -60,9 +60,18 @@ def check_from_arg(args: dict) -> str | None:
     return None
 
 
+_generation = 0
+
+
+def generation() -> int:
+    """Bumps each time a fresh connection replaces a closed one. Subscribers
+    compare it to detect that their subscriptions died with the old conn."""
+    return _generation
+
+
 async def get_nc() -> NATSClient:
     """Lazily connect to NATS with auth/TLS via the vendored connect_nats."""
-    global _nc
+    global _nc, _generation
     async with _connect_lock:
         if _nc is None or _nc.is_closed:
             import nats_connect
@@ -78,6 +87,13 @@ async def get_nc() -> NATSClient:
                     os.environ.get("NATS_HUB_CONNECT_RETRIES", "3")),
                 reconnect_time_wait=0.5,
             )
+            # The fail-fast settings above are for the *initial* connect only.
+            # Once up, this is a long-lived connection holding the inbox, task
+            # and session subscriptions: a short NATS restart must not close it
+            # (nats-py re-subscribes automatically on reconnect).
+            _nc.options["max_reconnect_attempts"] = -1
+            _nc.options["reconnect_time_wait"] = 2.0
+            _generation += 1
         return _nc
 
 

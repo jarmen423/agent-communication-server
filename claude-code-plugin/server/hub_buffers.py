@@ -20,172 +20,23 @@ import json
 import sys
 import time
 import uuid
-from collections import deque
-from typing import Any, Callable
+from typing import Any
 
 import hub_connection as conn
-
-
-def _note_bad_envelope(where: str, err: Exception) -> None:
-    print(f"[nats-hub] dropping undecodable envelope on {where}: {err}",
-          file=sys.stderr)
-
-INBOX_BUFFER_MAX = 500
-EVENTS_PER_TASK = 50
-CHANNEL_BUFFER_MAX = 200
-SUB_READY_DELAY = 0.05  # let NATS register interest before publishing
-
-
-def is_task_result(env: dict, task_id: str) -> bool:
-    """Reply contract §6.5 — first kind=message correlated to the task id."""
-    meta = env.get("meta", {})
-    if meta.get("kind") != "message":
-        return False
-    payload = env.get("payload", {})
-    return meta.get("reply_to") == task_id or payload.get("task_id") == task_id
-
-
-class RingBuffer:
-    """Bounded seq-numbered buffer of decoded envelopes."""
-
-    def __init__(self, maxlen: int) -> None:
-        self._items: deque[dict] = deque(maxlen=maxlen)
-        self._seq = 0
-        self._cond = asyncio.Condition()
-
-    async def put(self, env: dict) -> None:
-        async with self._cond:
-            self._seq += 1
-            self._items.append({"seq": self._seq, "env": env})
-            self._cond.notify_all()
-
-    def since(self, seq: int, limit: int | None = None) -> list[dict]:
-        items = [it for it in self._items if it["seq"] > seq]
-        if limit is not None:
-            items = items[-limit:] if limit > 0 else []
-        return items
-
-    def tail(self, limit: int) -> list[dict]:
-        return list(self._items)[-limit:] if limit > 0 else []
-
-    @property
-    def last_seq(self) -> int:
-        return self._seq
-
-    async def wait_for(
-        self,
-        predicate: Callable[[dict], bool],
-        *,
-        since: int = 0,
-        timeout: float | None = None,
-    ) -> dict | None:
-        """First buffered/arriving item (seq > since) matching predicate."""
-        deadline = None if timeout is None else time.monotonic() + timeout
-        async with self._cond:
-            while True:
-                for it in self._items:
-                    if it["seq"] > since and predicate(it["env"]):
-                        return it
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        return None
-                    try:
-                        await asyncio.wait_for(self._cond.wait(), remaining)
-                    except asyncio.TimeoutError:
-                        return None
-                else:
-                    await self._cond.wait()
-
-
-class TaskTracker:
-    """Tracks one delegated task's progress stream + terminal result."""
-
-    def __init__(self, task_id: str, task_channel: str, worker: str) -> None:
-        self.task_id = task_id
-        self.task_channel = task_channel
-        self.worker = worker
-        self.events = RingBuffer(EVENTS_PER_TASK)
-        self.other_messages = RingBuffer(100)
-        self.last_status: str | None = None
-        self.result: dict | None = None
-        self.state = "running"  # running | done | error
-        self.done = asyncio.Event()
-        self.created_at = time.time()
-
-    async def feed(self, env: dict) -> None:
-        meta = env.get("meta", {})
-        kind = meta.get("kind")
-        if kind == "status":
-            status = env.get("payload", {}).get("status")
-            if isinstance(status, str):
-                self.last_status = status
-            await self.events.put(env)
-        elif kind == "event":
-            await self.events.put(env)
-        elif is_task_result(env, self.task_id) and self.result is None:
-            self.result = env
-            payload = env.get("payload", {})
-            self.state = "error" if payload.get("status") == "error" else "done"
-            self.done.set()
-        else:
-            await self.other_messages.put(env)
-
-    def snapshot(self, events_tail: int = 10) -> dict:
-        snap: dict[str, Any] = {
-            "task_id": self.task_id,
-            "task_channel": self.task_channel,
-            "worker": self.worker,
-            "state": self.state,
-            "last_status": self.last_status,
-            "events": [
-                {"seq": it["seq"], "from": it["env"]["meta"].get("from"),
-                 "kind": it["env"]["meta"].get("kind"),
-                 "payload": it["env"].get("payload")}
-                for it in self.events.tail(events_tail)
-            ],
-        }
-        if self.result is not None:
-            snap["result"] = self.result.get("payload")
-        return snap
-
-
-class ChannelBuffer:
-    """Bounded buffer + subscription for one ``channel.<name>``."""
-
-    def __init__(self, subject: str, maxlen: int = CHANNEL_BUFFER_MAX) -> None:
-        self.subject = subject
-        self.buf = RingBuffer(maxlen)
-        self._sub = None
-
-    async def start(self) -> None:
-        if self._sub is not None:
-            return
-        nc = await conn.get_nc()
-
-        async def cb(msg) -> None:
-            try:
-                env = json.loads(msg.data.decode())
-            except Exception as e:
-                _note_bad_envelope(self.subject, e)
-                return
-            await self.buf.put(env)
-
-        self._sub = await nc.subscribe(self.subject, cb=cb)
-        await nc.flush()
-
-
-class WaveTracker:
-    """In-process wave spawn orchestration (spawn_via_api equivalent)."""
-
-    def __init__(self, wave_id: str, tasks: list[dict]) -> None:
-        self.wave_id = wave_id
-        self.tasks: dict[str, dict] = {t["task_id"]: dict(t) for t in tasks}
-        self.completed: set[str] = set()
-        self.state = "running"  # running | completed | failed | timeout
-        self.error: str | None = None
-        self.done = asyncio.Event()
-        self._bg: asyncio.Task | None = None
+from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
+    _note_bad_envelope,
+    INBOX_BUFFER_MAX,
+    MAX_TRACKED_TASKS,
+    TASK_UNSUB_GRACE,
+    EVENTS_PER_TASK,
+    CHANNEL_BUFFER_MAX,
+    SUB_READY_DELAY,
+    is_task_result,
+    RingBuffer,
+    TaskTracker,
+    ChannelBuffer,
+    WaveTracker,
+)
 
 
 class HubState:
@@ -197,18 +48,70 @@ class HubState:
         self.sessions: dict[str, ChannelBuffer] = {}
         self.waves: dict[str, WaveTracker] = {}
         self._started = False
+        self._generation = 0
         self._lock = asyncio.Lock()
+        self._bg: set[asyncio.Task] = set()
+
+    def spawn_bg(self, coro) -> asyncio.Task:
+        """Fire-and-forget with a strong reference and logged failures."""
+        task = asyncio.ensure_future(coro)
+        self._bg.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._bg.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                print(f"[nats-hub] background task failed: {t.exception()}",
+                      file=sys.stderr)
+
+        task.add_done_callback(_done)
+        return task
 
     async def ensure_started(self) -> None:
-        """Connect + open the orchestrator inbox subscription once."""
+        """Connect + open the orchestrator inbox subscription once (and again
+        if the connection was replaced, since the old subscriptions died)."""
         async with self._lock:
             nc = await conn.get_nc()  # also resolves identity (fails if unset)
-            if self._started:
+            if self._started and self._generation == conn.generation():
                 return
+            if self._started:
+                self._reset_after_reconnect()
+            self._generation = conn.generation()
             ident = conn.identity()
             self.inbox = ChannelBuffer(f"channel.inbox.{ident}", INBOX_BUFFER_MAX)
             await self.inbox.start()
             self._started = True
+
+    def _reset_after_reconnect(self) -> None:
+        """The connection was closed and replaced: every subscription is gone.
+        Fail running tasks loudly instead of letting callers time out."""
+        for t in self.tasks.values():
+            t.sub = None
+            if t.result is None:
+                t.state = "error"
+                t.last_status = "connection lost; task result unknown"
+                t.done.set()
+        self.sessions.clear()  # recreated lazily by session_buffer()
+
+    async def _track(self, tracker: TaskTracker) -> None:
+        """Register a tracker, evicting the oldest (finished first) over cap."""
+        self.tasks[tracker.task_id] = tracker
+        overflow = len(self.tasks) - MAX_TRACKED_TASKS
+        if overflow <= 0:
+            return
+        by_age = sorted(self.tasks.values(), key=lambda t: t.created_at)
+        victims = [t for t in by_age if t.done.is_set()][:overflow]
+        if len(victims) < overflow:
+            running = [t for t in by_age if not t.done.is_set()
+                       and t is not tracker]
+            victims += running[: overflow - len(victims)]
+        for t in victims:
+            self.tasks.pop(t.task_id, None)
+            await t.close()
+
+    async def drop_session(self, session_id: str) -> None:
+        ch = self.sessions.pop(session_id, None)
+        if ch is not None:
+            await ch.stop()
 
     async def delegate_async(self, worker: str, prompt: str) -> TaskTracker:
         """Subscribe to the task channel BEFORE DMing the worker (§6.1)."""
@@ -229,14 +132,23 @@ class HubState:
             except Exception as e:
                 _note_bad_envelope(f"channel.{task_channel}", e)
                 return
+            was_done = tracker.done.is_set()
             await tracker.feed(data)
+            if tracker.done.is_set() and not was_done:
+                # Result is in: release the subscription after a short grace
+                # period (late progress events are harmless to drop).
+                async def _release() -> None:
+                    await asyncio.sleep(TASK_UNSUB_GRACE)
+                    await tracker.close()
+
+                self.spawn_bg(_release())
 
         nc = await conn.get_nc()
-        await nc.subscribe(f"channel.{task_channel}", cb=cb)
+        tracker.sub = await nc.subscribe(f"channel.{task_channel}", cb=cb)
         await nc.flush()
         await asyncio.sleep(SUB_READY_DELAY)
 
-        self.tasks[task_id] = tracker
+        await self._track(tracker)
         await conn.publish(task_channel, env)
         return tracker
 
@@ -293,6 +205,14 @@ class HubState:
             deadline = time.monotonic() + timeout
             while tracker.state == "running":
                 tmap = tracker.tasks
+                failed = [t["task_id"] for t in tmap.values()
+                          if t["status"] == "failed"]
+                if failed:
+                    # Mirror hub_wave.rs: abort on the first failed task —
+                    # dependents would otherwise sit pending until timeout.
+                    tracker.state = "failed"
+                    tracker.error = f"task(s) failed: {', '.join(failed)}"
+                    break
                 if all(t["status"] in ("done", "failed") for t in tmap.values()):
                     any_failed = any(t["status"] == "failed" for t in tmap.values())
                     tracker.state = "failed" if any_failed else "completed"
@@ -320,6 +240,8 @@ class HubState:
             tracker.state = "failed"
             tracker.error = str(e)
         finally:
+            await events.stop()
+            await wave_ch.stop()
             final = {"completed": "completed", "failed": "failed",
                      "timeout": "failed"}.get(tracker.state)
             if final:
@@ -388,7 +310,7 @@ class HubState:
         task["result"] = result
         if status == "done":
             tracker.completed.add(task["task_id"])
-        asyncio.ensure_future(conn.api_request("wave.update_task_status", {
+        self.spawn_bg(conn.api_request("wave.update_task_status", {
             "wave_id": tracker.wave_id, "task_id": task["task_id"],
             "status": status, "result": result,
         }))

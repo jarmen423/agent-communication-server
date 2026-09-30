@@ -289,8 +289,11 @@ async def _close_session(args: dict) -> dict:
         {"action": "session_close", "session_id": session_id},
     )
     await conn.publish(channel, env)
-    await conn.api_request("session.update_status",
-                           {"session_id": session_id, "status": "closed"})
+    await hub().drop_session(session_id)
+    resp = await conn.api_request("session.update_status",
+                                  {"session_id": session_id, "status": "closed"})
+    if not resp.get("ok"):
+        return {"ok": False, "error": f"close sent, but status update failed: {resp.get('error')}"}
     return {"ok": True, "data": {"session_id": session_id, "status": "closed"}}
 
 

@@ -149,6 +149,78 @@ def test_task_tracker_error_result():
     asyncio.run(run())
 
 
+# ── Bounded tracking / reconnect / hermes timeouts ───────────────
+
+
+class _FakeSub:
+    def __init__(self) -> None:
+        self.unsubscribed = False
+
+    async def unsubscribe(self) -> None:
+        self.unsubscribed = True
+
+
+def test_tracked_tasks_capped_evicting_finished_first(monkeypatch):
+    monkeypatch.setattr(hub_buffers, "MAX_TRACKED_TASKS", 3)
+
+    async def run():
+        h = hub_buffers.HubState()
+        trackers = []
+        for i in range(3):
+            tr = hub_buffers.TaskTracker(f"t{i}", f"task.t{i}", "w")
+            tr.created_at = i
+            tr.sub = _FakeSub()
+            trackers.append(tr)
+            await h._track(tr)
+        trackers[1].done.set()  # t1 finished, t0 still running
+        newest = hub_buffers.TaskTracker("t3", "task.t3", "w")
+        newest.created_at = 3
+        await h._track(newest)
+        assert set(h.tasks) == {"t0", "t2", "t3"}
+        assert trackers[1].sub is None  # evicted tracker released its sub
+
+    asyncio.run(run())
+
+
+def test_task_tracker_close_unsubscribes_once():
+    async def run():
+        tr = hub_buffers.TaskTracker("t1", "task.t1", "w")
+        sub = tr.sub = _FakeSub()
+        await tr.close()
+        await tr.close()
+        assert sub.unsubscribed and tr.sub is None
+
+    asyncio.run(run())
+
+
+def test_reset_after_reconnect_fails_running_tasks():
+    async def run():
+        h = hub_buffers.HubState()
+        running = hub_buffers.TaskTracker("r", "task.r", "w")
+        finished = hub_buffers.TaskTracker("f", "task.f", "w")
+        await finished.feed(_env("f", payload={"task_id": "f", "status": "done"}))
+        h.tasks = {"r": running, "f": finished}
+        h.sessions = {"s": object()}
+        h._reset_after_reconnect()
+        assert running.done.is_set() and running.state == "error"
+        assert finished.state == "done"
+        assert h.sessions == {}
+
+    asyncio.run(run())
+
+
+def test_hermes_call_timeout_follows_action_timeout():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "hermes_plugin_init", REPO_ROOT / "hermes-plugin" / "__init__.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._call_timeout({}) == mod.DEFAULT_CALL_TIMEOUT
+    assert mod._call_timeout({"timeout": 300}) == 300 + mod.CALL_TIMEOUT_MARGIN
+    assert mod._call_timeout({"timeout": "bad"}) == mod.DEFAULT_CALL_TIMEOUT
+
+
 # ── Identity ─────────────────────────────────────────────────────
 
 
@@ -245,6 +317,14 @@ def test_delegate_async_wait_for_task_round_trip(monkeypatch):
             assert d["result"]["result"] == "echo: cba"
             # Contract: correlated to the task envelope id.
             assert d["result"]["task_id"] == task_id
+
+            # Long-lived connection must survive NATS restarts (initial
+            # connect is fail-fast, afterwards reconnect forever).
+            nc = await conn.get_nc()
+            assert nc.options["max_reconnect_attempts"] == -1
+            await asyncio.sleep(hub_buffers.TASK_UNSUB_GRACE + 0.5)
+            tracker = hub_buffers.hub().tasks[task_id]
+            assert tracker.sub is None  # released after the result
 
             inbox = await hub_handlers.HANDLERS["read_inbox"]({"limit": 10})
             assert inbox["ok"]
