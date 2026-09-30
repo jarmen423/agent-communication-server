@@ -8,12 +8,12 @@ comes from ``NATS_HUB_IDENTITY`` via ``hub_connection.identity()``; a stale
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
 import hub_connection as conn
 from hub_buffers import hub
+from hub_providers import check_providers as _check_providers
 from hub_queries import QUERY_HANDLERS
 
 
@@ -56,52 +56,6 @@ async def _list_agents(args: dict) -> dict:
 
 async def _get_agent(args: dict) -> dict:
     return await conn.api_request("agent.get", {"identity": args["identity"]})
-
-
-async def _check_providers(args: dict) -> dict:
-    """Honest provider check: bus liveness + optional supervisor probes."""
-    alive_secs = int(args.get("alive_within_secs") or 120)
-    found = await conn.api_request(
-        "agent.find", {"capabilities": [], "alive_within_secs": alive_secs})
-    if not found.get("ok"):
-        return found
-    agents = found.get("data", {}).get("agents") or []
-    alive = [
-        {
-            "identity": a.get("identity"),
-            "capabilities": a.get("capabilities", []),
-            "last_seen": a.get("last_seen"),
-            "models": (a.get("metadata") or {}).get("models"),
-        }
-        for a in agents
-    ]
-
-    probes = []
-    providers = args.get("providers") or []
-    if providers:
-        nc = await conn.get_nc()
-        for provider in providers:
-            try:
-                req = json.dumps({"provider": provider}).encode()
-                reply = await nc.request("hub.worker.models", req, timeout=5)
-                resp = json.loads(reply.data)
-                probes.append({
-                    "provider": provider,
-                    "ok": bool(resp.get("ok")),
-                    "models": resp.get("models") or [],
-                    "error": resp.get("error"),
-                })
-            except Exception as e:
-                probes.append({"provider": provider, "ok": False, "error": str(e)})
-
-    return {"ok": True, "data": {
-        "alive_agents": alive,
-        "provider_probes": probes,
-        "verifies": "bus registration + heartbeat liveness + supervisor "
-                    "model-list responses",
-        "does_not_verify": "provider credentials, CLI health, or whether a "
-                           "worker will actually accept a task",
-    }}
 
 
 # ── Messaging ────────────────────────────────────────────────────
@@ -163,7 +117,9 @@ async def _wait_for_message(args: dict) -> dict:
     )
     if it is None:
         return _err(f"no inbox message within {timeout}s"
-                    + (f" from {sender}" if sender else ""))
+                    + (f" from {sender}" if sender else "")
+                    + f" (inbox last_seq={h.inbox.buf.last_seq}); call wait_for_message again "
+                    "to keep waiting, or read_inbox to see buffered messages")
     return {"ok": True, "data": _summarize_env(it)}
 
 
@@ -188,13 +144,19 @@ async def _delegate_task(args: dict) -> dict:
     tracker = await hub().delegate_async(args["to"], args["prompt"])
     result = await hub().wait_for_task(tracker.task_id, timeout)
     if result is None:
-        return _err("task tracker missing")
+        return _err(f"task {tracker.task_id} was evicted before its result "
+                    "arrived (too many tracked tasks); check get_history("
+                    f"channel='{tracker.task_channel}')")
     if result.get("state") == "timeout":
         return _err(f"delegate timed out after {timeout}s "
-                    f"(task_id={tracker.task_id})")
+                    f"(task_id={tracker.task_id}); the worker may still be "
+                    "running — wait_for_task to keep waiting, or cancel_task "
+                    "to stop it")
     payload = (result.get("result") or {})
     if result.get("state") == "error":
         return _err(f"task failed: {payload.get('error', 'unknown')}")
+    if result.get("state") == "cancelled":
+        return _err(f"task {tracker.task_id} was cancelled before it finished")
     return {"ok": True, "data": {
         "task_id": tracker.task_id,
         "task_channel": tracker.task_channel,
@@ -203,10 +165,18 @@ async def _delegate_task(args: dict) -> dict:
     }}
 
 
+def _unknown_task(task_id: str) -> dict:
+    return _err(
+        f"unknown task_id {task_id!r}: this MCP server only tracks tasks it "
+        "delegated itself (delegate_async/delegate_task) since it started, "
+        "and evicts the oldest finished ones. Use the task_id returned by "
+        "delegate_async, or get_history(channel='task.<id>') for older tasks.")
+
+
 async def _task_status(args: dict) -> dict:
     snap = await hub().task_status(args["task_id"], int(args.get("events_tail", 10)))
     if snap is None:
-        return _err(f"unknown task_id: {args['task_id']}")
+        return _unknown_task(args["task_id"])
     return {"ok": True, "data": snap}
 
 
@@ -214,11 +184,35 @@ async def _wait_for_task(args: dict) -> dict:
     timeout = float(args["timeout"])
     result = await hub().wait_for_task(args["task_id"], timeout)
     if result is None:
-        return _err(f"unknown task_id: {args['task_id']}")
+        return _unknown_task(args["task_id"])
     if result.get("state") == "timeout":
         return _err(f"no result within {timeout}s "
-                    f"(last_status={result.get('last_status')})")
+                    f"(last_status={result.get('last_status')}); call "
+                    "wait_for_task again to keep waiting, or cancel_task")
     return {"ok": True, "data": result}
+
+
+async def _cancel_task(args: dict) -> dict:
+    """Contract §4.2: returns the terminal snapshot (state `cancelled`, or
+    done/error if the task finished before the cancel took effect)."""
+    task_id = args["task_id"]
+    timeout = float(args.get("timeout", 10))
+    res = await hub().cancel_task(task_id, timeout)
+    if res is None:
+        return _unknown_task(task_id)
+    snap = res["snapshot"]
+    if res["timed_out"]:
+        return {"ok": False, "data": snap, "error": (
+            f"cancel sent to {snap['worker']}, but no terminal result within "
+            f"{timeout:g}s. The worker may not support cancel yet or is busy; "
+            "the task is still tracked — wait_for_task or cancel_task again.")}
+    if not res["cancel_sent"]:
+        snap = {**snap, "note": f"task already finished ({snap['state']}); "
+                                "cancel not sent"}
+    elif snap["state"] != "cancelled":
+        snap = {**snap, "note": f"task finished ({snap['state']}) before the "
+                                "cancel took effect"}
+    return {"ok": True, "data": snap}
 
 
 # ── Sessions ─────────────────────────────────────────────────────
@@ -387,6 +381,7 @@ HANDLERS = {
     "delegate_task": _delegate_task,
     "task_status": _task_status,
     "wait_for_task": _wait_for_task,
+    "cancel_task": _cancel_task,
     "start_session": _start_session,
     "send_to_session": _send_to_session,
     "close_session": _close_session,

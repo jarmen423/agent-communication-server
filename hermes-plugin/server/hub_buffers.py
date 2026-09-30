@@ -38,6 +38,8 @@ from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
     WaveTracker,
 )
 
+MAX_SESSION_BUFFERS = 50  # open channel.session.<id> subscriptions
+
 
 class HubState:
     """All subscriptions and in-flight coordination state."""
@@ -167,6 +169,50 @@ class HubState:
                     "last_status": tracker.last_status}
         return tracker.snapshot()
 
+    async def cancel_task(self, task_id: str, timeout: float) -> dict | None:
+        """Cancel contract (refocus-iteration-2.md §4.2): DM the worker
+        ``kind=control {"action": "cancel", "task_id": <id>}`` and wait up to
+        ``timeout`` for its terminal result (``status: "cancelled"``, or
+        done/error if it finished first). Unknown task → None.
+
+        Returns ``{snapshot, cancel_sent, timed_out}``. A worker that doesn't
+        implement cancel simply never answers, so the tracker stays running
+        (we never fake a terminal state the worker didn't report)."""
+        tracker = self.tasks.get(task_id)
+        if tracker is None:
+            return None
+        if tracker.done.is_set():
+            return {"snapshot": tracker.snapshot(), "cancel_sent": False,
+                    "timed_out": False}
+        await self.ensure_started()
+        env = conn.envelope(
+            tracker.task_channel,
+            {"action": "cancel", "task_id": task_id},
+            kind="control",
+            to=tracker.worker,
+        )
+        if tracker.cancel_requested_at is None:
+            tracker.cancel_requested_at = time.time()
+        await conn.publish(tracker.task_channel, env)
+        try:
+            await asyncio.wait_for(tracker.done.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return {"snapshot": tracker.snapshot(), "cancel_sent": True,
+                    "timed_out": True}
+        return {"snapshot": tracker.snapshot(), "cancel_sent": True,
+                "timed_out": False}
+
+    async def forget_task(self, task_id: str) -> None:
+        """Drop an internal tracker (check_providers pings) and release its
+        subscription after the usual grace period."""
+        tracker = self.tasks.pop(task_id, None)
+        if tracker is not None:
+            async def _release() -> None:
+                await asyncio.sleep(TASK_UNSUB_GRACE)
+                await tracker.close()
+
+            self.spawn_bg(_release())
+
     async def session_buffer(self, session_id: str) -> ChannelBuffer:
         await self.ensure_started()
         ch = self.sessions.get(session_id)
@@ -174,6 +220,11 @@ class HubState:
             ch = ChannelBuffer(f"channel.session.{session_id}")
             self.sessions[session_id] = ch
             await ch.start()
+            # Bounded: evict the least-recently-opened session buffers (a
+            # later session_replies call re-subscribes; history is in the DB).
+            while len(self.sessions) > MAX_SESSION_BUFFERS:
+                oldest = next(iter(self.sessions))
+                await self.drop_session(oldest)
         return ch
 
     async def spawn_wave(self, wave_id: str, timeout: float = 3600) -> WaveTracker:

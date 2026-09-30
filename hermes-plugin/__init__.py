@@ -102,11 +102,14 @@ def _run_async(coro, timeout: float = DEFAULT_CALL_TIMEOUT):
 
 # ── Register with Hermes ──────────────────────────────────────────
 
+# Fallback when the shared server can't be loaded; register() prefers the
+# live tool list (tests assert the two stay equal).
 ACTIONS = [
-    "list_agents", "get_agent", "check_providers",
+    "whoami", "list_agents", "get_agent", "check_providers",
     "send_message", "send_direct", "send_status",
     "read_inbox", "wait_for_message",
     "delegate_async", "delegate_task", "task_status", "wait_for_task",
+    "cancel_task",
     "start_session", "send_to_session", "close_session", "session_replies",
     "list_sessions", "get_session",
     "get_history", "get_thread", "list_pending",
@@ -128,10 +131,11 @@ def register(ctx):
         print(f"[nats-hub] loaded {len(schemas)} tool schemas from shared server",
               file=sys.stderr)
 
+    actions = [s["name"] for s in schemas] or ACTIONS
     consolidated_schema = {
         "name": "nats_hub",
         "description": (
-            "NATS-hub multi-agent coordination. Actions: " + ", ".join(ACTIONS) + "."
+            "NATS-hub multi-agent coordination. Actions: " + ", ".join(actions) + "."
         ),
         "parameters": {
             "type": "object",
@@ -139,7 +143,7 @@ def register(ctx):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ACTIONS,
+                    "enum": actions,
                     "description": "Which nats-hub action to perform",
                 },
                 "params": {
