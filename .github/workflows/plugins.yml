@@ -1,0 +1,40 @@
+name: plugins
+
+# Agent plugins (Claude Code, Codex, Hermes): the plugin copies must match the
+# canonical mcp_server/, and each plugin must work when installed into the
+# host's versioned cache layout (~/.claude/plugins/cache/<mkt>/<name>/<ver>/,
+# ~/.codex/plugins/cache/..., ~/.hermes/plugins/<name>/) with
+# NATS_HUB_IDENTITY unset. Pure Python: no Rust build, no NATS server.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: plugins-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install plugin runtime deps (what a user installs for python3)
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Plugin copies in sync with mcp_server/
+        run: bash scripts/dev/sync_plugins.sh --check
+
+      - name: MCP unit tests + install-layout tests
+        run: python -m pytest -q tests/python/test_mcp_*.py
