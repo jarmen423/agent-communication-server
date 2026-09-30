@@ -11,7 +11,7 @@
 //! agent cache from the persisted copy.
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, ToSocketAddrs};
+use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 
@@ -59,7 +59,9 @@ struct Args {
     ws_token: Option<String>,
 
     /// Additional allowed `Origin` for the WS endpoint (repeatable).
-    /// `http://<ws-addr>` and `http://localhost:<port>` are always allowed.
+    /// Loopback spellings (localhost/127.0.0.1/[::1]) are allowed by
+    /// default; entries are normalized — case, trailing `/` and default
+    /// ports don't matter.
     #[arg(long = "ws-allow-origin")]
     ws_allow_origin: Vec<String>,
 
@@ -158,27 +160,17 @@ async fn main() -> Result<()> {
             .or_else(|| std::env::var("HUB_WS_IDENTITY").ok())
             .unwrap_or_else(|| "human".to_string());
 
-        // A tokenless bridge may only bind loopback: it reads all bus
-        // traffic and can spawn workers, so an exposed unauthenticated
-        // listener is a critical hole.
-        if token.is_none() && !args.ws_insecure && !nats_hub::ws_bridge::is_loopback_addr(ws_addr) {
-            anyhow::bail!(
-                "refusing to start: --ws-addr {ws_addr} is not a loopback address and no \
-                 --ws-token (or HUB_WS_TOKEN) is set. Set a token, or pass --ws-insecure to \
-                 run unauthenticated on a trusted network."
+        // A tokenless bridge may only bind loopback.
+        nats_hub::ws_bridge::check_ws_bind(ws_addr, token.as_deref(), args.ws_insecure)?;
+
+        let mut allowed_origins = nats_hub::ws_bridge::default_allowed_origins(ws_addr);
+        allowed_origins.extend(args.ws_allow_origin.iter().cloned());
+        if !nats_hub::ws_bridge::is_loopback_addr(ws_addr) && args.ws_allow_origin.is_empty() {
+            info_log(
+                "hint: non-loopback --ws-addr — remote browsers need their Origin in \
+                 --ws-allow-origin (e.g. --ws-allow-origin http://<lan-ip>:<port>)",
             );
         }
-
-        let mut allowed_origins = vec![format!("http://{ws_addr}")];
-        if let Some(port) = ws_addr
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut it| it.next())
-            .map(|a| a.port())
-        {
-            allowed_origins.push(format!("http://localhost:{port}"));
-        }
-        allowed_origins.extend(args.ws_allow_origin.iter().cloned());
 
         let config = nats_hub::ws_bridge::WsBridgeConfig {
             static_dir: args.static_dir.as_ref().map(std::path::PathBuf::from),
@@ -198,14 +190,20 @@ async fn main() -> Result<()> {
         });
         match &token {
             Some(t) => info_log(&format!(
-                "WS bridge (visualizer) on http://{ws_addr}/?token={t}"
+                "WS bridge (visualizer) on http://{ws_addr}/?token={}",
+                nats_hub::ws_bridge::url_query_encode(t)
             )),
             None => {
                 tracing::warn!(
-                    "WS bridge on {ws_addr} has no --ws-token; unauthenticated (loopback-only is safe)"
+                    "WS bridge on {ws_addr} is running UNAUTHENTICATED — no --ws-token/HUB_WS_TOKEN (safe only on loopback or a trusted network)"
                 );
+                let suffix = if nats_hub::ws_bridge::is_loopback_addr(ws_addr) {
+                    " (no token; loopback only)"
+                } else {
+                    " (no token — running unauthenticated)"
+                };
                 info_log(&format!(
-                    "WS bridge (visualizer) on http://{ws_addr} (no token; loopback only)"
+                    "WS bridge (visualizer) on http://{ws_addr}{suffix}"
                 ));
             }
         }

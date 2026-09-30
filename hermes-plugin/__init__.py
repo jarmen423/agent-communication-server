@@ -31,6 +31,12 @@ from pathlib import Path
 NATS_URL = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
 HUB_IDENTITY = os.environ.setdefault("NATS_HUB_IDENTITY", "hermes-agent")
 VISUALIZER_URL = os.environ.get("NATS_HUB_VISUALIZER_URL", "http://127.0.0.1:9191")
+# hub-server may gate the WS bridge on HUB_WS_TOKEN — the browser needs it
+# as ?token= on the page URL.
+if os.environ.get("HUB_WS_TOKEN"):
+    from urllib.parse import quote
+    sep = "&" if "?" in VISUALIZER_URL else "?"
+    VISUALIZER_URL += f"{sep}token={quote(os.environ['HUB_WS_TOKEN'], safe='')}"
 AUTO_OPEN_VISUALIZER = os.environ.get("NATS_HUB_AUTO_OPEN", "false").lower() == "true"
 
 # ── Shared MCP server module (loaded once) ────────────────────────

@@ -47,7 +47,7 @@ From the repo root (paths are relative; `--static-dir` must point at `visualizer
 Flags:
 - `--ws-addr`: address for the WebSocket bridge and static file server (default: disabled)
 - `--static-dir`: directory to serve static files from (usually `visualizer/`)
-- `--ws-token`: shared secret required as `?token=` on the WS upgrade (env `HUB_WS_TOKEN`)
+- `--ws-token`: shared secret required as `?token=` on the WS upgrade. Prefer env `HUB_WS_TOKEN` — a flag value is visible in `ps`
 - `--ws-identity`: sender identity stamped on bridge-published messages (env `HUB_WS_IDENTITY`, default `human`)
 - `--ws-allow-origin`: extra allowed `Origin` for the WS upgrade (repeatable)
 - `--ws-insecure`: permit a non-loopback `--ws-addr` with no token (trusted networks only)
@@ -180,11 +180,11 @@ The visualizer binds to `127.0.0.1` by default. For remote access:
   token — hub-server refuses to start a tokenless non-loopback bridge:
 
   ```bash
+  export HUB_WS_TOKEN="$(openssl rand -hex 24)"   # env, not a flag — keeps it out of `ps`
   ./target/debug/hub-server \
       --db-path .tools/run/nats_hub.db \
       --ws-addr 0.0.0.0:9191 \
       --static-dir "$PWD/visualizer/" \
-      --ws-token "$(openssl rand -hex 24)" \
       --ws-allow-origin "http://192.168.1.10:9191"   # the Origin you browse from
   ```
 
