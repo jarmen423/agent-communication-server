@@ -23,11 +23,25 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Cargo registry + target dir (SurrealDB/RocksDB dominate: ~1.8 GB).
+      # Only main saves; branches restore main's cache. With one cache per
+      # branch the 10 GB repo quota would evict main's cache within a sprint.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      # Pinned, checksum-verified nats-server (scripts/dev/install_nats_server.sh
+      # skips the download when .tools/bin/nats-server already exists).
+      - uses: actions/cache@v4
+        with:
+          path: .tools/bin
+          key: nats-server-${{ runner.os }}-${{ hashFiles('scripts/dev/install_nats_server.sh') }}
 
       - name: System deps (RocksDB build)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev
@@ -46,3 +60,19 @@ jobs:
 
       - name: Python tests (isolated nats-server + hub-server)
         run: make test-py
+
+  # The embeddable transport-only build (no SurrealDB/RocksDB). Fast: no C++.
+  no-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo check --lib (no-storage)
+        run: cargo check --locked --lib --no-default-features --features no-storage
