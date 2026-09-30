@@ -122,31 +122,30 @@ impl RouterCore {
             }
         };
 
-        let (channel, rewritten): (&str, Option<Vec<u8>>) =
-            match bound_send_subject(subject) {
-                Some((ident, channel)) if valid_identity(ident) => {
-                    // The subject is the identity proof: overwrite the
-                    // self-asserted `meta.from` before routing/mirroring.
-                    env.meta.from = ident.to_string();
-                    match env.to_json_bytes() {
-                        Ok(bytes) => (channel, Some(bytes)),
-                        Err(e) => {
-                            warn!(%subject, error = %e, "failed to re-encode envelope, dropping");
-                            return None;
-                        }
-                    }
-                }
-                Some((bad, _)) => {
-                    warn!(%subject, identity = %bad, "invalid identity in bound subject, dropping");
-                    return None;
-                }
-                None => {
-                    if !self.legacy_subject(subject) {
+        let (channel, rewritten): (&str, Option<Vec<u8>>) = match bound_send_subject(subject) {
+            Some((ident, channel)) if valid_identity(ident) => {
+                // The subject is the identity proof: overwrite the
+                // self-asserted `meta.from` before routing/mirroring.
+                env.meta.from = ident.to_string();
+                match env.to_json_bytes() {
+                    Ok(bytes) => (channel, Some(bytes)),
+                    Err(e) => {
+                        warn!(%subject, error = %e, "failed to re-encode envelope, dropping");
                         return None;
                     }
-                    (channel_from_send_subject(subject), None)
                 }
-            };
+            }
+            Some((bad, _)) => {
+                warn!(%subject, identity = %bad, "invalid identity in bound subject, dropping");
+                return None;
+            }
+            None => {
+                if !self.legacy_subject(subject) {
+                    return None;
+                }
+                (channel_from_send_subject(subject), None)
+            }
+        };
 
         // Live metrics: non-blocking atomic increments.
         if let Some(metrics) = &self.metrics {

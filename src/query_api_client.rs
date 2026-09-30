@@ -42,7 +42,10 @@ impl ApiClient {
 
     /// Connect with an explicit caller identity — requests go out on the
     /// bound subject `hub.api.<identity>.<op>` (contract §4.1).
-    pub async fn connect_with_identity(nats_url: &str, identity: impl Into<String>) -> Result<Self> {
+    pub async fn connect_with_identity(
+        nats_url: &str,
+        identity: impl Into<String>,
+    ) -> Result<Self> {
         let identity = identity.into();
         crate::protocol::require_valid_identity(&identity)?;
         let opts = crate::HubConnectOptions::from_env();

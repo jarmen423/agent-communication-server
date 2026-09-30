@@ -322,8 +322,7 @@ impl ApiAuthz {
                 if let Some(data) = resp.data.as_mut() {
                     if let Some(arr) = data.get_mut("sessions").and_then(Value::as_array_mut) {
                         arr.retain(|s| {
-                            s.get("orchestrator").and_then(Value::as_str)
-                                == Some(identity.as_str())
+                            s.get("orchestrator").and_then(Value::as_str) == Some(identity.as_str())
                                 || s.get("worker").and_then(Value::as_str)
                                     == Some(identity.as_str())
                         });

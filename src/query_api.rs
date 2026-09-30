@@ -202,7 +202,11 @@ pub async fn handle_request_authorized(
         Ok((caller, op)) => (caller, op),
         Err(resp) => return resp,
     };
-    let op = if op.is_empty() { req.op.as_str() } else { op.as_str() };
+    let op = if op.is_empty() {
+        req.op.as_str()
+    } else {
+        op.as_str()
+    };
 
     debug!(op, ?caller, "query API request");
 
@@ -227,7 +231,6 @@ pub async fn handle_request_authorized(
 /// Route `req` to the storage handler for `op` (subject-derived; falls back
 /// to `req.op` when the subject is not an api subject).
 async fn dispatch(storage: &Arc<dyn Storage>, req: &ApiRequest, op: &str) -> ApiResponse {
-
     let s: &dyn Storage = storage.as_ref();
     let p = &req.params;
     match op {

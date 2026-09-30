@@ -223,7 +223,8 @@ async fn main() -> Result<()> {
     }
 
     // Query-API authorization: --api-admin flags + NATS_HUB_API_ADMINS env.
-    let mut api_admins: std::collections::BTreeSet<String> = args.api_admin.iter().cloned().collect();
+    let mut api_admins: std::collections::BTreeSet<String> =
+        args.api_admin.iter().cloned().collect();
     if let Ok(env_admins) = std::env::var("NATS_HUB_API_ADMINS") {
         api_admins.extend(
             env_admins
