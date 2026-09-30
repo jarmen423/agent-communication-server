@@ -212,6 +212,38 @@ server-side TLS already gives you confidentiality + authentication.
 
 ---
 
+## The visualizer's WS bridge (`hub-server --ws-addr`)
+
+The visualizer bridge is a second door into the hub, separate from NATS
+auth: it reads **all** bus traffic and publishes commands that can spawn
+workers (`ensure_worker` → `worker_supervisor.py` starts always-approve
+agents). Four controls protect it; use them together whenever the port is
+reachable by anything but localhost.
+
+- **Origin allowlist.** Browsers disclose which site opened the socket via
+  the `Origin` header, and browsers are the real threat here — any web page
+  you visit could otherwise open `ws://127.0.0.1:9191/ws` and read or drive
+  the bus. The bridge allows `http://<ws-addr>` and
+  `http://localhost:<port>` by default; `--ws-allow-origin` (repeatable)
+  adds entries. A mismatched Origin gets HTTP 403 before the upgrade.
+  Requests with **no** `Origin` header (curl, scripts, the NATS-clients) are
+  not checked — the token below is what gates them.
+- **Token.** `--ws-token` or env `HUB_WS_TOKEN` requires `?token=` on the
+  WS URL (HTTP 401 otherwise). Open the visualizer at
+  `http://<addr>/?token=T` and the page forwards it to `/ws` itself.
+  hub-server prints the tokenized URL at startup. Rotate the token like any
+  other shared secret; it is not a per-user credential.
+- **Loopback discipline.** With no token configured, `--ws-addr` must
+  resolve to loopback (`127.0.0.1`, `::1`, `localhost`), otherwise
+  hub-server refuses to start. `--ws-insecure` overrides — for trusted
+  LAN/VPN binds only.
+- **Static root confinement.** The static file server percent-decodes the
+  request path, rejects `..` components and NUL bytes (raw or encoded), and
+  canonicalizes the result — symlink escapes included — refusing anything
+  that lands outside `--static-dir`.
+
+---
+
 ## Quick reference
 
 | Concern | Setting |
@@ -223,6 +255,7 @@ server-side TLS already gives you confidentiality + authentication.
 | Auth: per-agent | `authorization { users: [...] }` with `allowed_connection_types:["WEBSOCKET"]` |
 | Per-agent authZ | `permissions.publish.allow` + `permissions.subscribe.allow` allowlists |
 | TLS on WS | `websocket { cert_file, key_file }` |
+| Visualizer bridge | `--ws-token` (or `HUB_WS_TOKEN`) + Origin allowlist; loopback-only without a token |
 | Capacity ceilings | `max_connections`, `max_payload` |
 | Secrets out of git | `/etc/nats/nats-server.conf` 0600 `nats:nats`, or secrets manager |
 
