@@ -29,6 +29,8 @@ from worker_events import execute_with_events, publish_event as emit_event, run_
 
 # Payload keys a one-shot prompt may arrive under (bridges send "message").
 PROMPT_KEYS = ("prompt", "text", "command", "message")
+# Seconds between the first re-announcements (then every heartbeat_secs).
+ANNOUNCE_BACKOFF = (1.0, 2.0, 4.0, 8.0)
 # Kinds that are progress/bookkeeping, never tasks.
 NON_TASK_KINDS = ("status", "event", "control")
 
@@ -313,18 +315,34 @@ async def run_worker(cfg: WorkerConfig) -> None:
 
         await nc.subscribe(f"channel.{cfg.broadcast_channel}", cb=broadcast_callback)
 
-    async def send_heartbeat() -> None:
+    async def announce() -> None:
+        """Heartbeat + (idempotent, upserting) registration. Re-registering on
+        every beat means a worker that started before hub-server was listening
+        (or survived a router restart) still shows up in `hub-agents`."""
         payload = {"identity": cfg.identity, **cfg.extra_heartbeat}
         await nc.publish(
             "hub.presence",
             make_envelope(cfg.identity, None, "hub.presence", "status", payload),
         )
+        await nc.publish(
+            "hub.register",
+            make_envelope(
+                cfg.identity,
+                None,
+                "system",
+                "control",
+                {"identity": cfg.identity, "capabilities": list(cfg.capabilities)},
+            ),
+        )
+        await nc.flush()
 
     async def heartbeat_loop() -> None:
+        # Fast re-announce while the hub may still be starting, then steady.
+        delays = [d for d in ANNOUNCE_BACKOFF if d < cfg.heartbeat_secs]
         while True:
-            await asyncio.sleep(cfg.heartbeat_secs)
+            await asyncio.sleep(delays.pop(0) if delays else cfg.heartbeat_secs)
             try:
-                await send_heartbeat()
+                await announce()
             except Exception as e:  # noqa: BLE001 - keep beating
                 print(f"[{log}] heartbeat failed: {e}")
 
@@ -337,18 +355,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
     try:
         # Announce ourselves right after subscribing, so `hub-agents` shows
         # the worker immediately instead of after the first heartbeat interval.
-        await nc.publish(
-            "hub.register",
-            make_envelope(
-                cfg.identity,
-                None,
-                "system",
-                "control",
-                {"identity": cfg.identity, "capabilities": list(cfg.capabilities)},
-            ),
-        )
-        await send_heartbeat()
-        await nc.flush()
+        await announce()
         heartbeat_task = asyncio.create_task(heartbeat_loop())
         print(f"[{log}] ready")
 

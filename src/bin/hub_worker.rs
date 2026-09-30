@@ -29,8 +29,15 @@ use tokio::process::Child;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-/// Max bytes of stderr quoted in an error result.
+/// Max chars of stderr quoted in an error result.
 const STDERR_TAIL: usize = 2000;
+
+/// Seconds between the first re-announcements (then every --heartbeat-secs).
+const ANNOUNCE_BACKOFF_SECS: [u64; 4] = [1, 2, 4, 8];
+
+fn capabilities() -> Vec<String> {
+    vec!["worker".into(), "execute".into()]
+}
 
 #[derive(Parser)]
 #[command(name = "hub-worker", about = "Universal agent worker for nats-hub")]
@@ -93,19 +100,25 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    client
-        .register(vec!["worker".into(), "execute".into()])
-        .await?;
+    client.register(capabilities()).await?;
     info!(identity = %args.identity, "registered on bus");
 
     if args.heartbeat_secs > 0 {
         let hb_client = client.clone();
         let interval = Duration::from_secs(args.heartbeat_secs);
-        // `register` above already marks us alive; heartbeats keep it fresh.
+        // Heartbeat + (upserting) re-registration: fast while hub-server may
+        // still be starting (a registration sent before it listens is lost),
+        // then every interval. Also recovers from router restarts.
         tokio::spawn(async move {
+            let mut backoff = ANNOUNCE_BACKOFF_SECS
+                .iter()
+                .map(|s| Duration::from_secs(*s))
+                .filter(|d| *d < interval);
             loop {
-                tokio::time::sleep(interval).await;
-                if let Err(e) = hb_client.heartbeat().await {
+                tokio::time::sleep(backoff.next().unwrap_or(interval)).await;
+                let beat = hb_client.heartbeat().await;
+                let reg = hb_client.register(capabilities()).await;
+                if let Err(e) = beat.and(reg) {
                     warn!(error = %e, "heartbeat failed");
                 }
             }

@@ -104,8 +104,8 @@ def _start_echo(url: str) -> tuple[str, subprocess.Popen]:
     return identity, proc
 
 
-async def _wait_registered(nc, identity: str, sub) -> None:
-    deadline = time.monotonic() + 15
+async def _wait_registered(nc, identity: str, sub, within: float = 15) -> None:
+    deadline = time.monotonic() + within
     while True:
         msg = await sub.next_msg(timeout=max(deadline - time.monotonic(), 0.1))
         if json.loads(msg.data)["payload"].get("identity") == identity:
@@ -213,3 +213,17 @@ def test_sigterm_exits_cleanly():
                 proc.kill()
 
     assert asyncio.run(run()) == 0
+
+
+@live
+def test_worker_reannounces_registration():
+    """A register sent before hub-server listens is lost (core NATS), so the
+    runtime re-announces on a short backoff: a second one within ~3s."""
+
+    async def scenario(nc, identity, _started):
+        # _run_live already consumed the first registration.
+        sub = await nc.subscribe("hub.register")
+        await _wait_registered(nc, identity, sub, within=3)
+        return True
+
+    assert _run_live(scenario)

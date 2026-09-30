@@ -294,3 +294,18 @@ async fn e2e_rust_worker_listed_in_agents_quickly() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+// A registration published before hub-server listens is lost (core NATS), so
+// the worker re-announces quickly: a second `hub.register` within ~3s.
+#[tokio::test]
+async fn e2e_rust_worker_reannounces_registration() {
+    let Some(url) = stack_url() else { return };
+    let worker = uniq("reannounce-worker");
+    let _child = spawn_rust_worker(&url, &worker, "cat", &[]).await;
+
+    // spawn_rust_worker consumed the first registration; expect another.
+    let probe = HubClient::connect(&url, uniq("probe")).await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register").await.unwrap();
+    recv_until(&mut reg, 3, |e| e.payload["identity"] == worker.as_str()).await;
+    let _ = probe.drain().await;
+}
