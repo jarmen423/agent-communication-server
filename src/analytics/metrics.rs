@@ -111,6 +111,9 @@ pub struct MetricsCollector {
     pub by_channel_class: [AtomicU64; 6],
     /// Total error events (`event_type == "error"`).
     pub errors_total: AtomicU64,
+    /// Storage-mirror writes dropped because the bounded mirror queue was
+    /// full (the DB could not keep up). Routing is unaffected.
+    pub storage_mirror_dropped: AtomicU64,
 }
 
 /// Map a [`MessageKind`] to a stable index into `by_kind`.
@@ -153,6 +156,16 @@ impl MetricsCollector {
     /// Snapshot the current counter values (useful for tests/logging).
     pub fn messages_total(&self) -> u64 {
         self.messages_total.load(Ordering::Relaxed)
+    }
+
+    /// Count one storage-mirror write dropped on overflow. Non-blocking.
+    pub fn record_mirror_drop(&self) {
+        self.storage_mirror_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Storage-mirror writes dropped so far.
+    pub fn mirror_dropped(&self) -> u64 {
+        self.storage_mirror_dropped.load(Ordering::Relaxed)
     }
 
     /// Render the Prometheus text exposition format.
@@ -207,6 +220,16 @@ impl MetricsCollector {
         out.push_str(&format!(
             "natshub_errors_total {}\n",
             self.errors_total.load(Ordering::Relaxed)
+        ));
+
+        // Storage mirror overflow
+        out.push_str(
+            "# HELP natshub_storage_mirror_dropped_total Storage writes dropped because the mirror queue was full\n",
+        );
+        out.push_str("# TYPE natshub_storage_mirror_dropped_total counter\n");
+        out.push_str(&format!(
+            "natshub_storage_mirror_dropped_total {}\n",
+            self.storage_mirror_dropped.load(Ordering::Relaxed)
         ));
 
         out

@@ -5,6 +5,12 @@
 //!
 //! Wire format: raw JSON request → raw JSON response (not Envelopes).
 //! This is internal infrastructure plumbing, not agent messaging.
+//!
+//! The API is backend-agnostic: it dispatches through `Arc<dyn Storage>`.
+//! List operations that can grow without bound (`history.query`,
+//! `thread.get`, `thread.pending`) take a `limit` that defaults to
+//! [`DEFAULT_LIMIT`] and is rejected above [`MAX_LIMIT`], and no reply is
+//! ever larger than the server's NATS `max_payload`.
 
 use anyhow::Result;
 use futures_util::StreamExt;
@@ -13,10 +19,22 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-use crate::storage::{Storage, SurrealStorage};
+use crate::storage::Storage;
+
+mod handlers;
+#[cfg(feature = "storage-surreal")]
+mod stats;
+
+use handlers::*;
 
 /// NATS subject prefix for query API.
 pub const API_PREFIX: &str = "hub.api";
+
+/// Rows returned by list operations when the request has no `limit`.
+pub const DEFAULT_LIMIT: usize = 100;
+
+/// Largest `limit` a list operation accepts; above this the request fails.
+pub const MAX_LIMIT: usize = 1000;
 
 /// Build a query API subject: `hub.api.<operation>`.
 pub fn subject(operation: &str) -> String {
@@ -63,11 +81,45 @@ impl ApiResponse {
     }
 }
 
+/// Resolve `params.limit`: absent/null → [`DEFAULT_LIMIT`]; must be an
+/// integer in `1..=MAX_LIMIT`, otherwise the request fails with a clear error.
+pub fn resolve_limit(params: &Value) -> std::result::Result<usize, ApiResponse> {
+    match params.get("limit") {
+        None | Some(Value::Null) => Ok(DEFAULT_LIMIT),
+        Some(v) => match v.as_u64() {
+            Some(0) => Err(ApiResponse::err("limit must be at least 1")),
+            Some(n) if n as usize <= MAX_LIMIT => Ok(n as usize),
+            Some(n) => Err(ApiResponse::err(format!(
+                "limit {n} exceeds the maximum of {MAX_LIMIT}; page with since/until instead"
+            ))),
+            None => Err(ApiResponse::err(format!(
+                "limit must be a positive integer (got {v})"
+            ))),
+        },
+    }
+}
+
+/// Serialize a response, replacing it with an error if it would exceed
+/// `max_payload` (NATS rejects oversized publishes, which would otherwise
+/// surface to the caller as a timeout).
+pub fn encode_response(resp: &ApiResponse, max_payload: usize) -> Vec<u8> {
+    let bytes = resp.to_bytes();
+    if bytes.len() <= max_payload {
+        return bytes;
+    }
+    ApiResponse::err(format!(
+        "response too large ({} bytes > NATS max_payload {max_payload}); \
+         request a smaller limit",
+        bytes.len()
+    ))
+    .to_bytes()
+}
+
 /// Start the query API listener on the hub-server side.
 ///
 /// Subscribes to `hub.api.>` and dispatches to the storage backend.
 /// Each operation is handled in a spawned task — non-blocking.
-pub async fn start_api_listener(storage: Arc<SurrealStorage>, nats_url: &str) -> Result<()> {
+pub async fn start_api_listener(storage: Arc<dyn Storage>, nats_url: &str) -> Result<()> {
     // Same env auth path as ControlPlane / HubClient (NATS_TOKEN, TLS, …).
     let opts = crate::HubConnectOptions::from_env();
     let client = crate::connect_opts::connect_with_hub_opts(nats_url, &opts).await?;
@@ -82,9 +134,11 @@ pub async fn start_api_listener(storage: Arc<SurrealStorage>, nats_url: &str) ->
         let subject = msg.subject.to_string();
 
         tokio::spawn(async move {
-            let resp = handle_api_request(&storage, &subject, &msg.payload).await;
+            let resp = handle_request(&storage, &subject, &msg.payload).await;
             if let Some(reply) = reply_subject {
-                if let Err(e) = client.publish(reply, resp.to_bytes().into()).await {
+                let max_payload = client.server_info().max_payload;
+                let bytes = encode_response(&resp, max_payload);
+                if let Err(e) = client.publish(reply, bytes.into()).await {
                     warn!(error = %e, "query API: failed to publish reply");
                 }
             }
@@ -94,9 +148,11 @@ pub async fn start_api_listener(storage: Arc<SurrealStorage>, nats_url: &str) ->
     Ok(())
 }
 
-/// Dispatch an API request to the appropriate storage method.
-async fn handle_api_request(
-    storage: &SurrealStorage,
+/// Dispatch one API request (`subject` = `hub.api.<op>`, `payload` = JSON
+/// [`ApiRequest`]) to the storage backend. Public so the API can be
+/// exercised without NATS.
+pub async fn handle_request(
+    storage: &Arc<dyn Storage>,
     subject: &str,
     payload: &[u8],
 ) -> ApiResponse {
@@ -112,368 +168,54 @@ async fn handle_api_request(
 
     debug!(op, "query API request");
 
+    let s: &dyn Storage = storage.as_ref();
+    let p = &req.params;
     match op {
         // ── Waves ──────────────────────────────────────────────
-        "wave.create" => wave_create(storage, &req.params).await,
-        "wave.create_task" => wave_create_task(storage, &req.params).await,
-        "wave.update_status" => wave_update_status(storage, &req.params).await,
-        "wave.get" => wave_get(storage, &req.params).await,
-        "wave.list" => wave_list(storage, &req.params).await,
-        "wave.list_tasks" => wave_list_tasks(storage, &req.params).await,
-        "wave.update_task_status" => wave_update_task_status(storage, &req.params).await,
-        "wave.get_task" => wave_get_task(storage, &req.params).await,
+        "wave.create" => wave_create(s, p).await,
+        "wave.create_task" => wave_create_task(s, p).await,
+        "wave.update_status" => wave_update_status(s, p).await,
+        "wave.get" => wave_get(s, p).await,
+        "wave.list" => wave_list(s, p).await,
+        "wave.list_tasks" => wave_list_tasks(s, p).await,
+        "wave.update_task_status" => wave_update_task_status(s, p).await,
+        "wave.get_task" => wave_get_task(s, p).await,
 
         // ── Sessions ───────────────────────────────────────────
-        "session.create" => session_create(storage, &req.params).await,
-        "session.update_status" => session_update_status(storage, &req.params).await,
-        "session.get" => session_get(storage, &req.params).await,
-        "session.list" => session_list(storage, &req.params).await,
+        "session.create" => session_create(s, p).await,
+        "session.update_status" => session_update_status(s, p).await,
+        "session.get" => session_get(s, p).await,
+        "session.list" => session_list(s, p).await,
 
         // ── Agents ─────────────────────────────────────────────
-        "agent.find" => agent_find(storage, &req.params).await,
+        "agent.find" => agent_find(s, p).await,
+        "agent.get" => agent_get(s, p).await,
 
-        // ── History ────────────────────────────────────────────
-        "history.query" => history_query(storage, &req.params).await,
-
-        // ── Threads ───────────────────────────────────────────
-        "thread.get" => thread_get(storage, &req.params).await,
-        "thread.pending" => thread_pending(storage, &req.params).await,
-        "envelope.get" => envelope_get(storage, &req.params).await,
-
-        // ── Single agent ──────────────────────────────────────
-        "agent.get" => agent_get(storage, &req.params).await,
+        // ── History / threads (bounded) ───────────────────────
+        "history.query" => history_query(s, p).await,
+        "thread.get" => thread_get(s, p).await,
+        "thread.pending" => thread_pending(s, p).await,
+        "envelope.get" => envelope_get(s, p).await,
 
         // ── Stats (analytics) ─────────────────────────────────
-        "stats.message_rate" => stats_message_rate(storage, &req.params).await,
-        "stats.latency" => stats_latency(storage, &req.params).await,
-        "stats.agent_activity" => stats_agent_activity(storage, &req.params).await,
-        "stats.channel_hotspots" => stats_channel_hotspots(storage, &req.params).await,
-        "stats.error_rate" => stats_error_rate(storage, &req.params).await,
+        #[cfg(feature = "storage-surreal")]
+        "stats.message_rate" => stats::stats_message_rate(storage, p).await,
+        #[cfg(feature = "storage-surreal")]
+        "stats.latency" => stats::stats_latency(storage, p).await,
+        #[cfg(feature = "storage-surreal")]
+        "stats.agent_activity" => stats::stats_agent_activity(storage, p).await,
+        #[cfg(feature = "storage-surreal")]
+        "stats.channel_hotspots" => stats::stats_channel_hotspots(storage, p).await,
+        #[cfg(feature = "storage-surreal")]
+        "stats.error_rate" => stats::stats_error_rate(storage, p).await,
+        #[cfg(not(feature = "storage-surreal"))]
+        op if op.starts_with("stats.") => {
+            ApiResponse::err(format!("{op}: analytics needs the storage-surreal feature"))
+        }
 
         // ── Misc ───────────────────────────────────────────────
         "ping" => ApiResponse::ok(serde_json::json!({"ok": true})),
 
         _ => ApiResponse::err(format!("unknown operation: {op}")),
-    }
-}
-
-// ── Wave handlers ──────────────────────────────────────────────
-
-async fn wave_create(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let wave: crate::WaveRecord = match serde_json::from_value(p.clone()) {
-        Ok(w) => w,
-        Err(e) => return ApiResponse::err(format!("bad wave record: {e}")),
-    };
-    match s.create_wave(wave).await {
-        Ok(()) => ApiResponse::ok(serde_json::json!({"created": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_create_task(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let task: crate::WaveTaskRecord = match serde_json::from_value(p.clone()) {
-        Ok(t) => t,
-        Err(e) => return ApiResponse::err(format!("bad task record: {e}")),
-    };
-    match s.create_wave_task(task).await {
-        Ok(()) => ApiResponse::ok(serde_json::json!({"created": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_update_status(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let status = match p.get("status").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return ApiResponse::err("missing status"),
-    };
-    match s.update_wave_status(wave_id, status).await {
-        Ok(()) => ApiResponse::ok(serde_json::json!({"updated": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    match s.get_wave(wave_id).await {
-        Ok(wave) => ApiResponse::ok(serde_json::json!({"wave": wave})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_list(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let status = p.get("status").and_then(|v| v.as_str());
-    match s.list_waves(status).await {
-        Ok(waves) => ApiResponse::ok(serde_json::json!({"waves": waves})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_list_tasks(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    match s.list_wave_tasks(wave_id).await {
-        Ok(tasks) => ApiResponse::ok(serde_json::json!({"tasks": tasks})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_update_task_status(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let task_id = match p.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return ApiResponse::err("missing task_id"),
-    };
-    let status = match p.get("status").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return ApiResponse::err("missing status"),
-    };
-    let result = p
-        .get("result")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    match s
-        .update_wave_task_status(&wave_id, &task_id, &status, result.as_deref())
-        .await
-    {
-        Ok(()) => ApiResponse::ok(serde_json::json!({"updated": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn wave_get_task(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let task_id = match p.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing task_id"),
-    };
-    match s.get_wave_task(wave_id, task_id).await {
-        Ok(task) => ApiResponse::ok(serde_json::json!({"task": task})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-// ── Session handlers ───────────────────────────────────────────
-
-async fn session_create(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let session: crate::SessionRecord = match serde_json::from_value(p.clone()) {
-        Ok(s) => s,
-        Err(e) => return ApiResponse::err(format!("bad session record: {e}")),
-    };
-    match s.create_session(session).await {
-        Ok(()) => ApiResponse::ok(serde_json::json!({"created": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn session_update_status(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let session_id = match p.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing session_id"),
-    };
-    let status = match p.get("status").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return ApiResponse::err("missing status"),
-    };
-    match s.update_session_status(session_id, status).await {
-        Ok(()) => ApiResponse::ok(serde_json::json!({"updated": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn session_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let session_id = match p.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing session_id"),
-    };
-    match s.get_session(session_id).await {
-        Ok(session) => ApiResponse::ok(serde_json::json!({"session": session})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn session_list(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let filter: crate::SessionFilter = match serde_json::from_value(p.clone()) {
-        Ok(f) => f,
-        Err(e) => return ApiResponse::err(format!("bad filter: {e}")),
-    };
-    match s.list_sessions(&filter).await {
-        Ok(sessions) => ApiResponse::ok(serde_json::json!({"sessions": sessions})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-// ── Agent handlers ─────────────────────────────────────────────
-
-async fn agent_find(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let filter: crate::AgentFilter = match serde_json::from_value(p.clone()) {
-        Ok(f) => f,
-        Err(e) => return ApiResponse::err(format!("bad agent filter: {e}")),
-    };
-    match s.find_agents(&filter).await {
-        Ok(agents) => ApiResponse::ok(serde_json::json!({"agents": agents})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-// ── History handlers ───────────────────────────────────────────
-
-async fn history_query(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let query: crate::HistoryQuery = match serde_json::from_value(p.clone()) {
-        Ok(q) => q,
-        Err(e) => return ApiResponse::err(format!("bad history query: {e}")),
-    };
-    match s.query_history(&query).await {
-        Ok(envelopes) => ApiResponse::ok(serde_json::json!({"envelopes": envelopes})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-// ── Thread handlers ────────────────────────────────────────────
-
-async fn thread_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let root_id = match p.get("root_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing root_id"),
-    };
-    match s.get_thread(root_id).await {
-        Ok(thread) => ApiResponse::ok(serde_json::json!({"thread": thread})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn thread_pending(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let identity = match p.get("identity").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing identity"),
-    };
-    match s.list_pending(identity).await {
-        Ok(pending) => ApiResponse::ok(serde_json::json!({"pending": pending})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn envelope_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let id = match p.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing id"),
-    };
-    match s.get_envelope(id).await {
-        Ok(env) => ApiResponse::ok(serde_json::json!({"envelope": env})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn agent_get(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    let identity = match p.get("identity").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing identity"),
-    };
-    match s.get_agent(identity).await {
-        Ok(agent) => ApiResponse::ok(serde_json::json!({"agent": agent})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-// ── Stats handlers ─────────────────────────────────────────────
-
-async fn stats_message_rate(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    use crate::analytics::{Analytics, Interval, SurrealAnalytics, TimeRange};
-    use std::sync::Arc;
-    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
-    let interval_str = p.get("interval").and_then(|v| v.as_str()).unwrap_or("hour");
-    let interval = match interval_str {
-        "minute" => Interval::Minute,
-        "hour" => Interval::Hour,
-        "day" => Interval::Day,
-        _ => Interval::Hour,
-    };
-    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
-    match analytics
-        .message_rate(&TimeRange::last(secs), interval)
-        .await
-    {
-        Ok(data) => ApiResponse::ok(serde_json::json!({"data": data})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn stats_latency(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    use crate::analytics::{Analytics, SurrealAnalytics, TimeRange};
-    use std::sync::Arc;
-    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
-    let channel = p.get("channel").and_then(|v| v.as_str());
-    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
-    match analytics
-        .latency_stats(channel, &TimeRange::last(secs))
-        .await
-    {
-        Ok(stats) => ApiResponse::ok(serde_json::json!({"stats": stats})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn stats_agent_activity(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    use crate::analytics::{Analytics, SurrealAnalytics, TimeRange};
-    use std::sync::Arc;
-    let identity = match p.get("identity").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing identity"),
-    };
-    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(86400);
-    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
-    match analytics
-        .agent_activity(identity, &TimeRange::last(secs))
-        .await
-    {
-        Ok(activity) => ApiResponse::ok(serde_json::json!({"activity": activity})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn stats_channel_hotspots(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    use crate::analytics::{Analytics, SurrealAnalytics, TimeRange};
-    use std::sync::Arc;
-    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
-    let limit = p.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
-    match analytics
-        .channel_hotspots(&TimeRange::last(secs), limit)
-        .await
-    {
-        Ok(hotspots) => ApiResponse::ok(serde_json::json!({"hotspots": hotspots})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-async fn stats_error_rate(s: &SurrealStorage, p: &Value) -> ApiResponse {
-    use crate::analytics::{Analytics, Interval, SurrealAnalytics, TimeRange};
-    use std::sync::Arc;
-    let secs = p.get("secs").and_then(|v| v.as_i64()).unwrap_or(3600);
-    let interval_str = p.get("interval").and_then(|v| v.as_str()).unwrap_or("hour");
-    let interval = match interval_str {
-        "minute" => Interval::Minute,
-        "hour" => Interval::Hour,
-        "day" => Interval::Day,
-        _ => Interval::Hour,
-    };
-    let analytics = SurrealAnalytics::new(Arc::new(s.clone()) as Arc<dyn Storage>);
-    match analytics.error_rate(&TimeRange::last(secs), interval).await {
-        Ok(data) => ApiResponse::ok(serde_json::json!({"data": data})),
-        Err(e) => ApiResponse::err(e.to_string()),
     }
 }

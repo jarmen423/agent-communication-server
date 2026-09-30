@@ -3,39 +3,39 @@
 //! Split from `surreal.rs` to keep files under 400 LOC.
 //! Implements the session-related methods of the `Storage` trait
 //! on `SurrealStorage`.
+//!
+//! Datetimes are stored as native SurrealDB datetimes and `metadata` is
+//! persisted. Reads tolerate legacy rows (RFC 3339 strings, `""` for unset
+//! optionals); a corrupt required datetime is reported, never replaced.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 
+use crate::storage::dbtime::{db_now, db_time, metadata_object, DbTime, StoredTime};
+use crate::storage::surreal::Db;
 use crate::storage::{SessionFilter, SessionRecord};
 
-/// Internal row type for the sessions table.
-/// No `id` field — SurrealDB auto-assigns the record ID from the
-/// tuple key passed to `.upsert()`.
-/// All fields are `String` (not `Option`) because SurrealDB's
-/// `.content()` serializer has issues with `Option<T>`.
+/// Internal row type written to the sessions table. No `id` field —
+/// SurrealDB assigns the record ID from the key passed to `.upsert()`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionRow {
     pub session_id: String,
     pub orchestrator: String,
     pub worker: String,
     pub status: String,
-    #[serde(default)]
-    pub cwd: String,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub provider: String,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default)]
-    pub closed_at: String,
+    pub cwd: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub created_at: DbTime,
+    pub updated_at: DbTime,
+    pub closed_at: Option<DbTime>,
+    pub metadata: serde_json::Value,
 }
 
-/// Row type that includes the SurrealDB record ID (for queries that return it).
-#[derive(Debug, Serialize, Deserialize)]
+/// Row type read back from the DB (includes the record ID; tolerant of
+/// legacy string datetimes and missing metadata).
+#[derive(Debug, Deserialize)]
 pub struct SessionRowWithId {
     pub id: surrealdb::RecordId,
     pub session_id: String,
@@ -43,56 +43,46 @@ pub struct SessionRowWithId {
     pub worker: String,
     pub status: String,
     #[serde(default)]
-    pub cwd: String,
+    cwd: Option<String>,
     #[serde(default)]
-    pub model: String,
+    model: Option<String>,
     #[serde(default)]
-    pub provider: String,
-    pub created_at: String,
-    pub updated_at: String,
+    provider: Option<String>,
+    created_at: StoredTime,
+    updated_at: StoredTime,
     #[serde(default)]
-    pub closed_at: String,
+    closed_at: Option<StoredTime>,
+    #[serde(default)]
+    metadata: Option<serde_json::Value>,
+}
+
+/// Legacy rows used `""` for "unset".
+fn non_empty(s: Option<String>) -> Option<String> {
+    s.filter(|v| !v.is_empty())
 }
 
 impl SessionRowWithId {
-    /// Convert a DB row into a public `SessionRecord`.
-    pub fn to_record(self) -> SessionRecord {
-        let parse_or_now =
-            |s: &str| -> chrono::DateTime<chrono::Utc> { s.parse().unwrap_or_else(|_| Utc::now()) };
-        SessionRecord {
+    /// Convert a DB row into a public `SessionRecord`. Errors if a required
+    /// datetime is corrupt.
+    pub fn to_record(self) -> Result<SessionRecord> {
+        let record = self.id.to_string();
+        Ok(SessionRecord {
+            created_at: self.created_at.required(&record, "created_at")?,
+            updated_at: self.updated_at.required(&record, "updated_at")?,
+            closed_at: StoredTime::optional(self.closed_at, &record, "closed_at"),
             session_id: self.session_id,
             orchestrator: self.orchestrator,
             worker: self.worker,
             status: self.status,
-            cwd: if self.cwd.is_empty() {
-                None
-            } else {
-                Some(self.cwd)
-            },
-            model: if self.model.is_empty() {
-                None
-            } else {
-                Some(self.model)
-            },
-            provider: if self.provider.is_empty() {
-                None
-            } else {
-                Some(self.provider)
-            },
-            created_at: parse_or_now(&self.created_at),
-            updated_at: parse_or_now(&self.updated_at),
-            closed_at: if self.closed_at.is_empty() {
-                None
-            } else {
-                self.closed_at.parse().ok()
-            },
-            metadata: serde_json::json!({}),
-        }
+            cwd: non_empty(self.cwd),
+            model: non_empty(self.model),
+            provider: non_empty(self.provider),
+            metadata: metadata_object(self.metadata.unwrap_or_default()),
+        })
     }
 }
 
 /// SQL columns shared between SELECT queries and row conversion.
-/// Used to keep query strings DRY across methods.
 const SESSION_COLUMNS: &str = "id, session_id, orchestrator, worker, status, \
      cwd, model, provider, created_at, updated_at, closed_at, metadata";
 
@@ -103,23 +93,18 @@ pub fn session_to_row(record: &SessionRecord) -> SessionRow {
         orchestrator: record.orchestrator.clone(),
         worker: record.worker.clone(),
         status: record.status.clone(),
-        cwd: record.cwd.clone().unwrap_or_default(),
-        model: record.model.clone().unwrap_or_default(),
-        provider: record.provider.clone().unwrap_or_default(),
-        created_at: record.created_at.to_rfc3339(),
-        updated_at: record.updated_at.to_rfc3339(),
-        closed_at: record
-            .closed_at
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_default(),
+        cwd: record.cwd.clone(),
+        model: record.model.clone(),
+        provider: record.provider.clone(),
+        created_at: db_time(record.created_at),
+        updated_at: db_time(record.updated_at),
+        closed_at: record.closed_at.map(db_time),
+        metadata: metadata_object(record.metadata.clone()),
     }
 }
 
 /// Create a session in the DB.
-pub async fn create_session(
-    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
-    session: SessionRecord,
-) -> Result<()> {
+pub async fn create_session(db: &Db, session: SessionRecord) -> Result<()> {
     debug!(session_id = %session.session_id, "storing session record");
     let row = session_to_row(&session);
     let _: Option<SessionRow> = db
@@ -131,55 +116,40 @@ pub async fn create_session(
 }
 
 /// Update a session's status. Sets `closed_at` when status is "closed".
-pub async fn update_session_status(
-    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
-    session_id: &str,
-    status: &str,
-) -> Result<()> {
+pub async fn update_session_status(db: &Db, session_id: &str, status: &str) -> Result<()> {
     debug!(%session_id, %status, "updating session status");
-    let now = Utc::now().to_rfc3339();
-
-    if status == "closed" {
-        let _: Option<SessionRow> = db
-            .query("UPDATE type::thing('sessions', $id) SET status = $status, updated_at = $now, closed_at = $now")
-            .bind(("id", session_id.to_string()))
-            .bind(("status", status.to_string()))
-            .bind(("now", now))
-            .await?
-            .take(0)?;
+    let sql = if status == "closed" {
+        "UPDATE type::thing('sessions', $id) SET status = $status, updated_at = $now, closed_at = $now"
     } else {
-        let _: Option<SessionRow> = db
-            .query("UPDATE type::thing('sessions', $id) SET status = $status, updated_at = $now")
-            .bind(("id", session_id.to_string()))
-            .bind(("status", status.to_string()))
-            .bind(("now", now))
-            .await?
-            .take(0)?;
-    }
+        "UPDATE type::thing('sessions', $id) SET status = $status, updated_at = $now"
+    };
+    db.query(sql)
+        .bind(("id", session_id.to_string()))
+        .bind(("status", status.to_string()))
+        .bind(("now", db_now()))
+        .await?
+        .check()
+        .with_context(|| format!("failed to update session '{session_id}'"))?;
     Ok(())
 }
 
 /// Get a single session by ID.
-pub async fn get_session(
-    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
-    session_id: &str,
-) -> Result<Option<SessionRecord>> {
+pub async fn get_session(db: &Db, session_id: &str) -> Result<Option<SessionRecord>> {
     debug!(%session_id, "getting session");
-    let mut result = db
-        .query(&format!(
+    let rows: Vec<SessionRowWithId> = db
+        .query(format!(
             "SELECT {SESSION_COLUMNS} FROM type::thing('sessions', $id)"
         ))
         .bind(("id", session_id.to_string()))
-        .await?;
-    let rows: Vec<SessionRowWithId> = result.take(0)?;
-    Ok(rows.into_iter().next().map(|r| r.to_record()))
+        .await?
+        .check()?
+        .take(0)?;
+    rows.into_iter().next().map(|r| r.to_record()).transpose()
 }
 
-/// List sessions matching a filter.
-pub async fn list_sessions(
-    db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
-    filter: &SessionFilter,
-) -> Result<Vec<SessionRecord>> {
+/// List sessions matching a filter. Rows with a corrupt required datetime
+/// are skipped (and logged) rather than failing the whole list.
+pub async fn list_sessions(db: &Db, filter: &SessionFilter) -> Result<Vec<SessionRecord>> {
     debug!(?filter, "listing sessions");
 
     let mut query = format!("SELECT {SESSION_COLUMNS} FROM sessions");
@@ -218,6 +188,13 @@ pub async fn list_sessions(
         q_builder = q_builder.bind(("orchestrator", o.clone()));
     }
 
-    let rows: Vec<SessionRowWithId> = q_builder.await?.take(0)?;
-    Ok(rows.into_iter().map(|r| r.to_record()).collect())
+    let rows: Vec<SessionRowWithId> = q_builder.await?.check()?.take(0)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            r.to_record()
+                .map_err(|e| warn!(error = %e, "skipping unreadable session row"))
+                .ok()
+        })
+        .collect())
 }

@@ -1,75 +1,171 @@
 //! Control plane router — the brains of nats-hub.
 //!
 //! Subscribes to `hub.send.>` (everything agents publish) and routes
-//! envelopes to the correct `channel.<name>` subjects. Also listens
-//! to `hub.register` to track known agents and maintains a routing
-//! table that can be extended with custom rules.
+//! envelopes to the correct `channel.<name>` subjects (see
+//! [`route_subject`]). Also listens to `hub.register` / `hub.presence` to
+//! track known agents, and mirrors envelopes + registrations to an optional
+//! `Storage` backend through a bounded, single-writer queue.
+
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::client::{AgentInfo, AgentRegistry};
 use crate::protocol::{subjects, Envelope};
-#[cfg(feature = "storage-surreal")]
 use crate::storage::{AgentFilter, AgentRecord, Storage};
 use crate::MetricsCollector;
 
-/// Routing rules — maps channel names to endpoint lists.
-/// In the base implementation routing is direct (channel → channel.<name>),
-/// but this table allows future extension (fan-out, filtering, transforms).
-#[derive(Default)]
-pub struct RoutingTable {
-    /// channel name → list of subscriber identities
-    routes: Arc<Mutex<HashMap<String, Vec<String>>>>,
+mod mirror;
+mod routing;
+#[cfg(all(test, feature = "storage-surreal"))]
+mod tests;
+
+pub use mirror::DEFAULT_MIRROR_CAPACITY;
+pub use routing::{channel_from_send_subject, route_subject, RoutingTable};
+
+use mirror::{MirrorOp, StorageMirror};
+
+/// Router state and per-message logic, independent of the NATS connection
+/// (so it can be exercised without a server).
+pub(crate) struct RouterCore {
+    routing: RoutingTable,
+    registry: AgentRegistry,
+    metrics: Option<Arc<MetricsCollector>>,
+    /// Optional WS bridge broadcast channel. When set, every routed envelope
+    /// is serialized to JSON and pushed to all connected visualizer clients.
+    ws_event_tx: Option<crate::ws_bridge::EventTx>,
+    /// Set once by `ControlPlane::run` when storage is attached.
+    mirror: OnceLock<StorageMirror>,
 }
 
-impl RoutingTable {
-    pub fn new() -> Self {
-        Self::default()
+impl RouterCore {
+    pub(crate) fn new() -> Self {
+        Self {
+            routing: RoutingTable::new(),
+            registry: AgentRegistry::new(),
+            metrics: None,
+            ws_event_tx: None,
+            mirror: OnceLock::new(),
+        }
     }
 
-    /// Add a subscriber to a channel's route list.
-    pub async fn add_subscriber(&self, channel: &str, identity: &str) {
-        self.routes
-            .lock()
-            .await
-            .entry(channel.to_string())
-            .or_default()
-            .push(identity.to_string());
-        debug!(%channel, %identity, "routing table: subscriber added");
+    fn enqueue(&self, op: MirrorOp) {
+        if let Some(mirror) = self.mirror.get() {
+            mirror.enqueue(op);
+        }
     }
 
-    /// Get the list of subscribers for a channel (if any registered).
-    pub async fn subscribers(&self, channel: &str) -> Vec<String> {
-        self.routes
-            .lock()
-            .await
-            .get(channel)
-            .cloned()
-            .unwrap_or_default()
+    /// Decode an envelope from `hub.send.<channel>`, record metrics, push it
+    /// to the WS bridge and decide its destination. `None` = undecodable.
+    pub(crate) fn on_send(&self, subject: &str, payload: &[u8]) -> Option<(String, Envelope)> {
+        let env = match Envelope::from_json_bytes(payload) {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(%subject, error = %e, "failed to decode envelope, dropping");
+                return None;
+            }
+        };
+
+        // Live metrics: non-blocking atomic increments.
+        if let Some(metrics) = &self.metrics {
+            metrics.record(&env);
+        }
+        // Push to WS bridge for visualizer (broadcast::send is non-blocking).
+        if let Some(tx) = &self.ws_event_tx {
+            if let Ok(json) = serde_json::to_string(&env) {
+                let _ = tx.send(json);
+            }
+        }
+
+        let dest = route_subject(subject, &env);
+        debug!(
+            id = %env.meta.id,
+            from = %env.meta.from,
+            to = ?env.meta.to,
+            kind = ?env.meta.kind,
+            %dest,
+            "routing envelope"
+        );
+        Some((dest, env))
+    }
+
+    /// Queue a routed envelope for the storage mirror (non-blocking).
+    pub(crate) fn mirror_envelope(&self, env: Envelope) {
+        self.enqueue(MirrorOp::Envelope(Box::new(env)));
+    }
+
+    /// `hub.register`: record identity + capabilities (replacing any
+    /// previous capabilities) and persist the registration.
+    pub(crate) async fn on_register(&self, payload: &[u8]) {
+        let env = match Envelope::from_json_bytes(payload) {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(error = %e, "failed to decode registration envelope");
+                return;
+            }
+        };
+        let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) else {
+            return;
+        };
+        let caps: Vec<String> = env
+            .payload
+            .get("capabilities")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        info!(identity = %ident, ?caps, "agent registered");
+        self.registry
+            .register(ident.to_string(), caps.clone())
+            .await;
+        self.routing.set_capabilities(ident, &caps).await;
+
+        let now = chrono::Utc::now();
+        self.enqueue(MirrorOp::Register(AgentRecord {
+            identity: ident.to_string(),
+            capabilities: caps,
+            last_seen: now,
+            registered_at: now,
+            metadata: serde_json::json!({}),
+        }));
+    }
+
+    /// `hub.presence`: refresh liveness only. Capabilities are preserved
+    /// (an unknown agent is added with none until it registers).
+    pub(crate) async fn on_presence(&self, payload: &[u8]) {
+        let env = match Envelope::from_json_bytes(payload) {
+            Ok(env) => env,
+            Err(e) => {
+                warn!(error = %e, "failed to decode presence envelope");
+                return;
+            }
+        };
+        let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) else {
+            return;
+        };
+        debug!(identity = %ident, "heartbeat received");
+        self.registry.touch(ident).await;
+        self.enqueue(MirrorOp::Touch(ident.to_string()));
     }
 }
 
 /// The control plane worker. Runs an event loop that:
 /// 1. Subscribes to `hub.send.>` — all outgoing agent messages.
-/// 2. Routes each envelope to `channel.<channel>`.
+/// 2. Routes each envelope with [`route_subject`].
 /// 3. Subscribes to `hub.register` — tracks agent registrations.
-/// 4. Optionally subscribes to `hub.presence` — tracks heartbeats.
-/// 5. Async mirrors envelopes + registrations to `Storage` (off the hot path).
+/// 4. Subscribes to `hub.presence` — tracks heartbeats.
+/// 5. Mirrors envelopes + registrations to `Storage` via a bounded queue.
 pub struct ControlPlane {
     nats: async_nats::Client,
-    routing: RoutingTable,
-    registry: AgentRegistry,
-    #[cfg(feature = "storage-surreal")]
+    core: RouterCore,
     storage: Option<Arc<dyn Storage>>,
-    metrics: Option<Arc<MetricsCollector>>,
-    /// Optional WS bridge broadcast channel. When set, every routed envelope
-    /// is serialized to JSON and pushed to all connected visualizer clients.
-    ws_event_tx: Option<crate::ws_bridge::EventTx>,
+    mirror_capacity: usize,
 }
 
 impl ControlPlane {
@@ -85,34 +181,37 @@ impl ControlPlane {
             .with_context(|| format!("control plane: connect to {url} failed"))?;
         Ok(Self {
             nats,
-            routing: RoutingTable::new(),
-            registry: AgentRegistry::new(),
-            #[cfg(feature = "storage-surreal")]
+            core: RouterCore::new(),
             storage: None,
-            metrics: None,
-            ws_event_tx: None,
+            mirror_capacity: DEFAULT_MIRROR_CAPACITY,
         })
     }
 
     /// Attach a live metrics collector. Records one atomic increment per
     /// routed envelope on the hot path. Safe to call before `run()`.
     pub fn with_metrics(mut self, metrics: Arc<MetricsCollector>) -> Self {
-        self.metrics = Some(metrics);
+        self.core.metrics = Some(metrics);
         self
     }
 
     /// Attach a WS bridge broadcast channel for the visualizer.
     /// Every routed envelope is serialized to JSON and pushed here.
     pub fn with_ws_events(mut self, tx: crate::ws_bridge::EventTx) -> Self {
-        self.ws_event_tx = Some(tx);
+        self.core.ws_event_tx = Some(tx);
         self
     }
 
     /// Attach a storage backend for persistence (agent registry, message
     /// history, conversation threading). Must be called before `run()`.
-    #[cfg(feature = "storage-surreal")]
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    /// Capacity of the bounded storage-mirror queue (default
+    /// [`DEFAULT_MIRROR_CAPACITY`]). Writes beyond it are dropped and counted.
+    pub fn with_mirror_capacity(mut self, capacity: usize) -> Self {
+        self.mirror_capacity = capacity;
         self
     }
 
@@ -122,27 +221,29 @@ impl ControlPlane {
     ///
     /// Returns the number of agents loaded. If no storage is attached,
     /// this is a no-op that returns 0.
-    #[cfg(feature = "storage-surreal")]
     pub async fn load_agents_from_storage(&self) -> Result<usize> {
         let Some(storage) = &self.storage else {
             debug!("load_agents_from_storage: no storage attached, skipping");
             return Ok(0);
         };
 
-        // Build an unfiltered query — pull everything the DB knows about.
         let records: Vec<AgentRecord> = storage.find_agents(&AgentFilter::new()).await?;
         let count = records.len();
 
         for r in records {
-            // Use touch() so we update last_seen from DB rather than overwriting
-            // it with Utc::now() (preserves the real liveness signal).
-            self.registry
+            self.core
+                .registry
                 .register(r.identity.clone(), r.capabilities.clone())
                 .await;
-            // The in-memory AgentInfo.last_seen is set to now() by register();
-            // patch it back to the DB-recorded value for accuracy.
-            self.registry
+            // register() stamps last_seen = now; restore the DB-recorded
+            // value so the real liveness signal survives a restart.
+            self.core
+                .registry
                 .force_last_seen(&r.identity, r.last_seen)
+                .await;
+            self.core
+                .routing
+                .set_capabilities(&r.identity, &r.capabilities)
                 .await;
         }
 
@@ -154,30 +255,33 @@ impl ControlPlane {
     pub async fn run(&self) -> Result<()> {
         info!("control plane router starting");
 
-        // 0. Warm the in-memory cache from the persistent storage backend
-        //    (if attached). Non-fatal: a failure to load does not stop the
-        //    router — the in-memory registry stays empty and fresh
-        //    registrations/heartbeats populate it as usual.
-        #[cfg(feature = "storage-surreal")]
-        if let Err(e) = self.load_agents_from_storage().await {
-            warn!(error = %e, "failed to warm in-memory registry from storage (non-fatal)");
+        // 0. Start the storage mirror writer and warm the in-memory cache
+        //    from storage. A failure to load is non-fatal: fresh
+        //    registrations/heartbeats repopulate the registry.
+        if let Some(storage) = &self.storage {
+            let mirror = self.core.mirror.get_or_init(|| {
+                StorageMirror::new(
+                    storage.clone(),
+                    self.mirror_capacity,
+                    self.core.metrics.clone(),
+                )
+            });
+            mirror.start().await;
+            if let Err(e) = self.load_agents_from_storage().await {
+                warn!(error = %e, "failed to warm in-memory registry from storage (non-fatal)");
+            }
         }
 
-        // 1. Subscribe to all agent sends
         let mut send_sub = self
             .nats
-            .subscribe("hub.send.>")
+            .subscribe(format!("{}.>", subjects::SEND_PREFIX))
             .await
             .context("control plane: subscribe to hub.send.> failed")?;
-
-        // 2. Subscribe to registrations
         let mut reg_sub = self
             .nats
             .subscribe(subjects::REGISTER)
             .await
             .context("control plane: subscribe to hub.register failed")?;
-
-        // 3. Subscribe to presence
         let mut presence_sub = self
             .nats
             .subscribe(subjects::PRESENCE)
@@ -188,178 +292,38 @@ impl ControlPlane {
 
         loop {
             tokio::select! {
-                Some(msg) = send_sub.next() => {
-                    self.handle_send(&msg).await;
-                }
-                Some(msg) = reg_sub.next() => {
-                    self.handle_register(&msg).await;
-                }
-                Some(msg) = presence_sub.next() => {
-                    self.handle_presence(&msg).await;
-                }
+                Some(msg) = send_sub.next() => self.handle_send(&msg).await,
+                Some(msg) = reg_sub.next() => self.core.on_register(&msg.payload).await,
+                Some(msg) = presence_sub.next() => self.core.on_presence(&msg.payload).await,
             }
         }
     }
 
-    /// Handle a message on `hub.send.<channel>` — route it.
-    ///
-    /// Routing logic:
-    /// - If `meta.to` is set → route to `channel.inbox.<to>` (private DM)
-    /// - If `meta.to` is null → route to `channel.<channel>` (broadcast)
+    /// Route one `hub.send.<channel>` message. No per-message `flush()`:
+    /// async-nats batches and flushes outgoing publishes on its own, so the
+    /// loop never waits on a network round-trip.
     async fn handle_send(&self, msg: &async_nats::Message) {
-        // Extract channel from subject: hub.send.<channel>
-        let subject = msg.subject.as_str();
-        let channel = subject
-            .strip_prefix(&format!("{}.", subjects::SEND_PREFIX))
-            .unwrap_or("unknown");
-
-        match Envelope::from_json_bytes(&msg.payload) {
-            Ok(env) => {
-                // Live metrics: non-blocking atomic increment on the hot path.
-                // Safe even under heavy load — no allocation, no await.
-                if let Some(metrics) = &self.metrics {
-                    metrics.record(&env);
-                }
-
-                // Push to WS bridge for visualizer (fire-and-forget broadcast)
-                if let Some(tx) = &self.ws_event_tx {
-                    if let Ok(json) = serde_json::to_string(&env) {
-                        let _ = tx.send(json); // broadcast::send is non-blocking
-                    }
-                }
-
-                // Determine routing destination: inbox (DM) or broadcast
-                let dest = if let Some(ref to) = env.meta.to {
-                    debug!(
-                        id = %env.meta.id,
-                        %channel,
-                        from = %env.meta.from,
-                        to = %to,
-                        kind = ?env.meta.kind,
-                        "routing envelope to inbox (DM)"
-                    );
-                    subjects::inbox(to)
-                } else {
-                    debug!(
-                        id = %env.meta.id,
-                        %channel,
-                        from = %env.meta.from,
-                        kind = ?env.meta.kind,
-                        "routing envelope to broadcast"
-                    );
-                    subjects::channel(channel)
-                };
-
-                if let Err(e) = self
-                    .nats
-                    .publish(dest.clone(), msg.payload.clone().into())
-                    .await
-                {
-                    error!(%dest, error = %e, "failed to route envelope");
-                } else {
-                    debug!(%dest, "envelope routed");
-                }
-
-                // Flush to ensure routed messages reach subscribers promptly
-                let _ = self.nats.flush().await;
-
-                // Async mirror to storage (off the hot path — fire and forget)
-                #[cfg(feature = "storage-surreal")]
-                if let Some(storage) = &self.storage {
-                    let env_clone = env.clone();
-                    let storage = storage.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = storage.store_envelope(&env_clone).await {
-                            warn!(error = %e, "storage: failed to store envelope (non-fatal)");
-                        }
-                    });
-                }
-            }
-            Err(e) => {
-                warn!(%subject, error = %e, "failed to decode envelope, dropping");
-            }
+        let Some((dest, env)) = self.core.on_send(msg.subject.as_str(), &msg.payload) else {
+            return;
+        };
+        if let Err(e) = self.nats.publish(dest.clone(), msg.payload.clone()).await {
+            error!(%dest, error = %e, "failed to route envelope");
         }
+        self.core.mirror_envelope(env);
     }
 
-    /// Handle a registration message.
-    async fn handle_register(&self, msg: &async_nats::Message) {
-        match Envelope::from_json_bytes(&msg.payload) {
-            Ok(env) => {
-                if let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) {
-                    let caps: Vec<String> = env
-                        .payload
-                        .get("capabilities")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    info!(identity = %ident, ?caps, "agent registered");
-                    self.registry
-                        .register(ident.to_string(), caps.clone())
-                        .await;
-                    // Also add to routing table for channels based on capabilities
-                    for cap in &caps {
-                        self.routing.add_subscriber(cap, ident).await;
-                    }
-
-                    // Async mirror to storage (persisted agent registry)
-                    #[cfg(feature = "storage-surreal")]
-                    if let Some(storage) = &self.storage {
-                        let record = AgentRecord {
-                            identity: ident.to_string(),
-                            capabilities: caps.clone(),
-                            last_seen: chrono::Utc::now(),
-                            registered_at: chrono::Utc::now(),
-                            metadata: serde_json::json!({}),
-                        };
-                        let storage = storage.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = storage.register_agent(record).await {
-                                warn!(error = %e, "storage: failed to register agent (non-fatal)");
-                            }
-                        });
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to decode registration envelope");
-            }
-        }
-    }
-
-    /// Handle a presence heartbeat.
-    async fn handle_presence(&self, msg: &async_nats::Message) {
-        match Envelope::from_json_bytes(&msg.payload) {
-            Ok(env) => {
-                if let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) {
-                    debug!(identity = %ident, "heartbeat received");
-                    self.registry.register(ident.to_string(), vec![]).await;
-
-                    // Async mirror: update agent liveness in storage
-                    #[cfg(feature = "storage-surreal")]
-                    if let Some(storage) = &self.storage {
-                        let storage = storage.clone();
-                        let ident = ident.to_string();
-                        tokio::spawn(async move {
-                            if let Err(e) = storage.touch_agent(&ident).await {
-                                warn!(error = %e, "storage: failed to touch agent (non-fatal)");
-                            }
-                        });
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to decode presence envelope");
-            }
-        }
-    }
-
-    /// Get a snapshot of known agents.
+    /// Get a snapshot of known agents (in-memory registry).
     pub async fn known_agents(&self) -> Vec<AgentInfo> {
-        self.registry.list().await
+        self.core.registry.list().await
+    }
+
+    /// The capability routing table (informational; see [`RoutingTable`]).
+    pub fn routing_table(&self) -> &RoutingTable {
+        &self.core.routing
+    }
+
+    /// Storage-mirror writes dropped because the queue was full.
+    pub fn mirror_dropped(&self) -> u64 {
+        self.core.mirror.get().map_or(0, StorageMirror::dropped)
     }
 }

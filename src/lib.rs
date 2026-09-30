@@ -56,7 +56,8 @@
 //!
 //! ## Storage Trait
 //!
-//! When `storage-surreal` is enabled, the [`Storage`] trait provides:
+//! The [`Storage`] trait (implemented by `SurrealStorage` when
+//! `storage-surreal` is enabled) provides:
 //! - `store_envelope()` / `query_history()` — message history
 //! - `register_agent()` / `find_agents()` — agent registry
 //! - `get_thread()` / `link_reply()` — conversation threading
@@ -86,13 +87,19 @@ pub use events::{
 pub use protocol::{subjects, Envelope, MessageKind, Meta};
 pub use router::{ControlPlane, RoutingTable};
 
-// ── Public API: storage types (feature-gated) ─────────────────
+// ── Public API: storage types ─────────────────────────────────
+//
+// The `Storage` trait and its record/query types have no backend
+// dependency, so they are always available (the query API and the router
+// work against `dyn Storage`). Only the SurrealDB backend is feature-gated.
 
-#[cfg(feature = "storage-surreal")]
 pub use storage::{
     AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
-    SurrealStorage, WaveRecord, WaveTaskRecord,
+    WaveRecord, WaveTaskRecord,
 };
+
+#[cfg(feature = "storage-surreal")]
+pub use storage::SurrealStorage;
 
 // The analytics module is always compiled (its `metrics` submodule has no
 // storage dependency, so `MetricsCollector` is available in `--features
