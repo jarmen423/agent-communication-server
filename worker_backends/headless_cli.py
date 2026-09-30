@@ -1,13 +1,33 @@
-"""Headless CLI: non-interactive subprocess agents (agy -p, hermes chat -q, etc.)."""
+"""Headless CLI: non-interactive subprocess agents (agy -p, hermes chat -q, etc.).
+
+Hardening guarantees (see tests/python/test_worker_headless.py):
+  - every turn has a timeout (default 900s); on timeout the child's whole
+    process group is killed and reaped before the error is raised;
+  - a non-zero exit is always an error, with a stderr tail in the message;
+  - stderr is drained concurrently (bounded), stdout is streamed line by line;
+  - positional prompts can be preceded by ``--`` so a prompt that starts
+    with ``-`` is never parsed as a flag.
+
+Streaming CLIs (Claude Code stream-json, Codex JSONL) subclass
+``HeadlessCliBackend`` and return a ``CliTurn`` from ``_make_turn`` that turns
+stdout lines into progress events and builds the final text.
+"""
 
 from __future__ import annotations
 
-import asyncio
+import json
 import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
+
+from worker_backends.proc import ProcResult, ProcTimeout, run_streaming
+
+DEFAULT_TIMEOUT_SEC = 900.0
+
+# progress handler installed by worker_events: async (kind, data) -> None
+ProgressHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 @dataclass
@@ -21,6 +41,8 @@ class HeadlessCliSpec:
     base_argv: list[str] = field(default_factory=list)
     # Prompt: append ["-p", prompt] or ["-q", prompt]; None = positional arg
     prompt_flag: str | None = "-p"
+    # Insert "--" before a positional prompt (only when prompt_flag is None)
+    end_of_options: bool = False
     # Session resume
     resume_mode: str = "none"  # none | continue_flag | resume_id | session_cwd_continue
     continue_flag: str = "--continue"
@@ -36,13 +58,40 @@ class HeadlessCliSpec:
     json_events: bool = False
     json_text_key: str = "text"       # key inside event["part"] for text content
     json_session_key: str = "sessionID"  # key inside event for session ID
-    timeout_sec: float | None = None
+    # Per-turn wall-clock limit. None disables it (not recommended).
+    timeout_sec: float | None = DEFAULT_TIMEOUT_SEC
+    env: dict[str, str] | None = None
+
+
+class CliTurn:
+    """Per-turn stdout parser for streaming CLIs. Default: collect only."""
+
+    async def feed(self, line: str, emit: ProgressHandler) -> None:  # noqa: B027
+        """Handle one stdout line; call ``emit(kind, data)`` for progress."""
+
+    def error_hint(self) -> str | None:
+        """Best error text parsed from stdout (used on non-zero exit)."""
+        return None
+
+    def finish(self, raw: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        raise NotImplementedError
+
+    def cleanup(self) -> None:  # noqa: B027
+        """Release per-turn resources (temp files)."""
 
 
 class HeadlessCliBackend:
     def __init__(self, spec: HeadlessCliSpec) -> None:
         self.spec = spec
         self.repo = Path(spec.repo).resolve()
+        self._progress_handler: ProgressHandler | None = None
+
+    # worker_events attaches a streaming handler per turn when present.
+    def set_progress_handler(self, handler: ProgressHandler | None) -> None:
+        self._progress_handler = handler
+
+    def clear_progress_handler(self) -> None:
+        self._progress_handler = None
 
     def _cwd(self, ctx: dict[str, Any]) -> Path:
         sid = ctx.get("_session_id")
@@ -66,6 +115,8 @@ class HeadlessCliBackend:
         if s.prompt_flag:
             cmd.extend([s.prompt_flag, prompt])
         else:
+            if s.end_of_options:
+                cmd.append("--")
             cmd.append(prompt)
         return cmd
 
@@ -109,8 +160,6 @@ class HeadlessCliBackend:
         Extracts text content from text-type events and session ID.
         Returns concatenated text and updated ctx with session ID.
         """
-        import json as _json
-
         s = self.spec
         text_parts: list[str] = []
         session_id: str | None = None
@@ -120,8 +169,10 @@ class HeadlessCliBackend:
             if not line:
                 continue
             try:
-                event = _json.loads(line)
+                event = json.loads(line)
             except (ValueError, TypeError):
+                continue
+            if not isinstance(event, dict):
                 continue
 
             # Capture session ID from any event that has it
@@ -152,34 +203,69 @@ class HeadlessCliBackend:
 
         return text, ctx
 
+    # ── Turn hooks (overridden by streaming backends) ──────────────────
+
+    def _make_turn(self, prompt: str, ctx: dict[str, Any]) -> CliTurn | None:
+        return None
+
+    def _cmd_for_turn(self, prompt: str, ctx: dict[str, Any], turn: CliTurn | None) -> list[str]:
+        return self._build_cmd(prompt, ctx)
+
+    # ── Execution ──────────────────────────────────────────────────────
+
     async def run(self, prompt: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        cmd = self._build_cmd(prompt, ctx)
-        cwd = str(self._cwd(ctx))
-        print(
-            f"[{self.spec.log_label}] exec: {' '.join(shlex.quote(c) for c in cmd[:8])}"
-            f"{' ...' if len(cmd) > 8 else ''} cwd={cwd}"
-        )
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
+        ctx = dict(ctx or {})
+        turn = self._make_turn(prompt, ctx)
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=self.spec.timeout_sec,
+            cmd = self._cmd_for_turn(prompt, ctx, turn)
+            cwd = str(self._cwd(ctx))
+            print(
+                f"[{self.spec.log_label}] exec: {' '.join(shlex.quote(c) for c in cmd[:8])}"
+                f"{' ...' if len(cmd) > 8 else ''} cwd={cwd}",
+                flush=True,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise RuntimeError(f"{self.spec.binary} timed out after {self.spec.timeout_sec}s")
+            handler = self._progress_handler
 
-        raw = stdout.decode().strip()
-        if proc.returncode != 0:
-            if raw:
-                return self._parse_text(raw, ctx)
-            raise RuntimeError(
-                f"{self.spec.binary} exit {proc.returncode}: {stderr.decode().strip()[:800]}"
-            )
-        return self._parse_text(raw, ctx)
+            async def emit(kind: str, data: dict[str, Any]) -> None:
+                if handler is None:
+                    return
+                try:
+                    await handler(kind, data)
+                except Exception as e:  # progress must never break a turn
+                    print(f"[{self.spec.log_label}] progress handler error: {e}", flush=True)
+
+            on_line = None
+            if turn is not None:
+                async def on_line(line: str) -> None:
+                    await turn.feed(line, emit)
+
+            try:
+                result = await run_streaming(
+                    cmd, cwd=cwd, timeout=self.spec.timeout_sec, on_line=on_line, env=self.spec.env
+                )
+            except ProcTimeout as e:
+                raise RuntimeError(
+                    f"{self.spec.binary} timed out after {e.timeout:g}s (process group killed)"
+                    + (f"; stderr: {e.stderr_tail}" if e.stderr_tail else "")
+                ) from None
+
+            if result.returncode != 0:
+                raise RuntimeError(self._exit_error(result, turn))
+            if turn is not None:
+                return turn.finish(result.stdout, ctx)
+            return self._parse_text(result.stdout.strip(), ctx)
+        finally:
+            if turn is not None:
+                turn.cleanup()
+
+    def _exit_error(self, result: ProcResult, turn: CliTurn | None) -> str:
+        details: list[str] = []
+        hint = turn.error_hint() if turn is not None else None
+        if hint:
+            details.append(hint[:800])
+        if result.stderr_tail:
+            details.append(f"stderr: {result.stderr_tail[-800:]}")
+        elif not hint and result.stdout.strip():
+            details.append(f"stdout: {result.stdout.strip()[-400:]}")
+        head = f"{self.spec.binary} exit {result.returncode}"
+        return f"{head} — {' | '.join(details)}" if details else head
