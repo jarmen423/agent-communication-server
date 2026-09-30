@@ -2606,9 +2606,13 @@ function setup() {
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${proto}//${location.host}/ws`;
+  let wsUrl = `${proto}//${location.host}/ws`;
+  // Forward the bridge token from the page URL (hub-server --ws-token):
+  // open http://<host>/?token=T and the WS upgrade carries it as ?token=T.
+  const wsToken = new URLSearchParams(location.search).get('token');
+  if (wsToken) wsUrl += `?token=${encodeURIComponent(wsToken)}`;
   const endpointEl = document.getElementById('ws-endpoint');
-  if (endpointEl) endpointEl.textContent = wsUrl.replace(/^wss?:\/\//, '');
+  if (endpointEl) endpointEl.textContent = `${location.host}/ws`;
 
   wsReconnecting = true;
   setWsBadge('reconnecting');

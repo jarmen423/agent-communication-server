@@ -16,7 +16,14 @@ use crate::HubClient;
 /// - `{"type":"ensure_worker","identity":"...","provider":"...","model":"..."}` → spawn only
 /// - `{"type":"list_models","provider":"...","refresh":false}` → live model list for any provider
 /// - `{"type":"list_providers"}` → model-source catalog for all providers
-pub(super) async fn handle_client_command(client: &HubClient, text: &str) -> Result<String> {
+///
+/// `sender` is the bridge's configured identity (`--ws-identity`), stamped
+/// as `meta.from` on the task envelope.
+pub(super) async fn handle_client_command(
+    client: &HubClient,
+    text: &str,
+    sender: &str,
+) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(text).context("invalid JSON command")?;
     let cmd = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
@@ -90,7 +97,7 @@ pub(super) async fn handle_client_command(client: &HubClient, text: &str) -> Res
                 "source": "visualizer",
                 "provider": provider,
             });
-            let env = Envelope::new("josh", &task_channel, MessageKind::Message, payload).to(to);
+            let env = Envelope::new(sender, &task_channel, MessageKind::Message, payload).to(to);
             client.send(&env).await?;
 
             Ok(format!(

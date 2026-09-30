@@ -47,6 +47,10 @@ From the repo root (paths are relative; `--static-dir` must point at `visualizer
 Flags:
 - `--ws-addr`: address for the WebSocket bridge and static file server (default: disabled)
 - `--static-dir`: directory to serve static files from (usually `visualizer/`)
+- `--ws-token`: shared secret required as `?token=` on the WS upgrade (env `HUB_WS_TOKEN`)
+- `--ws-identity`: sender identity stamped on bridge-published messages (env `HUB_WS_IDENTITY`, default `human`)
+- `--ws-allow-origin`: extra allowed `Origin` for the WS upgrade (repeatable)
+- `--ws-insecure`: permit a non-loopback `--ws-addr` with no token (trusted networks only)
 - `--db-path`: SurrealDB path for message persistence (needed for history features)
 - `--metrics-addr`: optional Prometheus metrics endpoint (e.g. `127.0.0.1:9090`)
 
@@ -89,7 +93,7 @@ Then open http://127.0.0.1:9191/ in your browser.
 ### Browser commands
 
 The visualizer sends JSON commands over the WebSocket connection. These are
-handled by `handle_client_command()` in `ws_bridge.rs`:
+handled by `handle_client_command()` in `src/ws_bridge/commands.rs`:
 
 | Command | Action |
 |---------|--------|
@@ -170,9 +174,25 @@ Grid + a light dim overlay stay on top so sprites remain readable.
 
 The visualizer binds to `127.0.0.1` by default. For remote access:
 
-- **SSH tunnel:** `ssh -L 9191:127.0.0.1:9191 user@host`
-- **Bind to all interfaces:** `--ws-addr 0.0.0.0:9191` (ensure the port is
-  firewalled — the visualizer has no built-in auth)
+- **SSH tunnel (recommended):** `ssh -L 9191:127.0.0.1:9191 user@host`,
+  then open http://127.0.0.1:9191/ locally. Nothing else needed.
+- **Bind to all interfaces:** `--ws-addr 0.0.0.0:9191` now **requires** a
+  token — hub-server refuses to start a tokenless non-loopback bridge:
+
+  ```bash
+  ./target/debug/hub-server \
+      --db-path .tools/run/nats_hub.db \
+      --ws-addr 0.0.0.0:9191 \
+      --static-dir "$PWD/visualizer/" \
+      --ws-token "$(openssl rand -hex 24)" \
+      --ws-allow-origin "http://192.168.1.10:9191"   # the Origin you browse from
+  ```
+
+  hub-server prints the tokenized URL at startup (`http://0.0.0.0:9191/?token=…`);
+  swap in the reachable host. The page forwards `?token=` to the `/ws`
+  upgrade automatically. `--ws-insecure` skips the token requirement —
+  trusted LANs only.
 
 For a production deployment, put the visualizer behind a reverse proxy with
-authentication (nginx, Caddy) rather than exposing the port directly.
+authentication (nginx, Caddy) rather than exposing the port directly, and
+still run the bridge with `--ws-token` behind it.
