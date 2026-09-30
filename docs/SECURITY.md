@@ -223,8 +223,9 @@ reachable by anything but localhost.
 - **Origin allowlist.** Browsers disclose which site opened the socket via
   the `Origin` header, and browsers are the real threat here — any web page
   you visit could otherwise open `ws://127.0.0.1:9191/ws` and read or drive
-  the bus. `http://<ws-addr>` plus the loopback spellings
-  (`localhost`/`127.0.0.1`/`[::1]`) are allowed by default;
+  the bus. `http://<ws-addr>` is always allowed; a loopback or wildcard
+  bind also allows every loopback spelling (`localhost`/`127.0.0.1`/`[::1]`),
+  and a routable bind adds its resolved IPs plus `localhost`.
   `--ws-allow-origin` (repeatable) adds entries — matching ignores case,
   trailing `/` and default ports. A mismatched or unparsable Origin gets
   HTTP 403 before the upgrade. Requests with **no** `Origin` header (curl,

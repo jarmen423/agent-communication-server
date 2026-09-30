@@ -42,7 +42,7 @@ pub fn default_allowed_origins(ws_addr: &str) -> Vec<String> {
 pub fn normalize_origin(origin: &str) -> String {
     let o = origin.trim().trim_end_matches('/');
     let (scheme, rest) = match o.split_once("://") {
-        Some(pair) => pair,
+        Some((s, r)) => (s.to_ascii_lowercase(), r),
         None => return o.to_ascii_lowercase(),
     };
     let authority = rest.split('/').next().unwrap_or(rest);
@@ -59,7 +59,7 @@ pub fn normalize_origin(origin: &str) -> String {
         }
     };
     let is_default_port = matches!(
-        (scheme, port.as_str()),
+        (scheme.as_str(), port.as_str()),
         ("http" | "ws", "80") | ("https" | "wss", "443")
     );
     let auth = if port.is_empty() || is_default_port {
@@ -67,11 +67,7 @@ pub fn normalize_origin(origin: &str) -> String {
     } else {
         format!("{host}:{port}")
     };
-    format!(
-        "{}://{}",
-        scheme.to_ascii_lowercase(),
-        auth.to_ascii_lowercase()
-    )
+    format!("{scheme}://{}", auth.to_ascii_lowercase())
 }
 
 /// Enforce the tokenless-bridge bind policy: a bridge with no `token` may
@@ -109,6 +105,9 @@ pub fn url_query_encode(s: &str) -> String {
 /// True when `addr` resolves only to loopback IPs (`127.0.0.1:9191`,
 /// `localhost:9191`, `[::1]:9191`). Unresolvable, empty, or partially
 /// non-loopback answers are false — the safe choice for the bind guard.
+///
+/// `to_socket_addrs` does blocking DNS resolution — acceptable at startup
+/// (and in tests), not on the request hot path.
 pub fn is_loopback_addr(addr: &str) -> bool {
     let addrs: Vec<_> = match addr.to_socket_addrs() {
         Ok(it) => it.collect(),
@@ -156,6 +155,8 @@ mod tests {
         assert_eq!(normalize_origin("http://[::1]:9191/"), "http://[::1]:9191");
         // ws/wss schemes also normalize on their default ports
         assert_eq!(normalize_origin("ws://a.com:80"), "ws://a.com");
+        // scheme case doesn't matter for the default-port check either
+        assert_eq!(normalize_origin("HTTP://A.com:80"), "http://a.com");
     }
 
     #[test]

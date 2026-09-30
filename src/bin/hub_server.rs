@@ -165,6 +165,12 @@ async fn main() -> Result<()> {
 
         let mut allowed_origins = nats_hub::ws_bridge::default_allowed_origins(ws_addr);
         allowed_origins.extend(args.ws_allow_origin.iter().cloned());
+        if !nats_hub::ws_bridge::is_loopback_addr(ws_addr) && args.ws_allow_origin.is_empty() {
+            info_log(
+                "hint: non-loopback --ws-addr — remote browsers need their Origin in \
+                 --ws-allow-origin (e.g. --ws-allow-origin http://<lan-ip>:<port>)",
+            );
+        }
 
         let config = nats_hub::ws_bridge::WsBridgeConfig {
             static_dir: args.static_dir.as_ref().map(std::path::PathBuf::from),
@@ -189,10 +195,15 @@ async fn main() -> Result<()> {
             )),
             None => {
                 tracing::warn!(
-                    "WS bridge on {ws_addr} has no --ws-token; unauthenticated (loopback-only is safe)"
+                    "WS bridge on {ws_addr} is running UNAUTHENTICATED — no --ws-token/HUB_WS_TOKEN (safe only on loopback or a trusted network)"
                 );
+                let suffix = if nats_hub::ws_bridge::is_loopback_addr(ws_addr) {
+                    " (no token; loopback only)"
+                } else {
+                    " (no token — running unauthenticated)"
+                };
                 info_log(&format!(
-                    "WS bridge (visualizer) on http://{ws_addr} (no token; loopback only)"
+                    "WS bridge (visualizer) on http://{ws_addr}{suffix}"
                 ));
             }
         }
