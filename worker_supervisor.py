@@ -106,7 +106,7 @@ class Supervisor:
             ("hub.worker.list", self._on_list),
             ("hub.worker.models", self._on_models),
             ("hub.worker.providers", self._on_providers),
-            ("hub.presence", self._on_presence),
+            ("hub.presence.*", self._on_presence),
         ):
             await self.nc.subscribe(subject, cb=cb)
         print(f"[supervisor] ready on {self.nats_url} (repo={self.repo}, logs={self.log_dir})",

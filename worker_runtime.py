@@ -24,7 +24,7 @@ from typing import Any, Protocol, runtime_checkable
 from nats.aio.client import Client as NATSClient  # noqa: F401  (re-exported)
 from nats.aio.msg import Msg
 
-from nats_connect import connect_nats
+from nats_connect import connect_nats, validate_identity
 from worker_events import execute_with_events, publish_event as emit_event, run_to_result
 
 # Payload keys a one-shot prompt may arrive under (bridges send "message").
@@ -111,6 +111,7 @@ def is_task_result(payload: dict) -> bool:
 
 
 async def run_worker(cfg: WorkerConfig) -> None:
+    validate_identity(cfg.identity)
     connect_kwargs: dict[str, Any] = {"name": cfg.identity}
     if cfg.nats_auth:
         connect_kwargs.update(cfg.nats_auth)
@@ -122,8 +123,10 @@ async def run_worker(cfg: WorkerConfig) -> None:
     inbox_subject = f"channel.inbox.{cfg.identity}"
 
     async def publish(channel: str, kind: str, payload: dict, reply_to: str | None = None) -> None:
+        # Bound subject: hub.pub.<identity>.<channel> (contract §4.1) — the
+        # router overwrites meta.from with the subject identity.
         await nc.publish(
-            f"hub.send.{channel}",
+            f"hub.pub.{cfg.identity}.{channel}",
             make_envelope(cfg.identity, None, channel, kind, payload, reply_to=reply_to),
         )
 
@@ -165,7 +168,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
             result = await run_to_result(cfg.backend, prompt, {}, task_id)
             channel = meta.get("channel") or f"inbox.{sender}"
             await nc.publish(
-                f"hub.send.{channel}",
+                f"hub.pub.{cfg.identity}.{channel}",
                 make_envelope(cfg.identity, sender, channel, "message", result, reply_to=task_id),
             )
             return
@@ -321,11 +324,11 @@ async def run_worker(cfg: WorkerConfig) -> None:
         (or survived a router restart) still shows up in `hub-agents`."""
         payload = {"identity": cfg.identity, **cfg.extra_heartbeat}
         await nc.publish(
-            "hub.presence",
+            f"hub.presence.{cfg.identity}",
             make_envelope(cfg.identity, None, "hub.presence", "status", payload),
         )
         await nc.publish(
-            "hub.register",
+            f"hub.register.{cfg.identity}",
             make_envelope(
                 cfg.identity,
                 None,

@@ -34,6 +34,8 @@ def identity() -> str:
 
     ``NATS_HUB_IDENTITY`` is required — fail loudly instead of silently
     impersonating ``mcp-server`` or whatever a caller passes as ``from``.
+    Must be a valid single NATS token (`[A-Za-z0-9_-]+`): it is embedded in
+    the bound subjects this client publishes on (contract §4.1).
     """
     ident = os.environ.get("NATS_HUB_IDENTITY", "").strip()
     if not ident:
@@ -41,7 +43,12 @@ def identity() -> str:
             "NATS_HUB_IDENTITY is not set. The MCP server stamps this env var "
             "as `meta.from` on every message; refusing to run without it."
         )
-    return ident
+    import nats_connect
+
+    try:
+        return nats_connect.validate_identity(ident)
+    except ValueError as e:
+        raise RuntimeError(str(e)) from e
 
 
 def check_from_arg(args: dict) -> str | None:
@@ -125,18 +132,18 @@ def envelope(
 
 
 async def publish(channel: str, env: dict) -> None:
-    """Publish an envelope to ``hub.send.<channel>``."""
+    """Publish an envelope to ``hub.pub.<identity>.<channel>`` (bound)."""
     nc = await get_nc()
-    await nc.publish(f"hub.send.{channel}", json.dumps(env).encode())
+    await nc.publish(f"hub.pub.{identity()}.{channel}", json.dumps(env).encode())
     await nc.flush()
 
 
 async def api_request(op: str, params: dict) -> dict:
-    """Request-reply against the hub query API (``hub.api.<op>``)."""
+    """Request-reply against the hub query API (``hub.api.<identity>.<op>``)."""
     nc = await get_nc()
     req = json.dumps({"op": op, "params": params}).encode()
     try:
-        reply = await nc.request(f"hub.api.{op}", req, timeout=API_TIMEOUT)
+        reply = await nc.request(f"hub.api.{identity()}.{op}", req, timeout=API_TIMEOUT)
     except Exception as e:
         return {"ok": False, "error": f"query API '{op}' failed: {e}"}
     try:

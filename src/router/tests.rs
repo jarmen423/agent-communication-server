@@ -42,10 +42,10 @@ async fn memory_storage() -> Arc<dyn Storage> {
 #[tokio::test]
 async fn heartbeat_preserves_capabilities() {
     let core = RouterCore::new();
-    core.on_register(&register_payload("w1", &["code", "review"]))
+    core.on_register("hub.register", &register_payload("w1", &["code", "review"]))
         .await;
-    core.on_presence(&presence_payload("w1")).await;
-    core.on_presence(&presence_payload("w1")).await;
+    core.on_presence("hub.presence", &presence_payload("w1")).await;
+    core.on_presence("hub.presence", &presence_payload("w1")).await;
 
     let agents = core.registry.list().await;
     assert_eq!(agents.len(), 1);
@@ -62,7 +62,7 @@ async fn heartbeat_preserves_capabilities() {
 #[tokio::test]
 async fn heartbeat_from_unknown_agent_adds_it_without_caps() {
     let core = RouterCore::new();
-    core.on_presence(&presence_payload("ghost")).await;
+    core.on_presence("hub.presence", &presence_payload("ghost")).await;
     let agents = core.registry.list().await;
     assert_eq!(agents.len(), 1);
     assert!(agents[0].capabilities.is_empty());
@@ -71,13 +71,13 @@ async fn heartbeat_from_unknown_agent_adds_it_without_caps() {
 #[tokio::test]
 async fn reregistration_dedupes_and_replaces_routing_entries() {
     let core = RouterCore::new();
-    core.on_register(&register_payload("w1", &["code", "code"]))
+    core.on_register("hub.register", &register_payload("w1", &["code", "code"]))
         .await;
-    core.on_register(&register_payload("w1", &["code"])).await;
+    core.on_register("hub.register", &register_payload("w1", &["code"])).await;
     assert_eq!(core.routing.subscribers("code").await, vec!["w1"]);
 
     // New capability set replaces the old one.
-    core.on_register(&register_payload("w1", &["review"])).await;
+    core.on_register("hub.register", &register_payload("w1", &["review"])).await;
     assert!(core.routing.subscribers("code").await.is_empty());
     assert_eq!(core.routing.subscribers("review").await, vec!["w1"]);
 }
@@ -86,11 +86,11 @@ async fn reregistration_dedupes_and_replaces_routing_entries() {
 async fn on_send_routes_dm_and_broadcast() {
     let core = RouterCore::new();
     let dm = Envelope::new("a", "tasks", MessageKind::Message, json!({})).to("b");
-    let (dest, _) = core.on_send("hub.send.tasks", &bytes(&dm)).unwrap();
+    let (dest, _, _) = core.on_send("hub.send.tasks", &bytes(&dm)).unwrap();
     assert_eq!(dest, "channel.inbox.b");
 
     let bc = Envelope::new("a", "tasks", MessageKind::Message, json!({}));
-    let (dest, _) = core.on_send("hub.send.tasks", &bytes(&bc)).unwrap();
+    let (dest, _, _) = core.on_send("hub.send.tasks", &bytes(&bc)).unwrap();
     assert_eq!(dest, "channel.tasks");
 
     assert!(core.on_send("hub.send.tasks", b"not json").is_none());
@@ -126,11 +126,11 @@ async fn mirror_writer_persists_in_order() {
         .set(StorageMirror::new(storage.clone(), 64, None));
     core.mirror.get().unwrap().start().await;
 
-    core.on_register(&register_payload("w1", &["code"])).await;
-    core.on_presence(&presence_payload("w1")).await;
+    core.on_register("hub.register", &register_payload("w1", &["code"])).await;
+    core.on_presence("hub.presence", &presence_payload("w1")).await;
     for i in 0..10 {
         let env = Envelope::new("w1", "mirror.test", MessageKind::Message, json!({ "i": i }));
-        let (_, env) = core.on_send("hub.send.mirror.test", &bytes(&env)).unwrap();
+        let (_, env, _) = core.on_send("hub.send.mirror.test", &bytes(&env)).unwrap();
         core.mirror_envelope(env);
     }
 

@@ -47,6 +47,7 @@ impl HubClient {
     /// (anonymous `async_nats::connect(url)`).
     pub async fn connect(url: &str, identity: impl Into<String>) -> Result<Self> {
         let identity = identity.into();
+        crate::protocol::require_valid_identity(&identity)?;
         let opts = HubConnectOptions::from_env();
         if opts.has_auth() || opts.require_tls {
             debug!(%url, %identity, ?opts, "connect: env-derived auth options present");
@@ -76,6 +77,7 @@ impl HubClient {
         opts: HubConnectOptions,
     ) -> Result<Self> {
         let identity = identity.into();
+        crate::protocol::require_valid_identity(&identity)?;
         debug!(%url, %identity, ?opts, "connecting to NATS with options");
 
         let nats = connect_with_hub_opts(url, &opts).await?;
@@ -89,11 +91,12 @@ impl HubClient {
 
     // ── Typed envelope API ──────────────────────────────────────────
 
-    /// Send an envelope on the bus (publishes to `hub.send.<channel>`).
+    /// Send an envelope on the bus (publishes to the bound subject
+    /// `hub.pub.<identity>.<channel>`; contract §4.1).
     /// Flushes after publish to ensure the message reaches the server
     /// before the caller disconnects (critical for short-lived CLI tools).
     pub async fn send(&self, env: &Envelope) -> Result<()> {
-        let subject = subjects::send(&env.meta.channel);
+        let subject = subjects::send_bound(&self.identity, &env.meta.channel);
         let bytes = env.to_json_bytes()?;
         debug!(%subject, id = %env.meta.id, "publishing envelope");
         self.nats
@@ -326,7 +329,9 @@ impl HubClient {
             payload,
         );
         let bytes = env.to_json_bytes()?;
-        self.nats.publish(subjects::REGISTER, bytes.into()).await?;
+        self.nats
+            .publish(subjects::register_bound(&self.identity), bytes.into())
+            .await?;
         self.nats.flush().await?;
         Ok(())
     }
@@ -344,7 +349,9 @@ impl HubClient {
             payload,
         );
         let bytes = env.to_json_bytes()?;
-        self.nats.publish(subjects::PRESENCE, bytes.into()).await?;
+        self.nats
+            .publish(subjects::presence_bound(&self.identity), bytes.into())
+            .await?;
         self.nats.flush().await?;
         Ok(())
     }

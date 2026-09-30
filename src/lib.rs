@@ -32,7 +32,7 @@
 //! ## Architecture
 //!
 //! ```text
-//!  Agent ──hub.send.<channel>──▶ Router ──channel.<name>──▶ Subscribers
+//!  Agent ──hub.pub.<id>.<channel>──▶ Router ──channel.<name>──▶ Subscribers
 //!                                    │
 //!                     meta.to set?   │
 //!                     ├── yes → channel.inbox.<to>   (private DM)
@@ -117,5 +117,5 @@ pub use analytics::metrics::MetricsCollector;
 
 pub use wave::{evaluate_merge_gate, spawn_wave, validate_tasks, SpawnOutcome, WaveTaskInput};
 
-pub use query_api::{ApiRequest, ApiResponse};
+pub use query_api::{ApiAuthz, ApiRequest, ApiResponse, Caller};
 pub use query_api_client::ApiClient;

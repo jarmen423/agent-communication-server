@@ -118,7 +118,7 @@ def _run_live(scenario):
     async def run():
         url = os.environ["NATS_URL"]
         nc = await nats.connect(url)
-        reg = await nc.subscribe("hub.register")
+        reg = await nc.subscribe("hub.register.*")
         await nc.flush()
         identity, proc = _start_echo(url)
         try:
@@ -146,7 +146,7 @@ def test_plain_dm_gets_dm_reply():
         await nc.flush()
         task = make_envelope(me, identity, "chat.pytest", "message", {"message": "hey"})
         task_id = json.loads(task)["meta"]["id"]
-        await nc.publish("hub.send.chat.pytest", task)
+        await nc.publish(f"hub.pub.{me}.chat.pytest", task)
         msg = await inbox.next_msg(timeout=15)
         return task_id, me, json.loads(msg.data)
 
@@ -168,7 +168,7 @@ def test_worker_listed_in_agents_within_3s():
     async def scenario(nc, identity, started):
         req = json.dumps({"op": "agent.find", "params": {"capabilities": []}}).encode()
         while True:
-            resp = json.loads((await nc.request("hub.api.agent.find", req, timeout=2)).data)
+            resp = json.loads((await nc.request("hub.api.pytest.agent.find", req, timeout=2)).data)
             agents = (resp.get("data") or {}).get("agents") or []
             if any(a.get("identity") == identity for a in agents):
                 return time.monotonic() - started
@@ -207,7 +207,7 @@ def test_sigterm_exits_cleanly():
     async def run() -> int:
         url = os.environ["NATS_URL"]
         nc = await nats.connect(url)
-        reg = await nc.subscribe("hub.register")
+        reg = await nc.subscribe("hub.register.*")
         await nc.flush()
         identity, proc = _start_echo(url)
         try:
@@ -229,7 +229,7 @@ def test_worker_reannounces_registration():
 
     async def scenario(nc, identity, _started):
         # _run_live already consumed the first registration.
-        sub = await nc.subscribe("hub.register")
+        sub = await nc.subscribe("hub.register.*")
         await _wait_registered(nc, identity, sub, within=3)
         return True
 

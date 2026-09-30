@@ -74,6 +74,19 @@ struct Args {
     /// for trusted networks.
     #[arg(long)]
     ws_insecure: bool,
+
+    /// Drop messages on the legacy self-asserted subjects (`hub.send.>`,
+    /// bare `hub.register`/`hub.presence`, `hub.api.<op>`). Every sender
+    /// must use the bound subjects that pin identity into the subject
+    /// (contract §4.1). Default off during the migration window.
+    #[arg(long)]
+    require_bound_identity: bool,
+
+    /// Identity allowed to call query-API write ops (wave.*/session.*
+    /// mutations). Repeatable; env `NATS_HUB_API_ADMINS` (comma-separated)
+    /// is merged in.
+    #[arg(long = "api-admin")]
+    api_admin: Vec<String>,
 }
 
 /// Spawn a minimal HTTP/1.0 server that responds to `GET /metrics` with the
@@ -209,10 +222,32 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Query-API authorization: --api-admin flags + NATS_HUB_API_ADMINS env.
+    let mut api_admins: std::collections::BTreeSet<String> = args.api_admin.iter().cloned().collect();
+    if let Ok(env_admins) = std::env::var("NATS_HUB_API_ADMINS") {
+        api_admins.extend(
+            env_admins
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from),
+        );
+    }
+    let api_authz = nats_hub::query_api::ApiAuthz {
+        require_bound: args.require_bound_identity,
+        admins: api_admins,
+    };
+    if args.require_bound_identity {
+        info_log("require-bound-identity: legacy hub.send/hub.register/hub.presence/hub.api.<op> subjects are rejected");
+    }
+
     let cp = ControlPlane::connect(&args.nats_url)
         .await
         .context("failed to connect to NATS")?;
-    let cp = cp.with_metrics(metrics).with_ws_events(ws_tx);
+    let cp = cp
+        .with_metrics(metrics)
+        .with_ws_events(ws_tx)
+        .with_require_bound_identity(args.require_bound_identity);
 
     #[cfg(feature = "storage-surreal")]
     {
@@ -233,8 +268,12 @@ async fn main() -> Result<()> {
             let api_storage = storage.clone();
             let api_nats = args.nats_url.clone();
             tokio::spawn(async move {
-                if let Err(e) =
-                    nats_hub::query_api::start_api_listener(api_storage, &api_nats).await
+                if let Err(e) = nats_hub::query_api::start_api_listener_with_authz(
+                    api_storage,
+                    &api_nats,
+                    api_authz,
+                )
+                .await
                 {
                     eprintln!("[hub-server] query API error: {e}");
                 }
