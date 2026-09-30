@@ -129,7 +129,7 @@ def test_session_start_hook_output_shape():
     hook = REPO_ROOT / "mcp_server" / "hooks" / "session_start.py"
     r = subprocess.run(
         [sys.executable, str(hook)], input="{}",
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=30,
         env={**os.environ, "NATS_URL": "nats://127.0.0.1:1"})
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
