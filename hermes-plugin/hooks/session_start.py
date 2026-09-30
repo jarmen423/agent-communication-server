@@ -1,44 +1,65 @@
 #!/usr/bin/env python3
-"""SessionStart hook for nats-hub Codex plugin.
+"""SessionStart hook for the nats-hub plugin.
 
-Checks whether the nats-hub bus is reachable. If not, prints a warning
-but does not block — the agent can still work with cached data or
-retry later via MCP tools.
+Checks whether the nats-hub bus is reachable and injects a one-line context
+note. Claude Code consumes hook JSON only under
+``hookSpecificOutput.additionalContext`` — a bare ``{"context": ...}`` object
+is silently dropped, and plain stdout works but the structured form is what
+the docs specify for SessionStart.
+
+Never blocks: on failure the hook still emits JSON telling the agent the bus
+is down and MCP tools will fail until it is up.
 """
 import json
 import os
 import sys
 
-def main():
-    # Read hook input from stdin
+UP_MSG = (
+    "[nats-hub] Connected to bus at {url}. Use list_agents to see who's "
+    "online, delegate_async + wait_for_task to hand off work, send_direct "
+    "to DM an agent, start_session for multi-turn conversations."
+)
+DOWN_MSG = (
+    "[nats-hub] Warning: NATS bus at {url} is not reachable. In the "
+    "agent-communication-server repo, `make up` starts nats-server, "
+    "hub-server and echo workers. MCP tools will fail until the bus is up."
+)
+
+
+def main() -> None:
     try:
-        input_data = json.load(sys.stdin)
+        json.load(sys.stdin)  # hook input on stdin; not needed
     except Exception:
-        input_data = {}
+        pass
 
     nats_url = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
 
-    # Try a quick connection check
     try:
         import asyncio
+
         import nats
 
-        async def check():
-            nc = await nats.connect(nats_url, name="codex-hook-check", connect_timeout=3)
+        async def check() -> None:
+            nc = await nats.connect(
+                nats_url,
+                name="session-start-hook",
+                connect_timeout=1.5,
+                max_reconnect_attempts=1,
+                reconnect_time_wait=0.2,
+            )
             await nc.close()
 
         asyncio.run(check())
-        # Bus is up — emit a context message
-        output = {
-            "context": f"[nats-hub] Connected to bus at {nats_url}. Use list_agents to see who's online, send_message or send_direct to communicate, delegate_task to assign work, start_session for multi-turn conversations."
-        }
+        context = UP_MSG.format(url=nats_url)
     except Exception:
-        # Bus is down — warn but don't block
-        output = {
-            "context": f"[nats-hub] Warning: NATS bus at {nats_url} is not reachable. Start it with `nats-server -c config/nats-server.conf` then `cargo run --bin hub-server` in the nats-hub repo. MCP tools will fail until the bus is up."
-        }
+        context = DOWN_MSG.format(url=nats_url)
 
-    print(json.dumps(output))
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        }
+    }))
 
 
 if __name__ == "__main__":
