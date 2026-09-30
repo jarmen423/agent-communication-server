@@ -288,6 +288,14 @@ def test_delegate_async_wait_for_task_round_trip(monkeypatch):
     worker_id = f"echo-{uuid.uuid4().hex[:6]}"
 
     async def run():
+        import nats
+
+        # Wait for the worker's first hub.register (sent right after it
+        # subscribes to its inbox) instead of a fixed sleep — a DM published
+        # before the subscription exists is dropped by core NATS.
+        probe = await nats.connect(os.environ["NATS_URL"])
+        reg = await probe.subscribe("hub.register")
+        await probe.flush()
         worker = subprocess.Popen(
             [sys.executable, "echo_worker.py", "--identity", worker_id,
              "--nats-url", os.environ["NATS_URL"]],
@@ -296,7 +304,14 @@ def test_delegate_async_wait_for_task_round_trip(monkeypatch):
             stderr=subprocess.DEVNULL,
         )
         try:
-            await asyncio.sleep(1.5)  # let the worker subscribe to its inbox
+            deadline = asyncio.get_running_loop().time() + 30
+            while True:
+                left = deadline - asyncio.get_running_loop().time()
+                assert left > 0, f"{worker_id} never registered"
+                msg = await reg.next_msg(timeout=left)
+                if json.loads(msg.data).get("payload", {}).get("identity") == worker_id:
+                    break
+            await probe.close()
 
             res = await hub_handlers.HANDLERS["delegate_async"]({
                 "to": worker_id, "prompt": "abc",
