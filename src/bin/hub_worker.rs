@@ -16,7 +16,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use nats_hub::{Envelope, HubClient, MessageKind};
+use nats_hub::{Envelope, HubClient};
 use std::process::Stdio;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;

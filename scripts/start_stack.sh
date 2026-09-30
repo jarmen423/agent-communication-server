@@ -8,8 +8,11 @@ REPO="${REPO:-$(pwd)}"
 MODEL="${MODEL:-}"
 NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 DB_PATH="${DB_PATH:-$(pwd)/nats_hub.db}"
-BIN_DIR="${BIN_DIR:-/data/cargo-targets/jfrie/nats/debug}"
-HERMES_PY="${HERMES_PY:-/home/jfrie/.hermes/hermes-agent/venv/bin/python3}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BIN_DIR="${BIN_DIR:-${CARGO_TARGET_DIR:-$REPO_ROOT/target}/debug}"
+# Python with nats-py + the hermes CLI deps. Defaults to the repo venv (make setup).
+HERMES_PY="${HERMES_PY:-$REPO_ROOT/.venv/bin/python}"
+export PATH="$REPO_ROOT/.tools/bin:$PATH"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

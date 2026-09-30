@@ -53,7 +53,8 @@ set -uo pipefail
 
 # ── Paths ────────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/data/cargo-targets/jfrie/nats}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$(cd "$(dirname "$0")/.." && pwd)/target}"
+export PATH="$(cd "$(dirname "$0")/.." && pwd)/.tools/bin:$PATH"
 HUB_SERVER_BIN="${HUB_SERVER_BIN:-${CARGO_TARGET_DIR}/debug/hub-server}"
 HUB_DELEGATE_BIN="${HUB_DELEGATE_BIN:-${CARGO_TARGET_DIR}/debug/hub-delegate}"
 PYTHON_BIN="${PYTHON_BIN:-$HOME/.hermes/hermes-agent/venv/bin/python3}"

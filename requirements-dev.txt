@@ -1,0 +1,4 @@
+# Dev/test deps. Install: make setup
+-r requirements.txt
+pytest>=8
+pytest-asyncio>=0.23

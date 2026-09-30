@@ -1,24 +1,9 @@
 //! Integration tests: inbox routing (meta.to), reply helpers, and
 //! the HubClient send_to / send_reply / subscribe_inbox API.
 
-use nats_hub::{Envelope, HubClient, MessageKind};
+use nats_hub::HubClient;
 use serde_json::json;
 use std::time::Duration;
-
-async fn setup_nats() -> HubClient {
-    // These tests require a running NATS server.
-    // They're integration tests (not unit tests).
-    let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
-
-    // Try to connect — skip tests if NATS isn't running
-    match HubClient::connect(&url, "test-runner").await {
-        Ok(client) => client,
-        Err(_) => {
-            eprintln!("Skipping inbox routing tests — NATS server not available at {url}");
-            std::process::exit(0);
-        }
-    }
-}
 
 #[tokio::test]
 async fn test_send_to_routes_to_inbox() {
@@ -39,7 +24,7 @@ async fn test_send_to_routes_to_inbox() {
 
     // Create sender and send a DM to the receiver
     let sender = HubClient::connect(&url, "test-sender").await.unwrap();
-    let id = sender
+    let _id = sender
         .send_to(
             "test-receiver",
             "test.channel",

@@ -29,3 +29,9 @@ nats_hub.db/
 .cursor/
 .hermes/
 .agentic-memory/
+
+# Dev tooling (make setup)
+.tools/
+.venv/
+node_modules/
+.pytest_cache/

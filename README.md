@@ -14,38 +14,26 @@ When building agent systems, you need a way for agents to talk to each other. na
 
 ## Quick Start
 
-### Prerequisites
+> Full setup for any machine (prereqs, troubleshooting, how tests run):
+> **[`CONTRIBUTING.md`](CONTRIBUTING.md)**. Current sprint: **[`refocus.md`](refocus.md)**.
 
 ```bash
-# Install NATS server
-curl -sf https://binaries.nats.dev/nats-io/nats-server/v2@latest | sh
-
-# Start NATS
-nats-server -p 4222 --jetstream
+make setup    # pinned nats-server → .tools/bin, Python venv → .venv, then a toolchain check
+make build    # first build compiles RocksDB (~10 min)
+make test     # Rust + Python tests against a throwaway nats-server + hub-server
+make up       # local hub: nats-server + hub-server + visualizer (http://127.0.0.1:9191/) + echo workers
 ```
 
-### Build
+In another terminal:
 
 ```bash
-cargo build --release
+./target/debug/hub-delegate --to echo-1 --prompt "hello" --verbose   # → echo: olleh
+./target/debug/hub-history --tail                                      # live message history
+./target/debug/hub-agents                                              # who's registered
 ```
 
-### Run
-
-```bash
-# Terminal 1: Start the router (with SurrealDB persistence)
-./target/release/hub-server --db-path nats_hub.db
-
-# Terminal 2: Start a Cline worker (LLM-powered agent)
-node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
-
-# Terminal 3: Delegate a task
-./target/release/hub-delegate --to worker-1 --prompt "What is 2+2?" --verbose
-# → 2 + 2 equals 4.
-
-# Terminal 4: Watch message history
-./target/release/hub-history --db-path nats_hub.db --tail
-```
+System prerequisites: Rust, a C/C++ toolchain, and libclang (for the embedded
+RocksDB build). `make doctor` tells you what's missing and how to install it.
 
 ## Communication Patterns
 
@@ -311,17 +299,23 @@ Swap `--execute` or `--model` to change what the worker does. The bus doesn't ca
 ## Testing
 
 ```bash
-CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
+make test        # Rust (cargo test) + Python (pytest), each against a throwaway nats-server + hub-server
+make test-rust   # just Rust
+make test-py     # just Python
 ```
 
-39 tests covering: storage (SurrealDB), agent registry, inbox routing, task channels, sessions, events, waves, delegate round-trip, conversation threading, list_pending.
+About 95 Rust tests (storage, agent registry, inbox routing, task channels, sessions,
+events, waves, analytics, metrics, connect options, threads, TUI state) plus Python smoke
+tests, including a live echo-worker round trip. See [`CONTRIBUTING.md`](CONTRIBUTING.md#3-how-tests-work).
 
 ## License
 
-BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apache 2.0. See `LICENSE` for details.
+BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apache 2.0. (A `LICENSE` file is still to be added; the plugin manifests currently say MIT. Tracked in `refocus.md` §7.)
 
 ## Documentation
 
+- [`refocus.md`](refocus.md) — **current sprint, status board, reply contract**
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup on any machine
 - [`docs/PHASE3_PLAN.md`](docs/PHASE3_PLAN.md) — Phase 3 plan (sessions, events, waves) — **complete**
 - [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) — Full product vision and architecture
 - [`docs/DATABASE_PLAN.md`](docs/DATABASE_PLAN.md) — Database and persistence design

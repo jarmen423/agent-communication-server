@@ -17,11 +17,11 @@
 //!   5. Worker receives, processes, publishes result to channel.task.<short-uuid>
 //!   6. hub-delegate receives result and prints it
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use nats_hub::{Envelope, HubClient, MessageKind};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]

@@ -1,0 +1,7 @@
+# Optional backend/bridge SDKs. Only needed for the matching worker or bridge.
+# Install: make setup-extras
+-r requirements.txt
+agent-client-protocol>=0.6   # hermes_acp_worker.py (stdio ACP)
+cursor-sdk>=1.0              # cursor_worker.py
+python-telegram-bot>=21      # telegram_bridge.py
+discord.py>=2.3              # discord_bridge.py
