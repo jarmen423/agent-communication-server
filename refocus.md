@@ -100,7 +100,14 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 |---|---|---|---|---|---|
 | S0 | Dev environment fixes + collaborator setup (`CONTRIBUTING.md`, `make doctor/setup/test`, CI) | local (orchestrator) | `refocus/dev-env` | ✅ | **PR #1** — CI green on GitHub (clean Ubuntu, 14m). 2026-09-29: fresh clone → `make setup && make build && make test` green (28 Rust result groups ok, 0 failed; pytest 5 passed incl. live echo round-trip). NATS tests now actually run under `with_stack.sh`. `make up` + `hub-delegate --to echo-1` → `echo: olleh`; visualizer HTTP 200. Zero compiler warnings; fmt clean. Fixed a timing-flaky liveness test. |
 | L1 | Reply contract + end-to-end delegation harness | local subagent | `refocus/l1-reply-contract` | ✅ | **PR #8**, awaiting merge. Verified by the orchestrator on main+L1 in an isolated build: 115 Rust passed / 0 failed. Two Python live tests were load-sensitive (fixed sleep / spawn-time clock); both now wait on the worker's first registration (`5a2d394`), then 34/34 passed twice at load ~18. Known: register+presence write conflicts in SurrealDB. They're harmless, and L2's single-writer mirror removes them. Brief: `.planning/refocus/L1-reply-contract.md` |
-| L2 | Storage + router correctness (schema, heartbeat, limits, `list_pending`, `no-storage` build) | local subagent | `refocus/l2-storage` | 🟡 | **PR #9** is open. The agent's gates pass in an isolated target dir: fmt, build, all Rust tests 0 failed, pytest, `no-storage` check. It merges cleanly with main and with L1 (#8). Awaiting CI and a Devin live check (session 4d2ddd2b): upgrading a DB written by pre-L2 main, combined L1+L2 tests, no SurrealDB write conflicts with L1's re-announce, pending semantics, mirror-drop metric. Brief: `.planning/refocus/L2-storage.md` |
+| L2 | Storage + router correctness (schema, heartbeat, limits, `list_pending`, `no-storage` build) | local subagent | `refocus/l2-storage` | ✅ | **PR #9**, ready to merge (CI green). Live-verified by Devin (session 4d2ddd2b):
+- **Pre-L2 DB upgrade:** migration v0→2, 0 unconvertible rows, idempotent on restart; old agents/history/sessions/waves/threads/pending read back and new writes work.
+- **Combined L1+L2:** 147 Rust / 34 Python passed, `no-storage` compiles.
+- **~97s soak with 4 re-registering workers:** 0 write conflicts, 0 warnings.
+- **Pending:** cleared only by a `kind=message` reply.
+- **`natshub_storage_mirror_dropped_total`:** exported, reads 0.
+
+Brief: `.planning/refocus/L2-storage.md` |
 | L3 | Claude Code + Codex workers, backend hardening, Python tests | local subagent | `refocus/l3-workers` | ✅ | **PR #2**, ready to merge once CI passes. Updated to current main (`b0ceb7b`) and live-verified in a Devin session: make lint/test green (76 Python passed). Behind the authenticated bridge, `ensure_worker` with a valid token and Origin spawned the Claude worker, and a delegate round-trip returned the result; no token or a wrong token → 401, evil Origin → 403; stop mid-turn left no orphaned processes. Earlier: real claude/codex smoke tests → `pong`. Brief: `.planning/refocus/L3-workers.md` |
 | R1 | Unified MCP orchestrator server (one copy, fixed delegate, async tools, auth) | remote agent | `refocus/r1-mcp` | ✅ | **Merged (PR #3)** 2026-09-30. The review found 4 majors, all fixed before merge (`d54f965`): reconnect survival, bounded subscriptions and trackers, Hermes per-call timeout, `mcp>=1.19`. Also wave fail-fast. Verified on main+R1+R2 in an isolated target dir: 104 Rust / 24 Python passed, plugin copies in sync. Minor follow-ups are in §7. Brief: `.planning/refocus/R1-mcp.md` |
 | R2 | WS bridge + visualizer transport hardening (traversal, Origin, token) | remote agent | `refocus/r2-ws-bridge` | ✅ | **Merged (PR #4)** 2026-09-30. Probed against a live server: traversal (plain and encoded) returns 403 with no leak; bad Origin → 403; missing or wrong token → 401; valid token → 101; a 0.0.0.0 bind without a token refuses to start. Minor follow-ups are in §7. Brief: `.planning/refocus/R2-ws-bridge.md` |
@@ -188,6 +195,9 @@ Every task that sends or receives task results implements this exactly:
 - The docs should prefer `HUB_WS_TOKEN` over `--ws-token`, which is visible in `ps`.
 
 **Other:**
+- `hub-delegate` writes INFO logs to **stdout** when `RUST_LOG` is set, which breaks piping its result and 2 e2e tests. Logs should go to stderr (found by the L2 live check).
+- Add `cargo check --lib --no-default-features --features no-storage` to CI (proposed by L2).
+- Analytics loads whole time ranges into memory; push the aggregation down into the DB (L2 follow-up).
 
 - JetStream inbox durability (sprint item 6)
 - Identity binding via subject plus NATS permissions (second half of sprint item 5)
