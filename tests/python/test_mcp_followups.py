@@ -149,3 +149,31 @@ def test_plugin_default_identity_from_dir(monkeypatch):
     assert nats_hub_mcp._default_identity() is None
 
 
+def test_plugin_default_identity_marketplace_install_layout(tmp_path):
+    """Marketplace installs live at cache/<marketplace>/<name>/<version>/ —
+    the parent of server/ is a version dir, so detection must use the
+    host manifest, not the directory name."""
+    cases = [
+        (".claude-plugin/plugin.json", "claude-code-agent"),
+        (".codex-plugin/plugin.json", "codex-agent"),
+        ("plugin.yaml", "hermes-agent"),
+    ]
+    for marker, want in cases:
+        root = tmp_path / want / "cache" / "mkt" / "nats-hub" / "0.1.0"
+        (root / "server").mkdir(parents=True)
+        (root / marker).parent.mkdir(parents=True, exist_ok=True)
+        (root / marker).write_text("{}")
+        assert nats_hub_mcp._default_identity(str(root / "server")) == want
+    bare = tmp_path / "bare" / "0.1.0" / "server"
+    bare.mkdir(parents=True)
+    assert nats_hub_mcp._default_identity(str(bare)) is None
+
+
+def test_repo_plugin_dirs_resolve_by_marker():
+    """Each real plugin dir in the repo carries its host marker."""
+    root = Path(nats_hub_mcp.__file__).resolve().parents[1]
+    for plugin, want in [("claude-code-plugin", "claude-code-agent"),
+                         ("codex-plugin", "codex-agent"),
+                         ("hermes-plugin", "hermes-agent")]:
+        assert nats_hub_mcp._default_identity(str(root / plugin / "server")) == want
+

@@ -26,12 +26,27 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
 
-def _default_identity() -> str | None:
-    """Plugin installs default to ``<plugin-name>-agent`` derived from the
-    install dir (e.g. ``codex-plugin`` → ``codex-agent``), so ``.mcp.json``
-    doesn't hardcode it. The canonical ``mcp_server/`` copy has no default —
-    ``NATS_HUB_IDENTITY`` must be set. Env always wins."""
-    parent = os.path.basename(os.path.dirname(_HERE))
+# Manifest each host puts at the plugin root → default identity. Detected by
+# marker file, not directory name: marketplace installs live at
+# ``~/.claude/plugins/cache/<marketplace>/<name>/<version>/``, where the
+# parent of ``server/`` is a version string, not ``claude-code-plugin``.
+_PLUGIN_MARKERS = (
+    (os.path.join(".claude-plugin", "plugin.json"), "claude-code-agent"),
+    (os.path.join(".codex-plugin", "plugin.json"), "codex-agent"),
+    ("plugin.yaml", "hermes-agent"),
+)
+
+
+def _default_identity(server_dir: str | None = None) -> str | None:
+    """Plugin installs default to a per-host identity (``claude-code-agent``,
+    ``codex-agent``, ``hermes-agent``) so ``.mcp.json`` doesn't hardcode it.
+    The canonical ``mcp_server/`` copy has no default — ``NATS_HUB_IDENTITY``
+    must be set. Env always wins."""
+    root = os.path.dirname(server_dir or _HERE)
+    for marker, ident in _PLUGIN_MARKERS:
+        if os.path.exists(os.path.join(root, marker)):
+            return ident
+    parent = os.path.basename(root)  # repo checkout fallback: <host>-plugin/
     if parent.endswith("-plugin"):
         return parent[: -len("-plugin")] + "-agent"
     return None
