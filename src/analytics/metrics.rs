@@ -14,7 +14,7 @@
 //! Design note (cardinality): only **bounded** labels are used. `channel_class`
 //! is bucketed into 6 values regardless of bus size, and per-kind/per-error
 //! counters are fixed-size arrays. Per-agent counters are intentionally
-//! excluded (high cardinality) — see `docs/PHASE4_PLAN.md` for the rationale.
+//! excluded (high cardinality) — see `docs/archive/PHASE4_PLAN.md` for the rationale.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

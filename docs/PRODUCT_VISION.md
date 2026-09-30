@@ -371,7 +371,7 @@ After this phase:
 
 ### Phase 3: Stateful orchestration (sessions, events, waves) ✅
 
-Implemented per [`docs/PHASE3_PLAN.md`](PHASE3_PLAN.md). nats-hub now supports:
+Implemented per [`docs/archive/PHASE3_PLAN.md`](archive/PHASE3_PLAN.md). nats-hub now supports:
 
 | Capability | CLI / module |
 |---|---|
@@ -417,7 +417,7 @@ Two surfaces for observing and steering agent work:
 - Live agent dashboard, sessions, wave status, message feed
 - Subscribes to NATS directly + uses query API for persistent data
 - Verified against live stack 2026-08-02; 18 unit tests in `src/tui/`
-- Spec: `docs/TUI_PLAN.md`
+- Spec: `docs/archive/TUI_PLAN.md`
 
 ### Phase 5: Human bridges — **partial**
 

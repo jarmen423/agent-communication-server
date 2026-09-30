@@ -301,7 +301,7 @@ DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status;
 
 ### Phase 3 (orchestration): Sessions + events + waves ✅
 
-> Distinct from conversation-threading Phase 3 above. Full plan in [`PHASE3_PLAN.md`](PHASE3_PLAN.md).
+> Distinct from conversation-threading Phase 3 above. Full plan in [`archive/PHASE3_PLAN.md`](archive/PHASE3_PLAN.md).
 
 - [x] **3a** `sessions` table + `hub-session` CLI + worker session mode
 - [x] **3b** `MessageKind::Event` + `hub-watch` + `worker_events.py`
