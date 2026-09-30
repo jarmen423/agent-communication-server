@@ -142,8 +142,10 @@ async fn test_session_persistence() {
 /// Requires a running NATS server — skips gracefully if not available.
 #[tokio::test]
 async fn test_session_channel_isolation() {
+    let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_string());
+
     // Try to connect to NATS; skip if not available
-    let test_client = match HubClient::connect("nats://127.0.0.1:4222", "test-probe").await {
+    let test_client = match HubClient::connect(&url, "test-probe").await {
         Ok(c) => c,
         Err(_) => {
             eprintln!("[test_session_channel_isolation] skipping — no NATS server");
@@ -154,12 +156,8 @@ async fn test_session_channel_isolation() {
     let _ = test_client.drain().await;
 
     // Connect two listeners on different session channels
-    let listener_a = HubClient::connect("nats://127.0.0.1:4222", "listener-a")
-        .await
-        .unwrap();
-    let listener_b = HubClient::connect("nats://127.0.0.1:4222", "listener-b")
-        .await
-        .unwrap();
+    let listener_a = HubClient::connect(&url, "listener-a").await.unwrap();
+    let listener_b = HubClient::connect(&url, "listener-b").await.unwrap();
 
     let mut rx_a = listener_a.subscribe_session("isolation-a").await.unwrap();
     let mut rx_b = listener_b.subscribe_session("isolation-b").await.unwrap();
@@ -168,9 +166,7 @@ async fn test_session_channel_isolation() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Send a message on session A
-    let sender = HubClient::connect("nats://127.0.0.1:4222", "sender")
-        .await
-        .unwrap();
+    let sender = HubClient::connect(&url, "sender").await.unwrap();
     sender
         .send_to_session("isolation-a", json!({"msg": "hello-a"}))
         .await

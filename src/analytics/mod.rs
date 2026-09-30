@@ -56,11 +56,6 @@ impl TimeRange {
             until: Some(until),
         }
     }
-
-    /// Resolve the effective upper bound (now if open-ended).
-    pub(crate) fn until_or_now(&self) -> DateTime<Utc> {
-        self.until.unwrap_or_else(Utc::now)
-    }
 }
 
 /// Bucketing granularity for time-series methods.

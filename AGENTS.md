@@ -103,42 +103,41 @@ One central `nats-server` + `hub-server`; remote machines join as NATS **clients
 
 ## Build & Run
 
+**Start here:** `refocus.md` (current sprint, status board, write-scope ownership,
+reply contract) and `CONTRIBUTING.md` (setup on any machine).
+
 ```bash
-# Build all binaries
-CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo build
+make setup     # nats-server → .tools/bin, Python venv → .venv (idempotent)
+make doctor    # toolchain check with fix hints
+make build     # all bins incl. hub-tui (auto-applies BINDGEN fix; see CONTRIBUTING.md)
+make test      # Rust + Python tests against an isolated nats-server + hub-server
+make up        # local stack: nats-server :4222, hub-server + visualizer :9191, echo-1/echo-2
+```
 
-# Start NATS server (prerequisite)
-nats-server -p 4222 --jetstream
+If you invoke `cargo` directly, first run `export BINDGEN_EXTRA_CLANG_ARGS="$(scripts/dev/bindgen_args.sh)"`.
+The value must stay stable, because changing it rebuilds RocksDB. To wrap any
+command with a throwaway stack, use `scripts/dev/with_stack.sh <cmd>`, which
+exports `NATS_URL`.
 
-# Start the router (with SurrealDB persistence)
-./target/debug/hub-server --db-path nats_hub.db
+Manual commands (against a running stack; `NATS_URL` defaults to `nats://127.0.0.1:4222`):
 
-# Start a Cline worker (Node.js + Cline SDK)
-node hub_worker.js --type cline --identity cline-worker-1 --model "cline-pass/minimax-m3"
+```bash
+# Router with persistence + visualizer (make up does this)
+./target/debug/hub-server --db-path .tools/run/nats_hub.db --ws-addr 127.0.0.1:9191 --static-dir visualizer/
 
-# Start a Hermes ACP worker (JSON-RPC 2.0)
-python3 hermes_acp_worker.py --identity hermes-acp-1
+# Workers (Python, from the repo venv)
+.venv/bin/python echo_worker.py --identity echo-1
+.venv/bin/python hermes_acp_worker.py --identity hermes-acp-1
+.venv/bin/python cursor_worker.py --identity cursor-worker-1 --repo "$PWD"
+node hub_worker.js --type cline --identity cline-worker-1 --model "cline-pass/minimax-m3"   # needs make setup-js
 
-# Start a Cursor worker (Cursor SDK)
-python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
-
-# Delegate a task
-./target/debug/hub-delegate --to worker-1 --prompt "What is 2+2?" --verbose
-
-# Start with visualizer (WebSocket + static files)
-./target/debug/hub-server --db-path nats_hub.db \
-    --ws-addr 127.0.0.1:9191 \
-    --static-dir visualizer/
-# → Open http://127.0.0.1:9191/ in browser for arcade visualizer
-
-# Watch history
-./target/debug/hub-history --db-path nats_hub.db --tail
+# Delegate, observe
+./target/debug/hub-delegate --to echo-1 --prompt "What is 2+2?" --verbose
+./target/debug/hub-history --tail
 
 # Stateful session (multi-turn)
 ./target/debug/hub-session create --worker cursor-worker-1 --from josh --prompt "Hello"
 ./target/debug/hub-session send <session-id> --from josh --message "Follow up"
-
-# Watch structured progress events
 ./target/debug/hub-watch --session <session-id>
 
 # Parallel wave orchestration
@@ -146,8 +145,6 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /home/jfrie/nats
 ./target/debug/hub-wave spawn <wave-id> --from josh
 ./target/debug/hub-watch --wave <wave-id>
 ```
-
-**Note**: Set `CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats` to avoid filling `/` (193G disk). The `/data` partition has 369G.
 
 ## CLI Reference
 
@@ -210,20 +207,19 @@ NATS→human, and publishes human→NATS. Runs standalone (not via `hub-worker`)
 ## Testing
 
 ```bash
-CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo test
+make test        # both suites
+make test-rust   # = scripts/dev/with_stack.sh cargo test --features tui
+make test-py     # = scripts/dev/with_stack.sh .venv/bin/python -m pytest -q tests/python
 ```
 
-39 tests across 8 test files + 3 unit tests in `src/wave/validate.rs`:
-- `tests/storage_surreal.rs` (5): envelope store/query, agent registry, threading, ping
-- `tests/agent_registry.rs` (10): capability/alive/touch/deregister filters (DB + in-memory)
-- `tests/inbox_routing.rs` (3): DM routing, reply correlation, subject format
-- `tests/task_channels.rs` (3): task channel isolation, delegate round-trip, list_pending
-- `tests/sessions.rs` (4): session lifecycle, filters, persistence, channel isolation
-- `tests/events.rs` (5): event formatting, watch target resolution
-- `tests/waves.rs` (5): wave lifecycle, task status, validation, merge gate
-- `tests/threads.rs` (2): conversation thread queries for hub-thread
+`with_stack.sh` starts a private `nats-server` on a random port and a `hub-server`
+with a temp DB, then exports `NATS_URL` and `NATS_HUB_TEST_STACK=1`. Tests that need
+NATS **must read `NATS_URL`** and never hard-code `:4222`. Without the stack,
+NATS-dependent tests skip, and Python `live` tests are skipped.
 
-**Note**: Tests that require NATS server will skip gracefully if it's not running.
+Current count: about 95 Rust tests (29 lib unit + 11 integration files) plus Python
+smoke tests in `tests/python/`. Known gaps (see `refocus.md`): no tests for
+`ControlPlane` routing, `query_api`, `ws_bridge`, or a Rust delegate↔worker round-trip.
 
 ## Feature Flags
 

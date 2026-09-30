@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Echo worker — returns the prompt reversed. For dogfooding wave flows.
 
-Requires the nats-py package. System python often lacks it — use:
+Requires the repo venv (see CONTRIBUTING.md):
 
-  /home/jfrie/.hermes/hermes-agent/venv/bin/python3 echo_worker.py --identity cursor-agent
-
-Or:  pip install nats-py   (into your active venv)
+  make setup
+  .venv/bin/python echo_worker.py --identity echo-1
 """
 import asyncio
 import sys
@@ -17,9 +16,7 @@ except ModuleNotFoundError as e:
     if e.name in ("nats", "nats.aio", "nats.aio.client"):
         sys.stderr.write(
             "Missing package 'nats-py'.\n"
-            "Use Hermes venv:\n"
-            "  /home/jfrie/.hermes/hermes-agent/venv/bin/python3 echo_worker.py --identity cursor-agent\n"
-            "Or: pip install nats-py\n"
+            "Run `make setup`, then: .venv/bin/python echo_worker.py --identity echo-1\n"
         )
         sys.exit(1)
     raise

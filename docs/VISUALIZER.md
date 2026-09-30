@@ -21,60 +21,56 @@ The WS bridge (`src/ws_bridge.rs`) is embedded in `hub-server`. When you pass
 
 ## Prerequisites
 
-1. **NATS server** running with the nats-hub config:
-   ```bash
-   nats-server -c config/nats-server.conf
-   ```
+Set up the repo first; see [`CONTRIBUTING.md`](../CONTRIBUTING.md) (`make setup && make build`).
 
-2. **hub-server binary** built:
-   ```bash
-   CARGO_TARGET_DIR=/data/cargo-targets/jfrie/nats cargo build
-   ```
-
-3. (Optional) **Worker supervisor** for on-demand agent spawning via the UI:
-   ```bash
-   /home/jfrie/.hermes/hermes-agent/venv/bin/python3 worker_supervisor.py
-   ```
-
-## Starting the visualizer
+## Quickest path
 
 ```bash
-# Start hub-server with the visualizer
-cd ~/nats  # ensure working directory is the repo root
-/data/cargo-targets/jfrie/nats/debug/hub-server \
-    --db-path /tmp/nats_hub.db \
-    --ws-addr 127.0.0.1:9191 \
-    --static-dir /home/jfrie/nats/visualizer/
+make up    # nats-server + hub-server (visualizer on :9191) + echo workers
 ```
 
 Then open **http://127.0.0.1:9191/** in your browser.
 
+## Starting the visualizer manually
+
+From the repo root (paths are relative; `--static-dir` must point at `visualizer/`):
+
+```bash
+.tools/bin/nats-server -c config/nats-server.conf        # or: nats-server -p 4222 -js
+
+./target/debug/hub-server \
+    --db-path .tools/run/nats_hub.db \
+    --ws-addr 127.0.0.1:9191 \
+    --static-dir "$PWD/visualizer/"
+```
+
 Flags:
-- `--ws-addr` — address for the WebSocket bridge + static file server (default: disabled)
-- `--static-dir` — directory to serve static files from (usually `visualizer/`)
-- `--db-path` — SurrealDB path for message persistence (required for history features)
-- `--metrics-addr` — optional Prometheus metrics endpoint (e.g. `127.0.0.1:9090`)
+- `--ws-addr`: address for the WebSocket bridge and static file server (default: disabled)
+- `--static-dir`: directory to serve static files from (usually `visualizer/`)
+- `--db-path`: SurrealDB path for message persistence (needed for history features)
+- `--metrics-addr`: optional Prometheus metrics endpoint (e.g. `127.0.0.1:9090`)
+
+If you've set `CARGO_TARGET_DIR`, binaries are under `$CARGO_TARGET_DIR/debug/` instead of `./target/debug/`.
 
 ## Full stack startup
 
-From the nats-hub repo root, in separate terminals:
+From the repo root, in separate terminals:
 
 ```bash
 # Terminal 1: NATS server
-nats-server -c config/nats-server.conf
+.tools/bin/nats-server -c config/nats-server.conf
 
 # Terminal 2: hub-server (router + DB + visualizer)
-cd ~/nats
-/data/cargo-targets/jfrie/nats/debug/hub-server \
-    --db-path /tmp/nats_hub.db \
+./target/debug/hub-server \
+    --db-path .tools/run/nats_hub.db \
     --ws-addr 127.0.0.1:9191 \
-    --static-dir /home/jfrie/nats/visualizer/
+    --static-dir "$PWD/visualizer/"
 
-# Terminal 3: worker supervisor (on-demand agent spawning)
-/home/jfrie/.hermes/hermes-agent/venv/bin/python3 worker_supervisor.py
+# Terminal 3: worker supervisor (spawns agents on demand from the UI)
+.venv/bin/python worker_supervisor.py
 
-# Terminal 4: a worker (or let the supervisor spawn it from the UI)
-python3 kilo_worker.py --identity kilo-worker-1 --model kilo/minimax/minimax-m3
+# Terminal 4: a worker (or let the supervisor spawn one from the UI)
+.venv/bin/python kilo_worker.py --identity kilo-worker-1 --model kilo/minimax/minimax-m3
 ```
 
 Then open http://127.0.0.1:9191/ in your browser.

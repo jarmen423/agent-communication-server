@@ -1,0 +1,12 @@
+{
+  "name": "nats-hub-js-workers",
+  "private": true,
+  "type": "module",
+  "description": "Node.js Cline workers for nats-hub (worker.js, hub_worker.js). Install: make setup-js",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@cline/sdk": "^0.0.87",
+    "dotenv": "^16.4.0",
+    "nats": "^2.29.0"
+  }
+}

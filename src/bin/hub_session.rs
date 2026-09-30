@@ -13,7 +13,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use nats_hub::storage::{SessionFilter, SessionRecord};
-use nats_hub::{ApiClient, HubClient, MessageKind, SessionRecord as SRec};
+use nats_hub::{ApiClient, HubClient, MessageKind};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 

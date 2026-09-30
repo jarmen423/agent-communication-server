@@ -10,8 +10,8 @@ Listens (request-reply) on:
 
 Maps provider ids (from arcade AgentDock) → worker entrypoints under this repo.
 
-Use Hermes venv (nats-py):
-  /home/jfrie/.hermes/hermes-agent/venv/bin/python3 worker_supervisor.py
+Run from the repo venv (see CONTRIBUTING.md):
+  make setup && .venv/bin/python worker_supervisor.py
 """
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ try:
     from nats_connect import connect_nats
 except ModuleNotFoundError:
     sys.stderr.write(
-        "Missing nats-py. Use:\n"
-        "  /home/jfrie/.hermes/hermes-agent/venv/bin/python3 worker_supervisor.py\n"
+        "Missing nats-py. Run `make setup`, then:\n"
+        "  .venv/bin/python worker_supervisor.py\n"
     )
     sys.exit(1)
 

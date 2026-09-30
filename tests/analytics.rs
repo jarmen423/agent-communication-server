@@ -163,7 +163,7 @@ async fn test_latency_stats() {
     let a = setup().await;
     let t0 = Utc::now() - Duration::seconds(1000);
 
-    let mut original = env_at(
+    let original = env_at(
         "worker",
         "agents.tasks",
         MessageKind::Message,

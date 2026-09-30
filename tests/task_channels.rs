@@ -144,7 +144,7 @@ async fn test_delegate_round_trip() {
 /// that haven't been replied to.
 #[tokio::test]
 async fn test_list_pending_storage() {
-    use nats_hub::{HistoryQuery, Storage, SurrealStorage};
+    use nats_hub::{Storage, SurrealStorage};
 
     let storage = SurrealStorage::connect_memory().await.unwrap();
     storage.migrate().await.unwrap();
