@@ -11,7 +11,7 @@
 //! agent cache from the persisted copy.
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, ToSocketAddrs};
 use std::sync::Arc;
 use std::thread;
 
@@ -51,6 +51,27 @@ struct Args {
     /// Directory to serve static files from (visualizer HTML/JS/CSS).
     #[arg(long)]
     static_dir: Option<String>,
+
+    /// Shared secret required on the WS upgrade as `?token=` in the URL.
+    /// Falls back to env HUB_WS_TOKEN. Required for non-loopback --ws-addr
+    /// unless --ws-insecure is given.
+    #[arg(long)]
+    ws_token: Option<String>,
+
+    /// Additional allowed `Origin` for the WS endpoint (repeatable).
+    /// `http://<ws-addr>` and `http://localhost:<port>` are always allowed.
+    #[arg(long = "ws-allow-origin")]
+    ws_allow_origin: Vec<String>,
+
+    /// Sender identity stamped on envelopes the bridge publishes to the bus.
+    /// Falls back to env HUB_WS_IDENTITY, then `human`.
+    #[arg(long)]
+    ws_identity: Option<String>,
+
+    /// Allow a non-loopback --ws-addr without --ws-token. INSECURE: only
+    /// for trusted networks.
+    #[arg(long)]
+    ws_insecure: bool,
 }
 
 /// Spawn a minimal HTTP/1.0 server that responds to `GET /metrics` with the
@@ -126,26 +147,68 @@ async fn main() -> Result<()> {
     // Set up the WS bridge for the visualizer (browser can also publish commands).
     let ws_tx = nats_hub::ws_bridge::create_event_channel(1024);
     if let Some(ref ws_addr) = args.ws_addr {
-        let static_dir = args
-            .static_dir
-            .as_ref()
-            .map(|s| std::path::PathBuf::from(s));
+        let token = args
+            .ws_token
+            .clone()
+            .or_else(|| std::env::var("HUB_WS_TOKEN").ok())
+            .filter(|t| !t.is_empty());
+        let identity = args
+            .ws_identity
+            .clone()
+            .or_else(|| std::env::var("HUB_WS_IDENTITY").ok())
+            .unwrap_or_else(|| "human".to_string());
+
+        // A tokenless bridge may only bind loopback: it reads all bus
+        // traffic and can spawn workers, so an exposed unauthenticated
+        // listener is a critical hole.
+        if token.is_none() && !args.ws_insecure && !nats_hub::ws_bridge::is_loopback_addr(ws_addr) {
+            anyhow::bail!(
+                "refusing to start: --ws-addr {ws_addr} is not a loopback address and no \
+                 --ws-token (or HUB_WS_TOKEN) is set. Set a token, or pass --ws-insecure to \
+                 run unauthenticated on a trusted network."
+            );
+        }
+
+        let mut allowed_origins = vec![format!("http://{ws_addr}")];
+        if let Some(port) = ws_addr
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut it| it.next())
+            .map(|a| a.port())
+        {
+            allowed_origins.push(format!("http://localhost:{port}"));
+        }
+        allowed_origins.extend(args.ws_allow_origin.iter().cloned());
+
+        let config = nats_hub::ws_bridge::WsBridgeConfig {
+            static_dir: args.static_dir.as_ref().map(std::path::PathBuf::from),
+            nats_url: Some(args.nats_url.clone()),
+            allowed_origins,
+            token: token.clone(),
+            identity,
+        };
         let ws_tx_clone = ws_tx.clone();
         let ws_addr_clone = ws_addr.clone();
-        let nats_url = args.nats_url.clone();
         tokio::spawn(async move {
-            if let Err(e) = nats_hub::ws_bridge::start_ws_bridge(
-                &ws_addr_clone,
-                ws_tx_clone,
-                static_dir,
-                Some(nats_url),
-            )
-            .await
+            if let Err(e) =
+                nats_hub::ws_bridge::start_ws_bridge(&ws_addr_clone, ws_tx_clone, config).await
             {
                 eprintln!("[hub-server] WS bridge error: {e}");
             }
         });
-        info_log(&format!("WS bridge (visualizer) on http://{ws_addr}"));
+        match &token {
+            Some(t) => info_log(&format!(
+                "WS bridge (visualizer) on http://{ws_addr}/?token={t}"
+            )),
+            None => {
+                tracing::warn!(
+                    "WS bridge on {ws_addr} has no --ws-token; unauthenticated (loopback-only is safe)"
+                );
+                info_log(&format!(
+                    "WS bridge (visualizer) on http://{ws_addr} (no token; loopback only)"
+                ));
+            }
+        }
     }
 
     let cp = ControlPlane::connect(&args.nats_url)
