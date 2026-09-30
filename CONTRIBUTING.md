@@ -2,8 +2,8 @@
 
 This gets a fresh clone on any Linux or macOS machine building, testing, and
 running a local hub. None of it needs sudo except the one-time system packages
-in step 1. For the current sprint and task ownership, read
-[`refocus.md`](refocus.md) first.
+in step 1. For the current iteration, its status board and task ownership,
+read [`refocus-iteration-2.md`](refocus-iteration-2.md) first.
 
 ## 1. System prerequisites (one-time)
 
@@ -101,7 +101,14 @@ make lint         # cargo fmt --check + clippy
 
 - Tests that need a live NATS must read `NATS_URL` (default
   `nats://127.0.0.1:4222`). Never hard-code the port.
-- CI (`.github/workflows/ci.yml`) runs fmt, build, and both test suites the same way.
+- CI (`.github/workflows/ci.yml`) runs on every branch push: fmt, build, and
+  both test suites the same way, plus a `no-storage` job
+  (`cargo check --lib --no-default-features --features no-storage`) for the
+  transport-only crate. Only `main` saves the Rust build cache; branches
+  restore it.
+- The release pipeline (`.github/workflows/release.yml`) dry-runs on any push
+  that touches `packaging/**`, `scripts/install_remote.sh`, `Cargo.toml`,
+  `Cargo.lock` or the workflow itself. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## 4. Run a local hub
 
@@ -122,19 +129,27 @@ Knobs: `NATS_PORT`, `WS_ADDR`, `WORKERS="echo-1 echo-2"`, `NO_BUILD=1`
 (see `scripts/dev/up.sh`). If a `nats-server` is already listening on the port,
 `make up` reuses it.
 
-Real LLM workers (`hermes_acp_worker.py`, `cursor_worker.py`, …) run from the
-venv, for example `.venv/bin/python hermes_acp_worker.py --identity hermes-1`.
+Real LLM workers (`claude_worker.py`, `codex_worker.py`, `hermes_acp_worker.py`, …) run from the
+venv, for example `.venv/bin/python claude_worker.py --identity claude-1`.
 They also need their CLI or SDK installed and authenticated; `make doctor`
 lists which agent CLIs it can find. See `docs/WORKER_BACKENDS.md`.
 
 ## 5. Working conventions
 
-- Read `AGENTS.md` (architecture, conventions) and `refocus.md` (current sprint,
-  **write-scope ownership**, and the reply contract in §6).
-- Branch per task (`refocus/<id>-<slug>`). Push the branch so CI runs on it, then merge
+- Read `AGENTS.md` (architecture, code layout, conventions),
+  `refocus-iteration-2.md` (current iteration, **write-scope ownership** in §6,
+  shared contracts in §4) and `refocus.md` §6 (the reply contract).
+- Branch per task (`iter2/<id>-<slug>`). Push the branch so CI runs on it, then merge
   into `main` once it's verified. This is a solo repo: GitHub PRs are optional.
 - Keep files under about 400 LOC. Async everywhere (tokio / asyncio). No blocking calls.
-- Before pushing: `make lint && make test`.
+- Before pushing: `make lint && make test` (`make lint` includes `cargo fmt --check`).
+- Docs: living docs go in `docs/`. When a plan or handoff is finished, move it
+  to `docs/archive/` and add a row to `docs/archive/README.md`. Don't leave it
+  looking current.
+- Plugins: edit `mcp_server/`, then run `scripts/dev/sync_plugins.sh`. The
+  `claude-code-plugin/`, `codex-plugin/` and `hermes-plugin/` copies are
+  generated.
+- Releases: bump `Cargo.toml`, then tag `vX.Y.Z`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 - Never commit machine-specific paths (`/home/<you>`, custom target dirs).
   Use repo-relative paths or env vars with sensible defaults.
 

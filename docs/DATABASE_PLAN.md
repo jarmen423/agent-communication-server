@@ -37,7 +37,7 @@ threading, and observability out of the box.
 - **License**: Core engine is BSL 1.1 (converts to Apache 2.0 on 2030-01-01).
   Rust SDK is Apache 2.0. BSL restriction only blocks offering SurrealDB as a
   DBaaS to third parties — nats-hub provides messaging, not database access,
-  so this is a non-issue. See `docs/SURREALDB_LICENSE.md` for details.
+  so this is a non-issue. See "License analysis" below for details.
 - **Trade-off**: SurrealQL is non-standard. Mitigated by the `Storage` trait —
   downstream projects never see SurrealQL.
 
