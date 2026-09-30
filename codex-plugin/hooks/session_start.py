@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """SessionStart hook for the nats-hub plugin.
 
-Checks whether the nats-hub bus is reachable and injects a one-line context
-note. Claude Code consumes hook JSON only under
-``hookSpecificOutput.additionalContext`` — a bare ``{"context": ...}`` object
-is silently dropped, and plain stdout works but the structured form is what
-the docs specify for SessionStart.
+Checks whether the nats-hub bus is reachable (with auth/TLS via the vendored
+``nats_connect.connect_nats``, so token/TLS-protected hubs report correctly)
+and injects a one-line context note. Both Claude Code and Codex consume hook
+JSON under ``hookSpecificOutput.additionalContext`` — a bare
+``{"context": ...}`` object is silently dropped, and plain stdout works but
+the structured form is what the docs specify for SessionStart.
+
+Canonical source: ``mcp_server/hooks/`` — synced into each plugin's
+``hooks/`` by ``scripts/dev/sync_plugins.sh``. Works from either location:
+the vendored ``nats_connect.py`` is found via ``../server`` (plugin install)
+or ``..`` (canonical dir).
 
 Never blocks: on failure the hook still emits JSON telling the agent the bus
 is down and MCP tools will fail until it is up.
@@ -13,6 +19,12 @@ is down and MCP tools will fail until it is up.
 import json
 import os
 import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (os.path.join(_HERE, "..", "server"), _HERE + "/.."):
+    if os.path.isfile(os.path.join(_p, "nats_connect.py")):
+        sys.path.insert(0, os.path.abspath(_p))
+        break
 
 UP_MSG = (
     "[nats-hub] Connected to bus at {url}. Use list_agents to see who's "
@@ -37,10 +49,10 @@ def main() -> None:
     try:
         import asyncio
 
-        import nats
+        from nats_connect import connect_nats
 
         async def check() -> None:
-            nc = await nats.connect(
+            nc = await connect_nats(
                 nats_url,
                 name="session-start-hook",
                 connect_timeout=1.5,

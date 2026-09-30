@@ -19,9 +19,26 @@ import json
 import os
 import sys
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 # Sibling modules live beside this file (canonical dir or a plugin's server/).
 # Insert the dir so imports also work when this file is exec_module'd (Hermes).
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _HERE)
+
+
+def _default_identity() -> str | None:
+    """Plugin installs default to ``<plugin-name>-agent`` derived from the
+    install dir (e.g. ``codex-plugin`` → ``codex-agent``), so ``.mcp.json``
+    doesn't hardcode it. The canonical ``mcp_server/`` copy has no default —
+    ``NATS_HUB_IDENTITY`` must be set. Env always wins."""
+    parent = os.path.basename(os.path.dirname(_HERE))
+    if parent.endswith("-plugin"):
+        return parent[: -len("-plugin")] + "-agent"
+    return None
+
+
+if (ident := _default_identity()) is not None:
+    os.environ.setdefault("NATS_HUB_IDENTITY", ident)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server

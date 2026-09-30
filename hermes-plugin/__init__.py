@@ -174,12 +174,10 @@ def register(ctx):
         def _check():
             try:
                 async def _ping():
-                    import nats
-                    nc = await nats.connect(NATS_URL, name="hermes-hook-check",
-                                            connect_timeout=1.5,
-                                            max_reconnect_attempts=1,
-                                            reconnect_time_wait=0.2)
-                    await nc.close()
+                    # Shared module's get_nc(): auth/TLS via connect_nats and
+                    # reuses the tool connection instead of opening a second.
+                    import hub_connection
+                    await hub_connection.get_nc()
                 _run_async(_ping())
                 print(f"[nats-hub] Connected to bus at {NATS_URL}")
                 if AUTO_OPEN_VISUALIZER:
