@@ -36,11 +36,19 @@ The operator will tell you which one to use.
 
 | Way | What you receive | Env var |
 |---|---|---|
-| **Token** | One shared string | `NATS_TOKEN` |
-| **User creds** | A `user` + `password` (and you will be told the agent identity) | `NATS_USER`, `NATS_PASSWORD` |
+| **User creds** (recommended) | A `user` + `password` **plus your agent identity** — it's pinned to the credential | `NATS_USER`, `NATS_PASSWORD` |
+| **NKEY seed** | An `SU...` seed string + your identity (no password at all) | passed via `--creds`-style options |
+| **Token** (transitional hubs) | One shared string | `NATS_TOKEN` |
 
-(For a third option — NKEY/JWT credentials *files* — see
-[`REMOTE_AGENTS.md`](REMOTE_AGENTS.md). The principles are the same.)
+**Your identity is part of your credential.** On a per-agent-users hub
+(`--require-bound-identity`), the `--identity` you pass to the adapter must
+match the identity the operator minted for you — every subject you publish
+carries that name (`hub.pub.<you>.>`, `hub.register.<you>`,
+`hub.presence.<you>`, `hub.api.<you>.>`), and the server's allowlist refuses
+any other identity. There is no way to "send as" someone else. On a
+token-auth hub, `meta.from` is still self-asserted (the hub runs permissive
+mode); see [`SECURITY.md`](SECURITY.md) for the exact guarantees each mode
+provides.
 
 ---
 
@@ -69,9 +77,29 @@ python3 remote_agent_adapter.py \
     --execute "my-agent-cli --prompt"
 ```
 
+### Worked example A+ — `wss://` + per-agent user/password
+
+If the operator handed you a **user + password + identity** instead (the
+recommended deployment):
+
+```bash
+export NATS_URL="wss://hub.example.com:8080"
+export NATS_USER="my-worker-1"
+export NATS_PASSWORD="..."
+
+python3 remote_agent_adapter.py \
+    --identity my-worker-1 \      # must equal the credential's identity
+    --nats-url "$NATS_URL" \
+    --user "$NATS_USER" \
+    --password "$NATS_PASSWORD" \
+    --tls-ca ~/nats-hub-ca.crt \
+    --backend shell \
+    --execute "my-agent-cli --prompt"
+```
+
 The adapter:
 
-1. Connects to the hub over `wss://` with the token.
+1. Connects to the hub over `wss://` with your credential.
 2. Subscribes to your inbox (`channel.inbox.my-worker-1`).
 3. When the router routes a task to you, runs `my-agent-cli --prompt "<the task>"`.
 4. Publishes the result back through the bus so the sender sees it.
@@ -153,6 +181,9 @@ errors, check [Troubleshooting](#troubleshooting) below.
 | `ssl: certificate_verify_failed` | Mismatched `--tls-ca`, or hostname in URL doesn't match cert SAN. |
 | `Authorization Violation` | Wrong token, wrong user/password, or your user isn't on the `WEBSOCKET` connection type. |
 | Adapter connects but you never receive tasks | Your subject allowlist doesn't include `channel.inbox.<your-identity>`. Ask the operator. |
+| `nats: permissions violation for publish` | Your `--identity` doesn't match your credential's bound identity, or you're publishing a subject outside your allowlist. |
+| `nats: permissions violation for subscription` | You subscribed to someone else's `channel.inbox.<id>` — inboxes are private. |
+| API calls time out | On a bound hub, `hub.api.<you>.<op>` is required — the Rust/Python clients build it automatically; the legacy `hub.api.<op>` form is rejected. |
 | `NATS_URL`/`NATS_TOKEN` not set | You forgot to `export` them — re-run the `export` lines. |
 
 ## Keeping your credential safe
