@@ -99,16 +99,32 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | ID | Task | Runs on | Branch | Status | Evidence / notes |
 |---|---|---|---|---|---|
 | S0 | Dev environment fixes + collaborator setup (`CONTRIBUTING.md`, `make doctor/setup/test`, CI) | local (orchestrator) | `refocus/dev-env` | ✅ | **PR #1** — CI green on GitHub (clean Ubuntu, 14m). 2026-09-29: fresh clone → `make setup && make build && make test` green (28 Rust result groups ok, 0 failed; pytest 5 passed incl. live echo round-trip). NATS tests now actually run under `with_stack.sh`. `make up` + `hub-delegate --to echo-1` → `echo: olleh`; visualizer HTTP 200. Zero compiler warnings; fmt clean. Fixed a timing-flaky liveness test. |
-| L1 | Reply contract + end-to-end delegation harness | local subagent | `refocus/l1-reply-contract` | 🟡 | Brief: `.planning/refocus/L1-reply-contract.md` |
+| L1 | Reply contract + end-to-end delegation harness | local subagent | `refocus/l1-reply-contract` | 🟡 | Implemented. Orchestrator re-verification on current main is in progress. Brief: `.planning/refocus/L1-reply-contract.md` |
 | L2 | Storage + router correctness (schema, heartbeat, limits, `list_pending`, `no-storage` build) | local subagent | `refocus/l2-storage` | 🟡 | Brief: `.planning/refocus/L2-storage.md` |
-| L3 | Claude Code + Codex workers, backend hardening, Python tests | local subagent | `refocus/l3-workers` | ✅ | **PR #2** (awaiting merge; ⚠️ merge with/after R2 — supervisor now spawns real agents via the unauthenticated WS bridge). Verified independently: `make test-py` 57 passed; real smoke tests claude → `pong` (24.5s), codex → `pong` (63.4s). Brief: `.planning/refocus/L3-workers.md` |
-| R1 | Unified MCP orchestrator server (one copy, fixed delegate, async tools, auth) | remote agent | `refocus/r1-mcp` | 🟡 | Brief: `.planning/refocus/R1-mcp.md` |
-| R2 | WS bridge + visualizer transport hardening (traversal, Origin, token) | remote agent | `refocus/r2-ws-bridge` | 🟡 | Brief: `.planning/refocus/R2-ws-bridge.md` |
+| L3 | Claude Code + Codex workers, backend hardening, Python tests | local subagent | `refocus/l3-workers` | ✅ | **PR #2**, awaiting merge. R2 has merged, so the WS-bridge exposure that blocked it is closed. Being updated to current main and live-verified (supervisor behind the authenticated bridge) in Devin session 077d9c8d. Verified independently: `make test-py` 57 passed; real smoke tests claude → `pong` (24.5s), codex → `pong` (63.4s). Brief: `.planning/refocus/L3-workers.md` |
+| R1 | Unified MCP orchestrator server (one copy, fixed delegate, async tools, auth) | remote agent | `refocus/r1-mcp` | ✅ | **Merged (PR #3)** 2026-09-30. The review found 4 majors, all fixed before merge (`d54f965`): reconnect survival, bounded subscriptions and trackers, Hermes per-call timeout, `mcp>=1.19`. Also wave fail-fast. Verified on main+R1+R2 in an isolated target dir: 104 Rust / 24 Python passed, plugin copies in sync. Minor follow-ups are in §7. Brief: `.planning/refocus/R1-mcp.md` |
+| R2 | WS bridge + visualizer transport hardening (traversal, Origin, token) | remote agent | `refocus/r2-ws-bridge` | ✅ | **Merged (PR #4)** 2026-09-30. Probed against a live server: traversal (plain and encoded) returns 403 with no leak; bad Origin → 403; missing or wrong token → 401; valid token → 101; a 0.0.0.0 bind without a token refuses to start. Minor follow-ups are in §7. Brief: `.planning/refocus/R2-ws-bridge.md` |
 
 **Process:** each task works on its own branch and opens a PR against `main`.
 The orchestrator verifies every task by re-running `make lint && make test`
 (self-reports alone are not trusted), then updates this board. Briefs live in
 `.planning/refocus/`.
+
+**Where verification runs (keep this machine light):**
+- **Build and test gates → GitHub CI.** Every PR gets fmt, build, and Rust +
+  Python tests on a clean runner. To verify a PR against a moved `main`,
+  merge `main` into the branch (or re-run CI) instead of building locally.
+- **Full-environment checks → Devin sessions** (the `devin-handoff` skill):
+  a live stack, supervisor/bridge flows, long builds, and browser checks.
+  Each session has its own VM, so there's no local disk or CPU cost.
+- **Local → review plus quick, targeted runs** in the worktree's own `./target`,
+  with the shared kache cache. Run `make prune` after merges.
+
+> **Lesson (2026-09-29):** never point several worktrees at one
+> `CARGO_TARGET_DIR`. The crate's artifacts collide, and cargo silently tests
+> another worktree's code. Each worktree uses its own `./target`; dependencies
+> are shared through the kache/sccache compile cache (set automatically by
+> `scripts/dev/lib.sh`). Run `make prune` after merges. See `CONTRIBUTING.md` §2.
 
 ### Write-scope ownership (to prevent merge collisions)
 
@@ -153,6 +169,25 @@ Every task that sends or receives task results implements this exactly:
    result payload shape.
 
 ## 7. Backlog after the sprint
+
+**Review follow-ups from R1 (MCP, PR #3), all minor:**
+- Plugin hooks bypass `connect_nats`, so they report "unreachable" on an auth hub.
+- `.mcp.json` hardcodes the identity and URL (should use `${NATS_HUB_IDENTITY:-…}` and `${NATS_URL:-…}`).
+- `hooks/` and `SKILL.md` aren't covered by `sync_plugins.sh --check`. `hermes-plugin/hooks/` is dead code.
+- `wait_for_message` returns stale messages by default (it should default to `last_seq`).
+- `start_session` ignores a failed `session.create`.
+- `tracker.error` isn't surfaced for waves.
+- The Codex and Hermes hook output formats are unverified.
+
+**Review follow-ups from R2 (WS bridge, PR #4), all minor:**
+- The default Origin list misses `127.0.0.1` for `localhost`/`0.0.0.0` binds and misses port 80. Allow-list entries aren't normalized.
+- A token containing `+` breaks in the browser. URL-encode the banner, or restrict the token charset.
+- The token comparison isn't constant-time. An Origin that isn't valid UTF-8 skips the check.
+- `--ws-identity` doesn't cover stop/resume. The shared NATS connection doesn't retry its first connect.
+- Startup guards should be testable. `make up` and the Hermes plugin should append `?token=` when `HUB_WS_TOKEN` is set.
+- The docs should prefer `HUB_WS_TOKEN` over `--ws-token`, which is visible in `ps`.
+
+**Other:**
 
 - JetStream inbox durability (sprint item 6)
 - Identity binding via subject plus NATS permissions (second half of sprint item 5)

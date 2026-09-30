@@ -121,3 +121,14 @@ tui = ["dep:ratatui", "dep:crossterm"]
 # Use this when embedding nats-hub as a messaging dependency
 # without needing SurrealDB (e.g. ephemeral agents, testing).
 no-storage = []
+
+# ── Build profiles ─────────────────────────────────────────────
+# Full debuginfo made every test/bin artifact ~0.8 GB (hub-server: 787 MB) and a
+# debug build + tests ~20-40 GB per checkout. Keep file:line in backtraces for
+# our code; drop debuginfo for dependencies. ~5-10x smaller, faster links.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+

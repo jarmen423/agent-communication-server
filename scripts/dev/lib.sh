@@ -10,8 +10,24 @@ if [[ -z "${BINDGEN_EXTRA_CLANG_ARGS:-}" ]]; then
   _bg="$("$REPO_ROOT/scripts/dev/bindgen_args.sh" || true)"
   [[ -n "$_bg" ]] && export BINDGEN_EXTRA_CLANG_ARGS="$_bg"
 fi
+# One target dir per checkout/worktree (default ./target). Never share a target
+# dir between worktrees — the crate's own artifacts collide (see CONTRIBUTING).
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
 export CARGO_TARGET_DIR
+
+# Shared compile cache across ALL checkouts/worktrees: content-addressed, so
+# dependency builds (SurrealDB, RocksDB C++, tokio, …) are reused while each
+# worktree still gets its own target dir. Prefer kache (Rust + C/C++ shims),
+# else sccache. Opt out with NATS_HUB_NO_BUILD_CACHE=1.
+if [[ -z "${RUSTC_WRAPPER:-}" && -z "${NATS_HUB_NO_BUILD_CACHE:-}" ]]; then
+  if command -v kache >/dev/null 2>&1; then
+    export RUSTC_WRAPPER=kache
+    _shims="${KACHE_SHIMS_DIR:-$HOME/.local/lib/kache/shims}"
+    [[ -d "$_shims" ]] && export PATH="$_shims:$PATH"   # caches the RocksDB C++ build
+  elif command -v sccache >/dev/null 2>&1; then
+    export RUSTC_WRAPPER=sccache
+  fi
+fi
 
 free_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'

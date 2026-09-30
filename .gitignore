@@ -35,3 +35,4 @@ nats_hub.db/
 .venv/
 node_modules/
 .pytest_cache/
+.claude/worktrees/
