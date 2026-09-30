@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Fake `claude` CLI for tests: emits canned stream-json.
+
+Env:
+  FAKE_CLAUDE_MODE      ok (default) | error | error_exit0 | sleep | nonzero_plain
+  FAKE_CLAUDE_ARGV_LOG  append this invocation's argv (JSON) to the file
+"""
+import json
+import os
+import sys
+import time
+
+argv = sys.argv[1:]
+log = os.environ.get("FAKE_CLAUDE_ARGV_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(json.dumps(argv) + "\n")
+
+if "-p" not in argv or "stream-json" not in argv or "--verbose" not in argv:
+    sys.stderr.write("fake claude: expected -p --output-format stream-json --verbose\n")
+    sys.exit(2)
+if "--" not in argv:
+    sys.stderr.write("fake claude: expected -- before the prompt\n")
+    sys.exit(2)
+prompt = argv[argv.index("--") + 1]
+resume = argv[argv.index("--resume") + 1] if "--resume" in argv else None
+sid = resume or "fake-session-0001"
+mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+emit({"type": "system", "subtype": "init", "session_id": sid, "model": "fake-model",
+      "cwd": os.getcwd(), "permissionMode": argv[argv.index("--permission-mode") + 1]})
+
+if mode == "sleep":
+    time.sleep(300)
+if mode == "nonzero_plain":
+    sys.stderr.write("fake claude: auth expired\n")
+    sys.exit(4)
+
+emit({"type": "assistant", "session_id": sid, "message": {"role": "assistant", "content": [
+    {"type": "thinking", "thinking": "considering the prompt"}]}})
+emit({"type": "assistant", "session_id": sid, "message": {"role": "assistant", "content": [
+    {"type": "tool_use", "id": "tu_1", "name": "Bash", "input": {"command": "true"}}]}})
+emit({"type": "user", "session_id": sid, "message": {"role": "user", "content": [
+    {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"}]}})
+
+if mode in ("error", "error_exit0"):
+    emit({"type": "result", "subtype": "error_during_execution", "is_error": True,
+          "result": "model overloaded", "session_id": sid})
+    sys.exit(0 if mode == "error_exit0" else 1)
+
+answer = f"pong: {prompt}" + (f" (resumed {resume})" if resume else "")
+emit({"type": "assistant", "session_id": sid, "message": {"role": "assistant", "content": [
+    {"type": "text", "text": answer}]}})
+emit({"type": "result", "subtype": "success", "is_error": False, "result": answer,
+      "session_id": sid, "num_turns": 1, "total_cost_usd": 0.0})

@@ -12,6 +12,7 @@ CLI parse strategies:
   - plain_ids:       one model id per stdout line  (kilo models, opencode models)
   - id_dash_label:   "id - Human Label" lines     (cursor agent models)
   - plain_lines:     any non-empty line is both id and label
+  - codex_models_json: `codex debug models` JSON catalog (skips hidden)
   - static:          models supplied in config/registry (no CLI)
 
 API:
@@ -87,15 +88,24 @@ BUILTIN_SOURCES: dict[str, dict[str, Any]] = {
         "reason": "grok CLI has no stable models subcommand yet; pass model via Other…",
         "label": "Grok",
     },
+    # `claude` has no model-list command; --model takes these aliases (latest
+    # of each family) or a full model name via Other….
     "claude": {
-        "kind": "none",
-        "reason": "claude worker not wired; use Other… when a backend lands",
+        "kind": "static",
+        "models": [
+            {"value": "opus", "label": "Opus (latest)"},
+            {"value": "sonnet", "label": "Sonnet (latest)"},
+            {"value": "haiku", "label": "Haiku (latest)"},
+            {"value": "fable", "label": "Fable (latest)"},
+        ],
+        "reason": "aliases accepted by `claude --model`; full model names via Other…",
         "label": "Claude Code",
     },
     "codex": {
-        "kind": "none",
-        "reason": "codex worker not wired with a listable models command yet",
-        "label": "Codex",
+        "kind": "cli",
+        "cmd": ["codex", "debug", "models"],
+        "parser": "codex_models_json",
+        "label": "Codex CLI",
     },
     "echo": {
         "kind": "static",
@@ -195,10 +205,33 @@ def _parse_plain_lines(stdout: str) -> list[ModelInfo]:
     return _parse_plain_ids(stdout)
 
 
+def _parse_codex_models_json(stdout: str) -> list[ModelInfo]:
+    """`codex debug models` → {"models":[{slug, display_name, visibility}]}.
+
+    Hidden entries (visibility == "hide") are internal and skipped."""
+    try:
+        data = json.loads(stdout)
+    except ValueError:
+        return []
+    items = data.get("models") if isinstance(data, dict) else data
+    out: list[ModelInfo] = []
+    seen: set[str] = set()
+    for m in items if isinstance(items, list) else []:
+        if not isinstance(m, dict) or m.get("visibility") == "hide":
+            continue
+        slug = str(m.get("slug") or m.get("id") or "").strip()
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        out.append(ModelInfo(value=slug, label=str(m.get("display_name") or slug)))
+    return out
+
+
 _PARSERS = {
     "plain_ids": _parse_plain_ids,
     "id_dash_label": _parse_id_dash_label,
     "plain_lines": _parse_plain_lines,
+    "codex_models_json": _parse_codex_models_json,
 }
 
 
