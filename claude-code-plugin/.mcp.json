@@ -2,11 +2,7 @@
   "mcpServers": {
     "nats-hub": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/server/nats_hub_mcp.py"],
-      "env": {
-        "NATS_URL": "nats://127.0.0.1:4222",
-        "NATS_HUB_IDENTITY": "claude-code-agent"
-      }
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/nats_hub_mcp.py"]
     }
   }
 }

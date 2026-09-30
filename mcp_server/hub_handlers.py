@@ -151,7 +151,10 @@ async def _wait_for_message(args: dict) -> dict:
     h = hub()
     await h.ensure_started()
     timeout = float(args["timeout"])
-    since = int(args.get("since_seq") or 0)
+    # Default: only messages arriving after this call (a "wait" shouldn't
+    # return stale inbox backlog). Pass since_seq explicitly to replay.
+    since_arg = args.get("since_seq")
+    since = int(since_arg) if since_arg is not None else h.inbox.buf.last_seq
     sender = args.get("from")
     it = await h.inbox.buf.wait_for(
         lambda env: sender is None or env.get("meta", {}).get("from") == sender,
@@ -247,7 +250,7 @@ async def _start_session(args: dict) -> dict:
     env = conn.envelope(session_channel, payload, to=worker)
     await conn.publish(session_channel, env)
 
-    await conn.api_request("session.create", {
+    resp = await conn.api_request("session.create", {
         "session_id": session_id,
         "orchestrator": conn.identity(),
         "worker": worker,
@@ -259,6 +262,10 @@ async def _start_session(args: dict) -> dict:
         "updated_at": env["meta"]["timestamp"],
         "metadata": {"prompt": prompt, "timeout": args.get("timeout", 30)},
     })
+    if not resp.get("ok"):
+        return {"ok": False, "error":
+                f"session_start sent to {worker}, but session.create failed: "
+                f"{resp.get('error')}"}
 
     return {"ok": True, "data": {"session_id": session_id, "channel": session_channel}}
 

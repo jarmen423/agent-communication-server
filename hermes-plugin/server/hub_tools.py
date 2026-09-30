@@ -144,9 +144,10 @@ TOOLS = [
     Tool(
         name="wait_for_message",
         description=(
-            "Block until a DM arrives in this orchestrator's inbox (optionally "
-            "from a specific sender), or timeout. Checks already-buffered "
-            "messages first (seq > since_seq), then waits for a new arrival."
+            "Block until a NEW DM arrives in this orchestrator's inbox "
+            "(optionally from a specific sender), or timeout. Only messages "
+            "arriving after this call match; pass since_seq to also replay "
+            "already-buffered ones (seq > since_seq)."
         ),
         inputSchema={
             "type": "object",
@@ -159,8 +160,10 @@ TOOLS = [
                 },
                 "since_seq": {
                     "type": "integer",
-                    "description": "Skip inbox items at or below this seq",
-                    "default": 0,
+                    "description": (
+                        "Skip inbox items at or below this seq. Default: "
+                        "current tail — only new arrivals match."
+                    ),
                 },
             },
         },

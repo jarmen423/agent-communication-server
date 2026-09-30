@@ -19,9 +19,41 @@ import json
 import os
 import sys
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 # Sibling modules live beside this file (canonical dir or a plugin's server/).
 # Insert the dir so imports also work when this file is exec_module'd (Hermes).
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _HERE)
+
+
+# Manifest each host puts at the plugin root → default identity. Detected by
+# marker file, not directory name: marketplace installs live at
+# ``~/.claude/plugins/cache/<marketplace>/<name>/<version>/``, where the
+# parent of ``server/`` is a version string, not ``claude-code-plugin``.
+_PLUGIN_MARKERS = (
+    (os.path.join(".claude-plugin", "plugin.json"), "claude-code-agent"),
+    (os.path.join(".codex-plugin", "plugin.json"), "codex-agent"),
+    ("plugin.yaml", "hermes-agent"),
+)
+
+
+def _default_identity(server_dir: str | None = None) -> str | None:
+    """Plugin installs default to a per-host identity (``claude-code-agent``,
+    ``codex-agent``, ``hermes-agent``) so ``.mcp.json`` doesn't hardcode it.
+    The canonical ``mcp_server/`` copy has no default — ``NATS_HUB_IDENTITY``
+    must be set. Env always wins."""
+    root = os.path.dirname(server_dir or _HERE)
+    for marker, ident in _PLUGIN_MARKERS:
+        if os.path.exists(os.path.join(root, marker)):
+            return ident
+    parent = os.path.basename(root)  # repo checkout fallback: <host>-plugin/
+    if parent.endswith("-plugin"):
+        return parent[: -len("-plugin")] + "-agent"
+    return None
+
+
+if (ident := _default_identity()) is not None:
+    os.environ.setdefault("NATS_HUB_IDENTITY", ident)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
