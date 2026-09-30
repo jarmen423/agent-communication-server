@@ -25,7 +25,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from worker_backends.proc import StderrTail, drain_stream, kill_group, read_lines
+from worker_backends.proc import (
+    StderrTail,
+    drain_stream,
+    kill_group,
+    read_lines,
+    track_group,
+    untrack_group,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +144,7 @@ class AcpStdioBackend:
             cwd=self.cwd,
             start_new_session=True,
         )
+        track_group(self._proc.pid)
         self.generation += 1
         self._alive = True
         self._tasks = [
@@ -173,6 +181,7 @@ class AcpStdioBackend:
             except Exception:
                 pass
             await kill_group(proc)
+            untrack_group(proc.pid)
 
     # ── turns ──────────────────────────────────────────────────────────
 

@@ -10,6 +10,7 @@ import asyncio
 import sys
 
 from worker_backends.opencode_acp import OpencodeAcpBackend
+from worker_backends.proc import install_worker_signal_handlers
 from worker_runtime import WorkerConfig, run_worker
 
 
@@ -52,6 +53,7 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
+    install_worker_signal_handlers()  # SIGTERM also stops the CLI's process group
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:

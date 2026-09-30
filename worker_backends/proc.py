@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import collections
 import os
 import signal
@@ -21,6 +22,47 @@ LineHandler = Callable[[str], Awaitable[None]]
 
 DEFAULT_STDERR_TAIL_BYTES = 16 * 1024
 KILL_GRACE_SEC = 3.0
+
+# Process groups this process has spawned and not yet reaped. Children live in
+# their own session, so a supervisor's killpg() of the *worker's* group does
+# not reach them: the signal handler / atexit hook below forwards it.
+_LIVE_GROUPS: set[int] = set()
+
+
+def track_group(pid: int) -> None:
+    _LIVE_GROUPS.add(pid)
+
+
+def untrack_group(pid: int) -> None:
+    _LIVE_GROUPS.discard(pid)
+
+
+def kill_tracked_groups(sig: int = signal.SIGKILL) -> None:
+    for pgid in list(_LIVE_GROUPS):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            _LIVE_GROUPS.discard(pgid)
+
+
+atexit.register(kill_tracked_groups)
+
+
+def install_worker_signal_handlers() -> None:
+    """Make SIGTERM/SIGHUP tear down spawned CLI process groups.
+
+    The handler forwards SIGTERM to every tracked group, then raises
+    KeyboardInterrupt so ``asyncio.run`` cancels in-flight turns (whose
+    cleanup SIGKILLs and reaps the groups); ``atexit`` SIGKILLs leftovers.
+    Call once from a worker's ``main()`` before ``asyncio.run``.
+    """
+
+    def _handler(signum: int, _frame: object) -> None:
+        kill_tracked_groups(signal.SIGTERM)
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _handler)
 
 
 class StderrTail:
@@ -144,6 +186,7 @@ async def run_streaming(
         env=env,
         start_new_session=True,
     )
+    track_group(proc.pid)
     lines: list[str] = []
     tail = StderrTail(stderr_tail_bytes)
 
@@ -164,4 +207,7 @@ async def run_streaming(
     except BaseException:
         await asyncio.shield(kill_group(proc))
         raise
+    finally:
+        if proc.returncode is not None:
+            untrack_group(proc.pid)
     return ProcResult(proc.returncode or 0, "\n".join(lines), tail.text())

@@ -6,6 +6,7 @@ import sys
 
 from worker_backends.headless_cli import HeadlessCliBackend
 from worker_backends.presets import hermes_spec
+from worker_backends.proc import install_worker_signal_handlers
 from worker_runtime import WorkerConfig, run_worker
 
 if __name__ == "__main__":
@@ -42,6 +43,7 @@ if __name__ == "__main__":
             )
         )
 
+    install_worker_signal_handlers()  # SIGTERM also stops the CLI's process group
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:

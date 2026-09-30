@@ -26,6 +26,7 @@ try:
         ClaudeCodeBackend,
         ClaudeCodeConfig,
     )
+    from worker_backends.proc import install_worker_signal_handlers
     from worker_runtime import WorkerConfig, run_worker
 except ModuleNotFoundError as e:  # pragma: no cover - env guidance only
     if e.name and e.name.startswith("nats"):
@@ -81,6 +82,7 @@ def main() -> None:
         broadcast_channel=args.channel,
         extra_heartbeat={"provider": "claude", "model": args.model},
     )
+    install_worker_signal_handlers()  # SIGTERM also stops the CLI's process group
     try:
         asyncio.run(run_worker(cfg))
     except KeyboardInterrupt:

@@ -109,3 +109,39 @@ def test_cancellation_kills_child(tmp_path):
 
     grandchild = asyncio.run(run())
     assert wait_dead([grandchild], timeout=5) == []
+
+
+_HOST = """
+import asyncio, sys
+sys.path.insert(0, {repo!r})
+from worker_backends.headless_cli import HeadlessCliBackend, HeadlessCliSpec
+from worker_backends.proc import install_worker_signal_handlers
+install_worker_signal_handlers()
+b = HeadlessCliBackend(HeadlessCliSpec(binary=sys.executable, prompt_flag=None,
+                                       base_argv=[{script!r}, "sleep", {pidfile!r}]))
+try:
+    asyncio.run(b.run("x", {{}}))
+except KeyboardInterrupt:
+    sys.exit(0)
+"""
+
+
+def test_sigterm_to_worker_stops_cli_group(tmp_path):
+    """The CLI runs in its own session, so a supervisor's killpg() of the
+    worker's group misses it; the worker's SIGTERM handler must forward it."""
+    import signal
+    import subprocess
+    from pathlib import Path
+
+    pidfile = tmp_path / "grandchild.pid"
+    repo = str(Path(__file__).resolve().parents[2])
+    host = subprocess.Popen([sys.executable, "-c", _HOST.format(
+        repo=repo, script=str(MISBEHAVE), pidfile=str(pidfile))])
+    try:
+        grandchild = int(wait_for_file(pidfile, timeout=10))
+        host.send_signal(signal.SIGTERM)
+        assert host.wait(timeout=10) == 0
+    finally:
+        if host.poll() is None:
+            host.kill()
+    assert wait_dead([grandchild], timeout=5) == [], "CLI grandchild outlived its worker"
