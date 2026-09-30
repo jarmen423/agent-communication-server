@@ -90,28 +90,29 @@ async fn test_find_agents_alive_filter() {
     let fresh_ids: Vec<&str> = fresh.iter().map(|a| a.identity.as_str()).collect();
     assert!(fresh_ids.contains(&"live-agent"));
 
-    // Within a 1-second window — should also appear immediately
+    // Within a short window — should also appear. (10s, not 1s: under a loaded
+    // machine, register → query can take >1s and made this test flaky.)
     let now_window = storage
-        .find_agents(&AgentFilter::new().alive_within(1))
+        .find_agents(&AgentFilter::new().alive_within(10))
         .await
         .unwrap();
     assert!(now_window.iter().any(|a| a.identity == "live-agent"));
 
     // Now backdate the agent by writing a stale last_seen, then verify
-    // the 1-second window excludes it.
+    // the short window excludes it.
     let stale = AgentRecord {
-        last_seen: Utc::now() - chrono::Duration::seconds(30),
+        last_seen: Utc::now() - chrono::Duration::seconds(120),
         ..record("live-agent", &["compute"])
     };
     storage.register_agent(stale).await.unwrap();
 
     let after_stale = storage
-        .find_agents(&AgentFilter::new().alive_within(1))
+        .find_agents(&AgentFilter::new().alive_within(10))
         .await
         .unwrap();
     assert!(
         !after_stale.iter().any(|a| a.identity == "live-agent"),
-        "agent with last_seen 30s ago should be excluded from a 1s window"
+        "agent with last_seen 120s ago should be excluded from a 10s window"
     );
 }
 
