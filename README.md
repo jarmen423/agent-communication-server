@@ -1,350 +1,156 @@
-# Agent Communication Server
+# nats-hub
 
-A NATS-based communication layer with control plane routing for agent-to-agent and human-to-agent messaging. Built in Rust with `async-nats` and optional SurrealDB persistence.
+**A message hub for your coding agents: Claude Code, Codex, Cursor, Hermes and
+others, on one machine or many.** An orchestrator (you in a terminal, or an
+agent through the MCP plugin) delegates a task to a worker anywhere on the hub
+and gets a structured result back. You can watch the whole conversation live
+and query it later.
 
-## Why?
+nats-hub is one `nats-server`, one Rust router (`hub-server`), and thin
+clients: CLIs, Python workers, an MCP server, a terminal dashboard and a
+browser visualizer. Workers on other machines dial in over `wss://` with a
+token or credentials. They don't run a server of their own.
 
-When building agent systems, you need a way for agents to talk to each other. nats-hub gives you:
+- **Delegate and get an answer.** `hub-delegate --to codex-1 --prompt "…"`
+  opens an isolated task channel, streams progress events, and returns
+  `status: done | error` under one reply contract.
+- **Real agent workers.** Claude Code, Codex, Cursor, Hermes, Grok, Kilo and
+  OpenCode backends, plus `hub-worker --execute <any CLI>`.
+- **Multi-turn and parallel.** Stateful sessions (`hub-session`) and waves of
+  parallel tasks with dependencies and merge gates (`hub-wave`).
+- **Orchestrate from an agent.** A Claude Code / Codex / Hermes plugin exposes
+  the hub as MCP tools: `list_agents`, `delegate_async`, `wait_for_task`,
+  sessions, waves and history.
+- **Observable.** Every envelope is mirrored to an embedded SurrealDB. You get
+  `hub-history`, `hub-thread`, `hub-stats`, Prometheus `/metrics`, the
+  `hub-tui` dashboard and a browser visualizer.
+- **Embeddable.** It's a Rust crate (`nats_hub`). With `no-storage` it's pure
+  transport, with no database.
 
-- **Instant messaging bus** — broadcast, DM, and task channels out of the box
-- **Plug-and-play workers** — any CLI, LLM API, or script can be a worker
-- **Observable** — every message is persisted to SurrealDB for history, threading, and analytics
-- **Portable** — embed as a crate dependency in any Rust project
-- **Async-native** — built on tokio + async-nats, zero blocking calls
+```
+ orchestrator ──hub.send.<ch>──▶ hub-server (router) ──channel.inbox.<worker>──▶ worker
+ (CLI / MCP)  ◀──channel.task.<id>── result + progress events ◀────────────────┘
+                                   │
+                                   └─ async mirror ─▶ SurrealDB (history, registry, sessions, waves)
+```
 
-## Quick Start
+## Quick start (5 minutes)
 
-> Full setup for any machine (prereqs, troubleshooting, how tests run):
-> **[`CONTRIBUTING.md`](CONTRIBUTING.md)**. Current sprint: **[`refocus.md`](refocus.md)**.
+### A. Run a hub locally, from source
+
+Needs Rust, a C/C++ toolchain with libclang, and Python ≥ 3.10.
+`make doctor` tells you what's missing. The **first** build compiles RocksDB and
+takes about 10 minutes; after that, everything below takes seconds.
 
 ```bash
-make setup    # pinned nats-server → .tools/bin, Python venv → .venv, then a toolchain check
-make build    # first build compiles RocksDB (~10 min)
-make test     # Rust + Python tests against a throwaway nats-server + hub-server
-make up       # local hub: nats-server + hub-server + visualizer (http://127.0.0.1:9191/) + echo workers
+git clone https://github.com/jarmen423/agent-communication-server.git nats-hub
+cd nats-hub
+make setup   # pinned nats-server → .tools/bin, Python venv → .venv
+make up      # nats-server + hub-server + visualizer (http://127.0.0.1:9191/) + echo workers
 ```
 
-In another terminal:
+In a second terminal:
 
 ```bash
-./target/debug/hub-delegate --to echo-1 --prompt "hello" --verbose   # → echo: olleh
-./target/debug/hub-history --tail                                      # live message history
-./target/debug/hub-agents                                              # who's registered
+./target/debug/hub-agents                                               # who's online
+./target/debug/hub-delegate --to echo-1 --prompt "hello" --verbose      # → "echo: olleh"
+./target/debug/hub-history --tail                                       # live history
 ```
 
-System prerequisites: Rust, a C/C++ toolchain, and libclang (for the embedded
-RocksDB build). `make doctor` tells you what's missing and how to install it.
-
-## Communication Patterns
-
-### Broadcast (Like an X feed)
-
-All subscribers on a channel see every message.
-
-```rust
-client.send_message("agents.broadcast", json!({"announcement": "new plan"})).await?;
-```
+Swap the echo worker for a real agent. The agent's CLI must be installed and
+logged in:
 
 ```bash
-hub-publish --channel agents.broadcast --from hermes --message "hello everyone"
+.venv/bin/python claude_worker.py --identity claude-1     # Claude Code
+.venv/bin/python codex_worker.py  --identity codex-1      # Codex
+./target/debug/hub-delegate --to claude-1 --prompt "Summarize README.md" --verbose
 ```
 
-### Direct Message (DM)
-
-Private message to a specific agent via `meta.to` routing.
-
-```rust
-client.send_to("worker-1", "tasks", json!({"prompt": "do work"})).await?;
-```
+### B. Join an existing hub from another machine (no Rust needed)
 
 ```bash
-hub-publish --to worker-1 --channel tasks --from hermes --json '{"prompt":"do work"}'
+curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh \
+  | bash -s -- wss://hub.example.com:8080
+export NATS_TOKEN='…'                     # from the hub operator
+hub-delegate-remote --to claude-1 --from me --prompt "hi" --verbose
 ```
 
-### Reply (with correlation)
+The installer downloads the release binaries for your platform over HTTPS and
+verifies them against the release's `SHA256SUMS`. When no release asset exists
+for your platform, it builds from source instead. Remote *workers* use
+`packaging/remote/install.sh`, a Python-only bundle. See
+[`docs/JOIN_HUB.md`](docs/JOIN_HUB.md) and [`docs/REMOTE_INSTALL.md`](docs/REMOTE_INSTALL.md).
 
-Reply to a specific message, automatically addressed to the original sender.
-
-```rust
-client.send_reply(&original_envelope, json!({"result": "work done"})).await?;
-```
-
-### Task Channel (isolated conversation)
-
-Each task gets a unique `task.<uuid>` channel for bidirectional conversation.
+### C. Orchestrate from Claude Code
 
 ```bash
-hub-delegate --to worker-1 --prompt "implement feature X"
+claude plugin marketplace add jarmen423/agent-communication-server   # then install "nats-hub"
+# or, from a checkout: claude --plugin-dir ./claude-code-plugin
 ```
 
-The flow:
-1. `hub-delegate` creates `task.<uuid>`, subscribes to it
-2. Sends task to worker's inbox (DM via `meta.to`)
-3. Worker processes, publishes result on the task channel (broadcast)
-4. `hub-delegate` receives result, prints it
+The plugin's MCP server reads `NATS_URL` (default `nats://127.0.0.1:4222`),
+`NATS_HUB_IDENTITY` and the usual `NATS_*` auth env vars.
 
-Multiple parallel tasks run on separate channels — no cross-talk.
+## Release binaries
 
-### Stateful Session (multi-turn)
+Each `v*` tag publishes `nats-hub-<version>-<target>.tar.gz` for
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` (glibc ≥ 2.35) and
+`aarch64-apple-darwin`. Every tarball holds all `hub-*` CLIs, including
+`hub-server` and `hub-tui`. Alongside them are the Python remote-worker bundle
+and `SHA256SUMS`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
-Persistent conversation between orchestrator and worker on `channel.session.<uuid>`.
-
-```bash
-hub-session create --worker cursor-worker-1 --from josh --prompt "Refactor foo.rs"
-hub-session send <session-id> --from josh --message "Also add tests"
-hub-session close <session-id> --from josh
-hub-session list --status active
-```
-
-Workers stay alive via `worker_runtime.py` — they handle `session_start`, `session_send`, and `session_close` on their inbox.
-
-### Progress Events (real-time observation)
-
-Workers publish typed events (`started`, `progress`, `completed`, `error`, etc.) as `MessageKind::Event`.
-
-```bash
-hub-watch --session <session-id>     # watch one session
-hub-watch --wave <wave-id>           # watch a wave (tasks + wave channel)
-hub-watch --agent hermes-worker-1    # watch all events from an agent
-hub-watch --all                      # watch everything
-```
-
-### Wave Orchestration (parallel tasks)
-
-Run parallel tasks with disjoint write scopes, dependencies, and merge gates.
-
-```bash
-# tasks.json: [{ task_id, worker, goal, write_scope, dependencies, verify_cmd }]
-hub-wave create --goal "Parallel refactor" --from orch --tasks tasks.json
-hub-wave spawn <wave-id> --from orch
-hub-wave status <wave-id>
-hub-watch --wave <wave-id>
-hub-wave close <wave-id> --from orch
-```
-
-### Conversation Thread
-
-View reply chains and unanswered messages from SurrealDB.
-
-```bash
-hub-thread show <root-message-id>
-hub-thread show <any-message-id> --resolve   # walk reply_to to find root
-hub-thread pending --agent worker-1
-```
-
-## CLI Tools
-
-| Command | Description |
-|---|---|
-| `hub-server` | Run the control plane router (daemon) |
-| `hub-publish` | Send a message on a channel |
-| `hub-observe` | Watch messages on channels (read-only, live) |
-| `hub-interact` | Interactive REPL for human messaging |
-| `hub-register` | Register an agent with capabilities |
-| `hub-agents` | List/search registered agents from DB |
-| `hub-worker` | Universal worker: subscribe, execute, reply |
-| `hub-history` | Query message history from SurrealDB |
-| `hub-delegate` | Delegate a task to a worker (one command) |
-| `hub-session` | Stateful multi-turn sessions |
-| `hub-watch` | Watch structured progress events in real time |
-| `hub-wave` | Parallel wave orchestration with merge gates |
-| `hub-thread` | View conversation threads and pending messages |
-| `hub-tui` | ratatui terminal dashboard — agents/sessions/waves + live feed (feature `tui`) |
-
-## Embedding in Your Project
-
-Add to your `Cargo.toml`:
+## Use it as a crate
 
 ```toml
 [dependencies]
-nats-hub = { path = "../nats", default-features = true }
+nats-hub = { git = "https://github.com/jarmen423/agent-communication-server" }
+# transport only, no SurrealDB/RocksDB:
+# nats-hub = { git = "…", default-features = false, features = ["no-storage"] }
 ```
-
-For pure transport without SurrealDB (lighter dependencies):
-
-```toml
-[dependencies]
-nats-hub = { path = "../nats", default-features = false, features = ["no-storage"] }
-```
-
-### Usage
 
 ```rust
-use nats_hub::{HubClient, MessageKind, Envelope};
+use nats_hub::HubClient;
 use serde_json::json;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Connect with an identity — auto-stamped on every message
-    let client = HubClient::connect("nats://127.0.0.1:4222", "my-app").await?;
-
-    // Register on the bus
-    client.register(vec!["compute".into()]).await?;
-
-    // Send a DM to a worker
-    let task_id = client
-        .send_to("worker-1", "tasks", json!({"prompt": "process data"}))
-        .await?;
-
-    // Subscribe to your inbox for replies
-    let mut inbox = client.subscribe_inbox().await?;
-    while let Some(env) = inbox.recv().await {
-        println!("Reply from {}: {}", env.meta.from, env.payload);
-        break;
-    }
-
-    client.drain().await;
-    Ok(())
-}
+let client = HubClient::connect("nats://127.0.0.1:4222", "my-app").await?; // auth from NATS_* env
+client.send_to("worker-1", "tasks", json!({"prompt": "process data"})).await?;
+let mut inbox = client.subscribe_inbox().await?;
 ```
 
-### With Persistence
-
-```rust
-use nats_hub::{SurrealStorage, Storage, HistoryQuery};
-use std::sync::Arc;
-
-let storage = SurrealStorage::connect("my_app.db").await?;
-storage.migrate().await?;
-
-// Query message history
-let history = storage.query_history(
-    &HistoryQuery::new().channel("tasks").limit(50)
-).await?;
-
-for record in history {
-    println!("{} {} {}", record.timestamp, record.from_identity, record.kind);
-}
-```
-
-## Architecture
-
-```
-Agent ──hub.send.<channel>──▶ Router ──channel.<name>──▶ Subscribers
-                                  │
-                   meta.to set?   │
-                   ├── yes → channel.inbox.<to>   (private DM)
-                   └── no  → channel.<channel>     (broadcast)
-
-Router ──async mirror──▶ SurrealDB (message history, agent registry)
-```
-
-### Hot Path vs Cold Path
-
-- **Hot path** (real-time): Agent → NATS → Router → Subscribers. Sub-millisecond. No DB I/O.
-- **Async mirror** (write to DB): Router → `tokio::spawn` → `Storage::store_envelope()`. Fire-and-forget.
-- **Cold path** (query from DB): `query_history()`, `find_agents()`, `get_thread()`. ~1ms (local SurrealDB).
-
-### CQRS
-
-NATS sees every message through the router. The DB is populated by an async mirror off the router. The DB's write performance barely matters — what matters is query expressiveness (indexed filtering, graph traversal, aggregations).
-
-## Feature Flags
-
-| Flag | Description |
-|---|---|
-| `default` (includes `storage-surreal`) | SurrealDB persistence with embedded RocksDB |
-| `storage-surreal` | SurrealDB backend (graph-native, document-native, vector-ready) |
-| `no-storage` | Pure NATS transport, no persistence layer (lighter deps) |
-
-## Storage Trait
-
-The `Storage` trait abstracts over database backends. SurrealDB is the default implementation.
-
-```rust
-#[async_trait]
-pub trait Storage: Send + Sync {
-    // Agent registry
-    async fn register_agent(&self, agent: AgentRecord) -> Result<()>;
-    async fn find_agents(&self, filter: &AgentFilter) -> Result<Vec<AgentRecord>>;
-    async fn get_agent(&self, identity: &str) -> Result<Option<AgentRecord>>;
-
-    // Message history
-    async fn store_envelope(&self, env: &Envelope) -> Result<()>;
-    async fn query_history(&self, q: &HistoryQuery) -> Result<Vec<EnvelopeRecord>>;
-
-    // Conversation threading
-    async fn link_reply(&self, reply_id: &str, parent_id: &str) -> Result<()>;
-    async fn get_thread(&self, root_id: &str) -> Result<Vec<EnvelopeRecord>>;
-    async fn list_pending(&self, identity: &str) -> Result<Vec<EnvelopeRecord>>;
-
-    // Sessions + waves (Phase 3)
-    async fn create_session(&self, session: SessionRecord) -> Result<()>;
-    async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionRecord>>;
-    async fn create_wave(&self, wave: WaveRecord) -> Result<()>;
-    async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>>;
-
-    // Lifecycle
-    async fn migrate(&self) -> Result<()>;
-    async fn ping(&self) -> Result<()>;
-}
-```
-
-Future backends: PostgreSQL+pgvector, libSQL. Same trait, different impl.
-
-## Universal Workers
-
-The `hub-worker` binary and `worker.js` are universal executors — they subscribe to a channel, receive task envelopes, execute a command, and publish results back.
-
-```bash
-# Rust worker (shells out to any CLI)
-hub-worker --identity worker-1 --execute "codex" --nats-url nats://127.0.0.1:4222
-
-# Node.js worker (Cline SDK + LLM)
-node worker.js --identity worker-1 --model "cline-pass/minimax-m3"
-```
-
-Swap `--execute` or `--model` to change what the worker does. The bus doesn't care.
-
-## Testing
-
-```bash
-make test        # Rust (cargo test) + Python (pytest), each against a throwaway nats-server + hub-server
-make test-rust   # just Rust
-make test-py     # just Python
-```
-
-About 95 Rust tests (storage, agent registry, inbox routing, task channels, sessions,
-events, waves, analytics, metrics, connect options, threads, TUI state) plus Python smoke
-tests, including a live echo-worker round trip. See [`CONTRIBUTING.md`](CONTRIBUTING.md#3-how-tests-work).
-
-## License
-
-BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apache 2.0. (A `LICENSE` file is still to be added; the plugin manifests currently say MIT. Tracked in `refocus.md` §7.)
+Feature flags, the `Storage` trait and embedding notes are in
+[`docs/PORTABILITY.md`](docs/PORTABILITY.md).
 
 ## Documentation
 
-- [`refocus.md`](refocus.md) — **current sprint, status board, reply contract**
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup on any machine
-- [`docs/PHASE3_PLAN.md`](docs/PHASE3_PLAN.md) — Phase 3 plan (sessions, events, waves) — **complete**
-- [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) — Full product vision and architecture
-- [`docs/DATABASE_PLAN.md`](docs/DATABASE_PLAN.md) — Database and persistence design
-- [`docs/WORKER_BACKENDS.md`](docs/WORKER_BACKENDS.md) — Python worker backend types
-- [`AGENTS.md`](AGENTS.md) — Guidance for AI agents working on this codebase
-## Distributed hub (one VPS, many machines)
+| Start here | |
+|---|---|
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup on any machine, how tests run, conventions |
+| [`AGENTS.md`](AGENTS.md) | Architecture, code layout, subjects, CLI reference (for humans and AI agents) |
+| [`refocus-iteration-2.md`](refocus-iteration-2.md) | Current iteration: definition of done per area, status board |
 
-Install **nats-server + hub-server once** on a host you control. Laptops and
-remote workers **dial in as clients** — they do not run their own NATS or DB.
+| Running a hub | |
+|---|---|
+| [`docs/OPERATOR_HUB.md`](docs/OPERATOR_HUB.md) | Stand up the central hub (systemd, firewall, TLS) |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Auth model: tokens, TLS, per-agent credentials |
+| [`docs/JOIN_HUB.md`](docs/JOIN_HUB.md) · [`docs/QUICK_START_REMOTE.md`](docs/QUICK_START_REMOTE.md) | Join a hub from a laptop |
+| [`docs/REMOTE_INSTALL.md`](docs/REMOTE_INSTALL.md) · [`docs/REMOTE_AGENTS.md`](docs/REMOTE_AGENTS.md) | Remote workers: thin install and the WebSocket adapter |
+| [`deploy/systemd/`](deploy/systemd/) | Unit files |
 
-| Doc | Audience |
-|-----|----------|
-| [`docs/SECURITY.md`](docs/SECURITY.md) | Plain-language auth model (token, TLS, allowlists) |
-| [`docs/OPERATOR_HUB.md`](docs/OPERATOR_HUB.md) | Stand up the hub (systemd, firewall, TLS) |
-| [`docs/JOIN_HUB.md`](docs/JOIN_HUB.md) | Join an existing hub from a laptop |
-| [`docs/REMOTE_INSTALL.md`](docs/REMOTE_INSTALL.md) | Thin remote package (`packaging/remote/`) |
-| [`docs/REMOTE_AGENTS.md`](docs/REMOTE_AGENTS.md) | WebSocket adapter + auth flags |
+| Using it | |
+|---|---|
+| [`docs/WORKER_BACKENDS.md`](docs/WORKER_BACKENDS.md) | Worker types and backends (Claude Code, Codex, ACP, headless CLIs) |
+| [`docs/BRIDGES.md`](docs/BRIDGES.md) | Human bridges (Telegram, Discord) |
+| [`docs/VISUALIZER.md`](docs/VISUALIZER.md) | Browser visualizer: startup, tokens, troubleshooting |
+| [`docs/PORTABILITY.md`](docs/PORTABILITY.md) | Embedding the crate, feature flags |
+| [`docs/RELEASING.md`](docs/RELEASING.md) | Cutting a release, dry runs, install-from-release |
 
-```bash
-# Prove token + WS remote adapter (loopback)
-bash scripts/dogfood_token_auth.sh
+| Background | |
+|---|---|
+| [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) · [`docs/DATABASE_PLAN.md`](docs/DATABASE_PLAN.md) | Vision and persistence design |
+| [`docs/archive/`](docs/archive/) | Finished phase plans and handoffs (historical) |
 
-# Prove wss:// + CA + token on hub-server + adapter
-bash scripts/dogfood_wss_tls.sh
+## License
 
-# Thin install on a remote machine
-bash packaging/remote/install.sh ~/nats-hub-remote
-```
-
-Auth for all Rust clients and hub-server: set `NATS_TOKEN` (or user/password /
-credentials file). Python adapters accept the same via CLI or env — see
-`nats_connect.py` / `remote_agent_adapter.py --help`.
+<!-- license:start -->
+BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apache 2.0. (A `LICENSE` file is still to be added; the plugin manifests currently say MIT. Tracked in `refocus-iteration-2.md` §7; see [`LICENSE.md`](LICENSE.md).)
+<!-- license:end -->
