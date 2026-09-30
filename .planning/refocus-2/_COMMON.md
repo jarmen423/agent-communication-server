@@ -1,0 +1,23 @@
+# Common rules for all iteration-2 tasks
+
+- **Read first:**
+  - `refocus-iteration-2.md`: §2 is your acceptance criteria, §4 the contracts, §6 your write scope.
+  - `refocus.md` §6, the reply contract.
+  - `CONTRIBUTING.md` and `AGENTS.md`.
+- **Setup:** `make setup`. Build and test only through the `make` targets or `scripts/dev/*`. They set the kache compile cache and the bindgen fix automatically. Each checkout or worktree uses **its own `./target`**. Never share a `CARGO_TARGET_DIR` between checkouts: artifacts collide and cargo tests the wrong code.
+- **NATS:** `scripts/dev/with_stack.sh <cmd>` for anything that needs NATS plus a router. Never use port 4222 for tests.
+- **Shell safety:** never `pkill -f`/`pgrep -f` a pattern that also appears in your own command line; kill by PID.
+- **Git:**
+  - Work on your branch (named in your brief) and commit in logical steps.
+  - End each commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Devin sessions use their own trailer.
+  - **Push your branch** so CI runs on it. **Never push to `main` and never open a PR.** The orchestrator verifies and merges locally.
+- **Hands off:** `refocus-iteration-2.md`, `refocus.md`, `Cargo.toml`, `Makefile`. Propose changes to them in your report instead.
+- **Definition of done:**
+  - Your acceptance criteria are met.
+  - `cargo fmt --all -- --check`, `make lint`, `make test` are green locally, and CI is green on your pushed branch.
+- **Report:**
+  - What changed per criterion, with file:line references.
+  - The REAL output of the gates and of any live checks. Never invent output; if something couldn't run, say why.
+  - Deviations from the brief.
+  - Proposals for shared files.
+  - Branch name and final SHA.
