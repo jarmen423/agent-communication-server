@@ -60,7 +60,10 @@ async fn test_send_reply_correlation() {
     let agent_a = HubClient::connect(&url, "agent-a").await.unwrap();
     let agent_b = HubClient::connect(&url, "agent-b").await.unwrap();
 
+    // Subscribe BOTH inboxes before anything is sent. Core NATS has no
+    // replay, so subscribing to A's inbox after B replies raced the reply.
     let mut b_inbox = agent_b.subscribe_inbox().await.unwrap();
+    let mut a_inbox = agent_a.subscribe_inbox().await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // A sends task to B
@@ -84,9 +87,6 @@ async fn test_send_reply_correlation() {
         .unwrap();
 
     // A receives the reply on their inbox
-    let mut a_inbox = agent_a.subscribe_inbox().await.unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
     let reply = tokio::time::timeout(Duration::from_secs(2), a_inbox.recv())
         .await
         .expect("timeout waiting for reply")

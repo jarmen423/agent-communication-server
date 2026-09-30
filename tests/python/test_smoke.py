@@ -60,7 +60,7 @@ def test_echo_worker_round_trip():
     `message` on the task channel (reply contract, refocus.md §6)."""
     import nats
 
-    async def run() -> dict:
+    async def run() -> tuple[str, dict]:
         url = os.environ["NATS_URL"]
         identity = f"echo-{uuid.uuid4().hex[:6]}"
         worker = subprocess.Popen(
@@ -75,22 +75,24 @@ def test_echo_worker_round_trip():
             task_channel = f"task.{uuid.uuid4().hex[:8]}"
             sub = await nc.subscribe(f"channel.{task_channel}")
             await nc.flush()
-            await nc.publish(
-                f"hub.send.{task_channel}",
-                make_envelope("pytest", identity, task_channel, "message",
-                              {"prompt": "abc", "task_channel": task_channel}),
-            )
+            task = make_envelope("pytest", identity, task_channel, "message",
+                                 {"prompt": "abc", "task_channel": task_channel})
+            task_id = json.loads(task)["meta"]["id"]
+            await nc.publish(f"hub.send.{task_channel}", task)
             deadline = asyncio.get_running_loop().time() + 15
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
                 msg = await sub.next_msg(timeout=max(remaining, 0.1))
                 env = json.loads(msg.data)
                 if env["meta"]["kind"] == "message":
-                    return env
+                    return task_id, env
         finally:
             await nc.close()
             worker.terminate()
             worker.wait(timeout=5)
 
-    env = asyncio.run(run())
+    task_id, env = asyncio.run(run())
     assert env["payload"].get("result") == "echo: cba"
+    # Rule 2/4: reply_to is the task envelope id, never the channel name.
+    assert env["meta"]["reply_to"] == task_id
+    assert env["payload"]["task_id"] == task_id
