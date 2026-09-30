@@ -1,0 +1,15 @@
+{
+  "name": "nats-hub",
+  "owner": {
+    "name": "jarmen423",
+    "url": "https://github.com/jarmen423"
+  },
+  "plugins": [
+    {
+      "name": "nats-hub",
+      "source": "./claude-code-plugin",
+      "description": "Multi-agent coordination via NATS messaging bus — list agents, delegate tasks, run sessions and waves, read your inbox.",
+      "version": "0.1.0"
+    }
+  ]
+}
