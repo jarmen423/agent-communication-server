@@ -223,16 +223,19 @@ reachable by anything but localhost.
 - **Origin allowlist.** Browsers disclose which site opened the socket via
   the `Origin` header, and browsers are the real threat here — any web page
   you visit could otherwise open `ws://127.0.0.1:9191/ws` and read or drive
-  the bus. The bridge allows `http://<ws-addr>` and
-  `http://localhost:<port>` by default; `--ws-allow-origin` (repeatable)
-  adds entries. A mismatched Origin gets HTTP 403 before the upgrade.
-  Requests with **no** `Origin` header (curl, scripts, the NATS-clients) are
-  not checked — the token below is what gates them.
-- **Token.** `--ws-token` or env `HUB_WS_TOKEN` requires `?token=` on the
-  WS URL (HTTP 401 otherwise). Open the visualizer at
-  `http://<addr>/?token=T` and the page forwards it to `/ws` itself.
-  hub-server prints the tokenized URL at startup. Rotate the token like any
-  other shared secret; it is not a per-user credential.
+  the bus. `http://<ws-addr>` plus the loopback spellings
+  (`localhost`/`127.0.0.1`/`[::1]`) are allowed by default;
+  `--ws-allow-origin` (repeatable) adds entries — matching ignores case,
+  trailing `/` and default ports. A mismatched or unparsable Origin gets
+  HTTP 403 before the upgrade. Requests with **no** `Origin` header (curl,
+  scripts, the NATS-clients) are not checked — the token below is what
+  gates them.
+- **Token.** Env `HUB_WS_TOKEN` (preferred — `--ws-token` is visible in
+  `ps`) requires `?token=` on the WS URL (HTTP 401 otherwise). Open the
+  visualizer at `http://<addr>/?token=T` and the page forwards it to `/ws`
+  itself. hub-server prints the tokenized URL at startup (percent-encoded,
+  so `+`/`=`/`/` in tokens are safe). Rotate the token like any other
+  shared secret; it is not a per-user credential.
 - **Loopback discipline.** With no token configured, `--ws-addr` must
   resolve to loopback (`127.0.0.1`, `::1`, `localhost`), otherwise
   hub-server refuses to start. `--ws-insecure` overrides — for trusted

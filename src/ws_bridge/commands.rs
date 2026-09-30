@@ -155,17 +155,24 @@ pub(super) async fn handle_client_command(
                 )
                 .await;
             let channel = format!("agents.{identity}");
-            client.send_status(&channel, "closed").await?;
-            let _ = client
-                .send_message(
-                    &channel,
-                    serde_json::json!({
-                        "message": format!("visualizer stop requested for {identity}"),
-                        "action": "stop",
-                        "source": "visualizer",
-                    }),
-                )
-                .await;
+            let env = Envelope::new(
+                sender,
+                &channel,
+                MessageKind::Status,
+                serde_json::json!({ "status": "closed" }),
+            );
+            client.send(&env).await?;
+            let env = Envelope::new(
+                sender,
+                &channel,
+                MessageKind::Message,
+                serde_json::json!({
+                    "message": format!("visualizer stop requested for {identity}"),
+                    "action": "stop",
+                    "source": "visualizer",
+                }),
+            );
+            let _ = client.send(&env).await;
             Ok(format!(
                 r#"{{"type":"ack","action":"stop_agent","identity":{}}}"#,
                 serde_json::to_string(identity).unwrap()
@@ -177,17 +184,24 @@ pub(super) async fn handle_client_command(
                 .and_then(|t| t.as_str())
                 .context("resume_agent requires identity")?;
             let channel = format!("agents.{identity}");
-            client.send_status(&channel, "ready").await?;
-            let _ = client
-                .send_message(
-                    &channel,
-                    serde_json::json!({
-                        "message": format!("visualizer resume requested for {identity}"),
-                        "action": "resume",
-                        "source": "visualizer",
-                    }),
-                )
-                .await;
+            let env = Envelope::new(
+                sender,
+                &channel,
+                MessageKind::Status,
+                serde_json::json!({ "status": "ready" }),
+            );
+            client.send(&env).await?;
+            let env = Envelope::new(
+                sender,
+                &channel,
+                MessageKind::Message,
+                serde_json::json!({
+                    "message": format!("visualizer resume requested for {identity}"),
+                    "action": "resume",
+                    "source": "visualizer",
+                }),
+            );
+            let _ = client.send(&env).await;
             Ok(format!(
                 r#"{{"type":"ack","action":"resume_agent","identity":{}}}"#,
                 serde_json::to_string(identity).unwrap()

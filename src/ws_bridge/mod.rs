@@ -12,18 +12,23 @@
 //! static file server (see `http.rs`).
 
 mod commands;
+mod config;
 mod http;
 mod ws;
 
 use anyhow::Result;
-use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::HubClient;
 
+pub use config::{
+    check_ws_bind, default_allowed_origins, is_loopback_addr, normalize_origin, url_query_encode,
+};
 pub use http::resolve_static_path;
 
 /// Shared broadcast channel for envelope events (router → browsers).
@@ -41,10 +46,12 @@ pub struct WsBridgeConfig {
     /// NATS URL for browser → hub commands (message/stop/resume).
     /// None = read-only event feed.
     pub nats_url: Option<String>,
-    /// Exact `Origin` header values allowed on the WS upgrade
-    /// (e.g. `http://127.0.0.1:9191`). Requests carrying a different Origin
-    /// are rejected with 403; requests with no Origin header are not checked
-    /// (browsers always send one — use `token` to gate non-browser clients).
+    /// `Origin` header values allowed on the WS upgrade (e.g.
+    /// `http://127.0.0.1:9191`); entries are canonicalized with
+    /// `normalize_origin` — case, trailing `/` and default ports don't matter.
+    /// Requests carrying a different Origin are rejected with 403; requests
+    /// with no Origin header are not checked (browsers always send one — use
+    /// `token` to gate non-browser clients).
     pub allowed_origins: Vec<String>,
     /// Shared secret required as `?token=` on the WS upgrade URL.
     /// None = no token check (acceptable on loopback only).
@@ -59,8 +66,10 @@ struct BridgeState {
     event_tx: EventTx,
     /// Canonicalized static root; None disables static serving.
     static_root: Option<PathBuf>,
-    /// One shared NATS client for all browser command channels.
-    hub: Option<Arc<HubClient>>,
+    /// One shared NATS client for all browser command channels, filled in
+    /// by the retry loop once NATS is reachable.
+    hub: RwLock<Option<Arc<HubClient>>>,
+    /// `config.allowed_origins` put through `normalize_origin` once.
     allowed_origins: Vec<String>,
     token: Option<String>,
     identity: String,
@@ -99,27 +108,41 @@ pub async fn serve_ws_bridge(
         None => None,
     };
 
-    // One NATS connection shared by all browser tabs. Commands are disabled
-    // bridge-wide if it can't be established at startup.
-    let hub = match config.nats_url.as_ref() {
-        Some(url) => match HubClient::connect(url, "visualizer").await {
-            Ok(c) => Some(Arc::new(c)),
-            Err(e) => {
-                warn!("WS bridge could not connect HubClient for commands: {e}");
-                None
-            }
-        },
-        None => None,
-    };
-
     let state = Arc::new(BridgeState {
         event_tx,
         static_root,
-        hub,
-        allowed_origins: config.allowed_origins,
+        hub: RwLock::new(None),
+        allowed_origins: config
+            .allowed_origins
+            .iter()
+            .map(|o| normalize_origin(o))
+            .collect(),
         token: config.token,
         identity: config.identity,
     });
+
+    // One NATS connection shared by all browser tabs, established in the
+    // background with retries so the bridge can serve while NATS is down.
+    if let Some(url) = config.nats_url.clone() {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut backoff = Duration::from_millis(500);
+            loop {
+                match HubClient::connect(&url, "visualizer").await {
+                    Ok(c) => {
+                        *st.hub.write().await = Some(Arc::new(c));
+                        info!("WS bridge connected shared HubClient for commands");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!("WS bridge could not connect HubClient for commands: {e}; retrying in {backoff:?}");
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(30));
+                    }
+                }
+            }
+        });
+    }
 
     loop {
         let (stream, peer_addr) = match listener.accept().await {
@@ -137,18 +160,6 @@ pub async fn serve_ws_bridge(
             }
         });
     }
-}
-
-/// True when `addr` resolves only to loopback IPs (`127.0.0.1:9191`,
-/// `localhost:9191`, `[::1]:9191`). Unresolvable, empty, or partially
-/// non-loopback answers are false — the safe choice for the `--ws-addr`
-/// no-token guard.
-pub fn is_loopback_addr(addr: &str) -> bool {
-    let addrs: Vec<_> = match addr.to_socket_addrs() {
-        Ok(it) => it.collect(),
-        Err(_) => return false,
-    };
-    !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback())
 }
 
 async fn handle_connection(

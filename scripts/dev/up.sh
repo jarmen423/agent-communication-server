@@ -41,7 +41,13 @@ else
 fi
 export NATS_URL="nats://127.0.0.1:$NATS_PORT"
 
-echo "==> hub-server (db: $RUN_DIR/nats_hub.db, visualizer: http://$WS_ADDR/)"
+VIS_URL="http://$WS_ADDR/"
+if [[ -n "${HUB_WS_TOKEN:-}" ]]; then
+  # hub-server picks up HUB_WS_TOKEN itself; the browser needs it in the URL.
+  VIS_URL="http://$WS_ADDR/?token=$("$PY" -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$HUB_WS_TOKEN")"
+fi
+
+echo "==> hub-server (db: $RUN_DIR/nats_hub.db, visualizer: $VIS_URL)"
 RUST_LOG="${RUST_LOG:-info}" "$CARGO_TARGET_DIR/debug/hub-server" \
   --nats-url "$NATS_URL" --db-path "$RUN_DIR/nats_hub.db" \
   --ws-addr "$WS_ADDR" --static-dir "$REPO_ROOT/visualizer" \
@@ -60,7 +66,7 @@ cat <<MSG
 nats-hub dev stack is up.   NATS_URL=$NATS_URL
   try:  $CARGO_TARGET_DIR/debug/hub-delegate --to echo-1 --prompt "hello" --verbose
         $CARGO_TARGET_DIR/debug/hub-agents
-        open http://$WS_ADDR/
+        open $VIS_URL
   logs: $RUN_DIR/
 Ctrl+C to stop.
 MSG

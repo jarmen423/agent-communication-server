@@ -61,6 +61,40 @@ fn ws_uri(addr: SocketAddr, path: &str) -> Uri {
     format!("ws://{addr}{path}").parse().unwrap()
 }
 
+/// Write a raw request (arbitrary bytes) and return the HTTP status code
+/// of the response — for malformed headers a client library can't send.
+async fn raw_request_status(addr: SocketAddr, bytes: &[u8]) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(bytes).await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    String::from_utf8_lossy(&buf[..n])
+        .split_whitespace()
+        .nth(1)
+        .and_then(|x| x.parse::<u16>().ok())
+        .unwrap_or(0)
+}
+
+fn ws_upgrade_request(addr: SocketAddr, origin: &[u8], query: &str) -> Vec<u8> {
+    let mut req = format!(
+        "GET /ws{query} HTTP/1.1\r\nHost: {addr}\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+    )
+    .into_bytes();
+    if !origin.is_empty() {
+        req.extend_from_slice(b"Origin: ");
+        req.extend_from_slice(origin);
+        req.extend_from_slice(b"\r\n");
+    }
+    req.extend_from_slice(b"\r\n");
+    req
+}
+
 /// Status code of a failed WS upgrade, if the server rejected it cleanly.
 fn reject_status(err: &Error) -> Option<u16> {
     match err {
@@ -155,6 +189,37 @@ async fn ws_upgrade_enforces_origin_allowlist() {
     }
 }
 
+#[tokio::test]
+async fn ws_upgrade_normalizes_origin_match() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let tx = create_event_channel(16);
+
+    let mut cfg = test_config();
+    // Sloppy allowlist entries — trailing `/` and case shouldn't matter.
+    cfg.allowed_origins = vec![format!("HTTP://{addr}/")];
+    tokio::spawn(async move {
+        let _ = serve_ws_bridge(listener, tx, cfg).await;
+    });
+
+    let good = ClientRequestBuilder::new(ws_uri(addr, "/ws"))
+        .with_header("Origin", format!("http://{addr}"));
+    tokio_tungstenite::connect_async(good)
+        .await
+        .expect("normalized allowlist entry should match");
+}
+
+#[tokio::test]
+async fn ws_upgrade_rejects_malformed_origin() {
+    let mut cfg = test_config();
+    cfg.token = Some("t".into());
+    let (addr, _tx) = spawn_bridge(cfg).await;
+
+    // Non-UTF-8 Origin value must not silently skip the allowlist check.
+    let req = ws_upgrade_request(addr, b"http://\xff\xfe.evil", "?token=t");
+    assert_eq!(raw_request_status(addr, &req).await, 403);
+}
+
 // ── Token on upgrade ────────────────────────────────────────────
 
 #[tokio::test]
@@ -187,6 +252,26 @@ async fn ws_upgrade_enforces_token() {
         .unwrap()
         .unwrap();
     assert_eq!(msg.into_text().unwrap(), r#"{"hello":"bus"}"#);
+}
+
+#[tokio::test]
+async fn ws_upgrade_token_with_special_chars() {
+    let mut cfg = test_config();
+    cfg.token = Some("a+b=c d".into());
+    let (addr, _tx) = spawn_bridge(cfg).await;
+
+    // Percent-encoded form (what the page sends after URLSearchParams +
+    // encodeURIComponent) must match the literal token.
+    tokio_tungstenite::connect_async(ws_uri(addr, "/ws?token=a%2Bb%3Dc%20d"))
+        .await
+        .expect("encoded special-char token should succeed");
+
+    // `%20` decodes to a space — `+` kept literal also works, a wrong
+    // decode still fails.
+    match tokio_tungstenite::connect_async(ws_uri(addr, "/ws?token=a%20b%3Dc%20d")).await {
+        Err(e) => assert_eq!(reject_status(&e), Some(401), "err: {e:?}"),
+        Ok(_) => panic!("space-vs-plus token should be rejected"),
+    }
 }
 
 // ── Loopback guard helper ───────────────────────────────────────

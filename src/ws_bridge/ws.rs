@@ -16,6 +16,7 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tracing::{debug, warn};
 
 use super::commands::handle_client_command;
+use super::config::normalize_origin;
 use super::http::percent_decode;
 use super::BridgeState;
 
@@ -32,9 +33,8 @@ pub(super) async fn handle_websocket(
         .await?;
     let (mut ws_tx, mut ws_rx) = ws_stream.split();
     let mut rx = state.event_tx.subscribe();
-    let hub = state.hub.clone();
 
-    debug!("WS client connected (commands={})", hub.is_some());
+    debug!("WS client connected");
 
     loop {
         tokio::select! {
@@ -62,6 +62,9 @@ pub(super) async fn handle_websocket(
                 match msg {
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None => break,
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                        // Read per command: the shared client is filled in
+                        // once the background connect-retry succeeds.
+                        let hub = state.hub.read().await.clone();
                         if let Some(ref client) = hub {
                             match handle_client_command(client, &text, &state.identity).await {
                                 Ok(ack) => {
@@ -102,14 +105,23 @@ pub(super) async fn handle_websocket(
 // ErrorResponse is tungstenite's handshake-rejection type; its size is not ours to shrink.
 #[allow(clippy::result_large_err)]
 fn check_upgrade(req: &Request, state: &BridgeState) -> Result<(), ErrorResponse> {
-    if let Some(origin) = req.headers().get("Origin").and_then(|v| v.to_str().ok()) {
-        let origin = origin.trim_end_matches('/');
-        if !state.allowed_origins.iter().any(|o| o == origin) {
-            warn!("WS upgrade rejected: Origin '{origin}' not in allowlist");
-            return Err(reject(
-                StatusCode::FORBIDDEN,
-                "forbidden Origin — add it with --ws-allow-origin",
-            ));
+    if let Some(value) = req.headers().get("Origin") {
+        match value.to_str() {
+            Ok(origin) => {
+                let origin = normalize_origin(origin);
+                if !state.allowed_origins.iter().any(|o| *o == origin) {
+                    warn!("WS upgrade rejected: Origin '{origin}' not in allowlist");
+                    return Err(reject(
+                        StatusCode::FORBIDDEN,
+                        "forbidden Origin — add it with --ws-allow-origin",
+                    ));
+                }
+            }
+            // An Origin we can't even parse must not silently skip the check.
+            Err(_) => {
+                warn!("WS upgrade rejected: Origin header is not valid UTF-8");
+                return Err(reject(StatusCode::FORBIDDEN, "malformed Origin header"));
+            }
         }
     }
 
@@ -118,7 +130,7 @@ fn check_upgrade(req: &Request, state: &BridgeState) -> Result<(), ErrorResponse
             .uri()
             .query()
             .and_then(|q| query_param(q, "token"))
-            .is_some_and(|t| t == expected);
+            .is_some_and(|t| token_eq(&t, expected));
         if !ok {
             warn!("WS upgrade rejected: missing or invalid token");
             return Err(reject(
@@ -129,6 +141,20 @@ fn check_upgrade(req: &Request, state: &BridgeState) -> Result<(), ErrorResponse
     }
 
     Ok(())
+}
+
+/// Constant-time-ish string equality for the shared token: never early-exits
+/// on a matching prefix, so response timing doesn't reveal how much of the
+/// guess was right. (Length is still leaked — standard for this pattern.)
+fn token_eq(given: &str, expected: &str) -> bool {
+    let (a, b) = (given.as_bytes(), expected.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// First `name=value` query pair, percent-decoded.
