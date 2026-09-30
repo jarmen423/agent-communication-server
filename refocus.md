@@ -98,10 +98,10 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | ID | Task | Runs on | Branch | Status | Evidence / notes |
 |---|---|---|---|---|---|
-| S0 | Dev environment fixes + collaborator setup (`CONTRIBUTING.md`, `make doctor/setup/test`, CI) | local (orchestrator) | `refocus/dev-env` | ✅ | 2026-09-29: fresh clone → `make setup && make build && make test` green (28 Rust result groups ok, 0 failed; pytest 5 passed incl. live echo round-trip). NATS tests now actually run under `with_stack.sh`. `make up` + `hub-delegate --to echo-1` → `echo: olleh`; visualizer HTTP 200. Zero compiler warnings; fmt clean. Fixed a timing-flaky liveness test. |
+| S0 | Dev environment fixes + collaborator setup (`CONTRIBUTING.md`, `make doctor/setup/test`, CI) | local (orchestrator) | `refocus/dev-env` | ✅ | **PR #1** — CI green on GitHub (clean Ubuntu, 14m). 2026-09-29: fresh clone → `make setup && make build && make test` green (28 Rust result groups ok, 0 failed; pytest 5 passed incl. live echo round-trip). NATS tests now actually run under `with_stack.sh`. `make up` + `hub-delegate --to echo-1` → `echo: olleh`; visualizer HTTP 200. Zero compiler warnings; fmt clean. Fixed a timing-flaky liveness test. |
 | L1 | Reply contract + end-to-end delegation harness | local subagent | `refocus/l1-reply-contract` | 🟡 | Brief: `.planning/refocus/L1-reply-contract.md` |
 | L2 | Storage + router correctness (schema, heartbeat, limits, `list_pending`, `no-storage` build) | local subagent | `refocus/l2-storage` | 🟡 | Brief: `.planning/refocus/L2-storage.md` |
-| L3 | Claude Code + Codex workers, backend hardening, Python tests | local subagent | `refocus/l3-workers` | 🟡 | Brief: `.planning/refocus/L3-workers.md` |
+| L3 | Claude Code + Codex workers, backend hardening, Python tests | local subagent | `refocus/l3-workers` | ✅ | **PR #2** (awaiting merge; ⚠️ merge with/after R2 — supervisor now spawns real agents via the unauthenticated WS bridge). Verified independently: `make test-py` 57 passed; real smoke tests claude → `pong` (24.5s), codex → `pong` (63.4s). Brief: `.planning/refocus/L3-workers.md` |
 | R1 | Unified MCP orchestrator server (one copy, fixed delegate, async tools, auth) | remote agent | `refocus/r1-mcp` | 🟡 | Brief: `.planning/refocus/R1-mcp.md` |
 | R2 | WS bridge + visualizer transport hardening (traversal, Origin, token) | remote agent | `refocus/r2-ws-bridge` | 🟡 | Brief: `.planning/refocus/R2-ws-bridge.md` |
 
