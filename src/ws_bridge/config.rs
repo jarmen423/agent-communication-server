@@ -67,7 +67,11 @@ pub fn normalize_origin(origin: &str) -> String {
     } else {
         format!("{host}:{port}")
     };
-    format!("{}://{}", scheme.to_ascii_lowercase(), auth.to_ascii_lowercase())
+    format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        auth.to_ascii_lowercase()
+    )
 }
 
 /// Enforce the tokenless-bridge bind policy: a bridge with no `token` may
