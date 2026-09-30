@@ -119,6 +119,7 @@ def kilo_spec(
         repo=repo,
         base_argv=base,
         prompt_flag=None,  # kilo uses positional message
+        end_of_options=True,  # `kilo run [flags] -- <message>` (yargs)
         resume_mode="resume_id",
         resume_id_flag="--session",
         resume_ctx_key="kilo_session_id",
@@ -147,6 +148,7 @@ def opencode_spec(
         repo=repo,
         base_argv=base,
         prompt_flag=None,  # positional message
+        end_of_options=True,  # `opencode run [flags] -- <message>` (yargs)
         resume_mode="resume_id",
         resume_id_flag="--session",
         resume_ctx_key="opencode_session_id",

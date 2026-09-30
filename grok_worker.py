@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from worker_backends.headless_cli import HeadlessCliBackend, HeadlessCliSpec
+from worker_backends.proc import install_worker_signal_handlers
 from worker_runtime import WorkerConfig, run_worker
 
 
@@ -43,6 +44,7 @@ def grok_spec(
     model: str | None = None,
     max_turns: int = 40,
     always_approve: bool = True,
+    timeout_sec: float | None = 900.0,
 ) -> HeadlessCliSpec:
     base: list[str] = []
     if always_approve:
@@ -58,7 +60,7 @@ def grok_spec(
         base_argv=base,
         prompt_flag="-p",
         resume_mode="none",
-        timeout_sec=None,
+        timeout_sec=timeout_sec,
     )
 
 
@@ -70,9 +72,12 @@ if __name__ == "__main__":
     p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
     p.add_argument("--max-turns", type=int, default=40)
     p.add_argument("--channel", default=None)
+    p.add_argument("--timeout-secs", type=float, default=900.0,
+                   help="per-turn limit; the process group is killed on timeout")
     args = p.parse_args()
 
-    spec = grok_spec(repo=args.repo, model=args.model, max_turns=args.max_turns)
+    spec = grok_spec(repo=args.repo, model=args.model, max_turns=args.max_turns,
+                     timeout_sec=args.timeout_secs)
 
     async def _main() -> None:
         await run_worker(
@@ -85,6 +90,7 @@ if __name__ == "__main__":
             )
         )
 
+    install_worker_signal_handlers()  # SIGTERM also stops the CLI's process group
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:

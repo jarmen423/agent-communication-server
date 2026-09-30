@@ -16,6 +16,7 @@ import os
 import sys
 
 from worker_backends.grok_acp import GrokAcpBackend
+from worker_backends.proc import install_worker_signal_handlers
 from worker_runtime import WorkerConfig, run_worker
 
 
@@ -27,6 +28,9 @@ if __name__ == "__main__":
     p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
     p.add_argument("--channel", default=None)
     p.add_argument("--timeout", type=float, default=900.0, help="per-prompt ACP timeout seconds")
+    p.add_argument("--permission-policy", default="allow_always",
+                   choices=["allow_once", "allow_always", "reject"],
+                   help="how session/request_permission is answered (picked by option kind)")
     args = p.parse_args()
 
     async def _main() -> None:
@@ -34,7 +38,8 @@ if __name__ == "__main__":
             cwd=args.repo,
             model=args.model,
             request_timeout_sec=args.timeout,
-            always_approve=True,
+            always_approve=args.permission_policy != "reject",
+            permission_policy=args.permission_policy,
         )
         await run_worker(
             WorkerConfig(
@@ -46,6 +51,7 @@ if __name__ == "__main__":
             )
         )
 
+    install_worker_signal_handlers()  # SIGTERM also stops the CLI's process group
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:
