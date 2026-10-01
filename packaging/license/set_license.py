@@ -20,7 +20,7 @@ What it does:
     and BUSL-1.1 are downloaded from SPDX license-list-data (pinned tag, SHA-256
     checked), and BUSL-1.1 gets its Parameters block;
   * sets the SPDX id in Cargo.toml, both plugin.json manifests, the Hermes
-    plugin.yaml and package.json (BSL-1.1 becomes SPDX `BUSL-1.1`, because
+    plugin.yaml (BSL-1.1 becomes SPDX `BUSL-1.1`, because
     `BSL-1.0` is the unrelated Boost license);
   * rewrites the README section between <!-- license:start/end --> markers;
   * deletes LICENSE.md (this decision note), which is then obsolete.
@@ -195,15 +195,6 @@ def main() -> None:
         text = sub_once(rel, text, r"(?m)^license:.*$", f"license: {spdx_id}")
     else:
         text = sub_once(rel, text, r"(?m)^(version:.*)$", rf"\1\nlicense: {spdx_id}")
-    plan.write(rel, text)
-
-    # package.json (private JS workers): replace or insert after "private".
-    rel = "package.json"
-    text = (ROOT / rel).read_text()
-    if '"license"' in text:
-        text = sub_once(rel, text, r'"license"\s*:\s*"[^"]*"', f'"license": "{spdx_id}"')
-    else:
-        text = sub_once(rel, text, r'(?m)^(\s*)("private"\s*:\s*true,)$', rf'\1\2\n\1"license": "{spdx_id}",')
     plan.write(rel, text)
 
     rel = "README.md"

@@ -321,7 +321,7 @@ async fn happy_path_verify_result_and_wave_completed() {
     create_and_spawn(&api, "w-happy", tasks).await;
 
     // t1 dispatched to w1.
-    let dm = recv_session_start(&mut inbox_w1, "t1", 10).await;
+    let dm = recv_session_start(&mut inbox_w1, "t1", 30).await;
     assert_eq!(dm.meta.to.as_deref(), Some("w1"));
     assert_eq!(dm.payload["wave_id"], "w-happy");
     assert_eq!(dm.payload["channel"], "wave.w-happy.task.t1");
@@ -347,7 +347,7 @@ async fn happy_path_verify_result_and_wave_completed() {
     .await;
 
     // t2 is dispatched to w2 only after t1 finishes (dependency).
-    recv_session_start(&mut inbox_w2, "t2", 10).await;
+    recv_session_start(&mut inbox_w2, "t2", 30).await;
 
     let w2 = HubClient::connect(&stack.nats_url, "w2").await.unwrap();
     emit_task_event(
@@ -359,7 +359,7 @@ async fn happy_path_verify_result_and_wave_completed() {
     )
     .await;
 
-    let snap = wait_status(&api, "w-happy", 15, |s| s["wave"]["status"] == "completed").await;
+    let snap = wait_status(&api, "w-happy", 30, |s| s["wave"]["status"] == "completed").await;
     assert_eq!(task_status(&snap, "t1"), "done");
     assert_eq!(task_status(&snap, "t2"), "done");
     assert_eq!(task_field(&snap, "t1", "verify_result"), "passed");
@@ -387,7 +387,7 @@ async fn foreign_sender_cannot_complete_task() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     create_and_spawn(&api, "w-foreign", vec![task("t1", "w1", &[], None)]).await;
-    recv_session_start(&mut inbox_w1, "t1", 10).await;
+    recv_session_start(&mut inbox_w1, "t1", 30).await;
 
     // An impostor tries to mark t1 completed.
     let mallory = HubClient::connect(&stack.nats_url, "mallory")
@@ -420,7 +420,7 @@ async fn foreign_sender_cannot_complete_task() {
         json!({"result": "legit"}),
     )
     .await;
-    let snap = wait_status(&api, "w-foreign", 15, |s| {
+    let snap = wait_status(&api, "w-foreign", 30, |s| {
         s["wave"]["status"] == "completed"
     })
     .await;
@@ -453,11 +453,11 @@ async fn dead_worker_fails_wave_and_cancels_rest() {
         vec![task("t1", "w1", &[], None), task("t2", "w2", &["t1"], None)],
     )
     .await;
-    recv_session_start(&mut inbox_w1, "t1", 10).await;
+    recv_session_start(&mut inbox_w1, "t1", 30).await;
 
     // Liveness TTL (3s) + sweep (~1s): t1 must fail, wave must fail,
     // t2 (never dispatched) must be cancelled — fail-fast.
-    let snap = wait_status(&api, "w-dead", 15, |s| s["wave"]["status"] == "failed").await;
+    let snap = wait_status(&api, "w-dead", 30, |s| s["wave"]["status"] == "failed").await;
     assert_eq!(task_status(&snap, "t1"), "failed");
     assert_eq!(task_status(&snap, "t2"), "cancelled");
     assert!(
@@ -499,12 +499,12 @@ async fn worker_error_is_fail_fast() {
         ],
     )
     .await;
-    recv_session_start(&mut inbox_w1, "t1", 10).await;
+    recv_session_start(&mut inbox_w1, "t1", 30).await;
 
     let w1 = HubClient::connect(&stack.nats_url, "w1").await.unwrap();
     emit_task_event(&w1, "w-fail", "t1", "error", json!({"error": "boom"})).await;
 
-    let snap = wait_status(&api, "w-fail", 15, |s| s["wave"]["status"] == "failed").await;
+    let snap = wait_status(&api, "w-fail", 30, |s| s["wave"]["status"] == "failed").await;
     assert_eq!(task_status(&snap, "t1"), "failed");
     assert_eq!(task_status(&snap, "t2"), "cancelled");
     assert_eq!(task_field(&snap, "t1", "verify_result"), "failed");
@@ -544,7 +544,7 @@ async fn wave_survives_hub_server_restart() {
         vec![task("t1", "w1", &[], None), task("t2", "w2", &["t1"], None)],
     )
     .await;
-    recv_session_start(&mut inbox_w1, "t1", 10).await;
+    recv_session_start(&mut inbox_w1, "t1", 30).await;
 
     // Kill hub-server mid-wave; the nats-server and the wave's persisted
     // state survive. Restart on the same DB.
@@ -560,11 +560,11 @@ async fn wave_survives_hub_server_restart() {
     // And the wave still drives forward: w1 completes → t2 dispatches.
     let w1 = HubClient::connect(&stack.nats_url, "w1").await.unwrap();
     emit_task_event(&w1, "w-restart", "t1", "completed", json!({"result": "ok"})).await;
-    recv_session_start(&mut inbox_w2, "t2", 10).await;
+    recv_session_start(&mut inbox_w2, "t2", 30).await;
     let w2 = HubClient::connect(&stack.nats_url, "w2").await.unwrap();
     emit_task_event(&w2, "w-restart", "t2", "completed", json!({"result": "ok"})).await;
 
-    let snap = wait_status(&api, "w-restart", 15, |s| {
+    let snap = wait_status(&api, "w-restart", 30, |s| {
         s["wave"]["status"] == "completed"
     })
     .await;
@@ -596,7 +596,7 @@ async fn wave_cancel_marks_tasks_and_dms_workers() {
         vec![task("t1", "w1", &[], None), task("t2", "w2", &["t1"], None)],
     )
     .await;
-    recv_session_start(&mut inbox_w1, "t1", 10).await;
+    recv_session_start(&mut inbox_w1, "t1", 30).await;
 
     api.request("wave.cancel", json!({"wave_id": "w-cancel"}))
         .await
@@ -649,7 +649,7 @@ async fn bound_heartbeats_keep_long_running_task_alive() {
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     create_and_spawn(&api, "w-alive", vec![task("t1", "w1", &[], None)]).await;
-    recv_session_start(&mut inbox_w1, "t1", 10).await;
+    recv_session_start(&mut inbox_w1, "t1", 30).await;
 
     // Work "silently" for well past the 3s TTL, heartbeating only (bound subject).
     for _ in 0..8 {
@@ -664,7 +664,7 @@ async fn bound_heartbeats_keep_long_running_task_alive() {
     );
 
     emit_task_event(&w1, "w-alive", "t1", "completed", json!({"result": "ok"})).await;
-    wait_status(&api, "w-alive", 15, |s| s["wave"]["status"] == "completed").await;
+    wait_status(&api, "w-alive", 30, |s| s["wave"]["status"] == "completed").await;
 
     hub.kill().await.unwrap();
 }

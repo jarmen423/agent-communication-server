@@ -20,7 +20,6 @@ TOUCHED = [
     "claude-code-plugin/.claude-plugin/plugin.json",
     "codex-plugin/.codex-plugin/plugin.json",
     "hermes-plugin/plugin.yaml",
-    "package.json",
     "README.md",
     "LICENSE.md",
 ]
@@ -60,7 +59,6 @@ def test_switch_to_mit_updates_every_declaration(tmp_path: Path) -> None:
     for manifest in TOUCHED[1:3]:
         assert json.loads((root / manifest).read_text())["license"] == "MIT"
     assert "license: MIT" in (root / "hermes-plugin/plugin.yaml").read_text().splitlines()
-    assert json.loads((root / "package.json").read_text())["license"] == "MIT"
 
     readme = (root / "README.md").read_text()
     section = readme.split("<!-- license:start -->")[1].split("<!-- license:end -->")[0]

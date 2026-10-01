@@ -92,15 +92,22 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done (verified + merged) · �
 
 | ID | Task | Runs on | Branch | Status | Evidence / notes |
 |---|---|---|---|---|---|
-| T1 | Identity binding + API authz + per-agent creds | Devin | `iter2/t1-identity` | 🟡 | Brief: `.planning/refocus-2/T1-identity.md` |
-| T2 | Server-side waves + session durability | Devin | `iter2/t2-waves` | 🟡 | Brief: `.planning/refocus-2/T2-waves.md` |
-| T3 | Delegation & workers to 100% | native subagent | `iter2/t3-delegation` | 🟡 | Brief: `.planning/refocus-2/T3-delegation.md` |
-| T4 | MCP surface to 100% | native subagent | `iter2/t4-mcp` | 🟡 | Brief: `.planning/refocus-2/T4-mcp.md` |
-| T5 | Portability, release, docs | native subagent | `iter2/t5-release` | 🟡 | Brief: `.planning/refocus-2/T5-release.md` |
-| W2-A | JetStream durable delivery | wave 2 | — | ⬜ | Blocked on T1 (same router/client code) |
+| T1 | Identity binding + API authz + per-agent creds | Devin | `iter2/t1-identity` | ✅ | Bound subjects (`hub.pub.<id>.<ch>`, `hub.register.<id>`, `hub.presence.<id>`, `hub.api.<id>.<op>`); the router stamps `meta.from`; `--require-bound-identity`; query-API read scoping; `hub-admin add-agent`/`render-config`. `dogfood_identity.sh` 11/11 (can't publish as another agent, can't read another's inbox, forged `from` rewritten, API scoped). CI green. |
+| T2 | Server-side waves + session durability | Devin | `iter2/t2-waves` | ✅ | `src/orchestrator/` in hub-server: persisted state machines, resume after hub restart, cycle detection, assigned-sender enforcement, liveness TTL → failure, fail-fast, `verify_result`. Thin `hub-wave`/MCP wave clients. `session.set_backend_ctx`. `docs/WAVES.md`. 7 live orchestrator tests. CI green. |
+| T3 | Delegation & workers to 100% | native subagent | `iter2/t3-delegation` | ✅ | Cancel end to end (Rust + Python workers, every backend, `hub-delegate` Ctrl-C → exit 4). `hub-delegate` logs to stderr; `--prompt-file`/stdin. Per-turn progress (cross-talk fixed, regression-tested). JS workers removed (evidence in WORKER_BACKENDS.md). All 11 advertised worker types start (fake-CLI test). Session resume via T2's API. Smoke tests: claude → `pong` 28s, codex → `pong` 35s, cancel killed the process group. |
+| T4 | MCP surface to 100% | native subagent | `iter2/t4-mcp` | ✅ | `cancel_task`; real `check_providers` (registry plus parallel ping, ok/slow/error/unresponsive, with what it can't verify stated); plugin install-layout test plus `plugins.yml` CI (3.10/3.12); schema-validated arguments for every tool; `whoami`; SKILL updated. Real smoke test: Claude ping `ok` 9.0s. |
+| T5 | Portability, release, docs | native subagent | `iter2/t5-release` | ✅ | `release.yml` (linux x86_64/arm64, macOS arm64, SHA256SUMS); dry-run green with all builds and install smoke tests, nothing published. `install_remote.sh` installs from release with checksum (mismatch is fatal); `no-storage` CI job; docs archived under `docs/archive/`; README/AGENTS/CONTRIBUTING current; license-switch script (decision pending). Fixed a remote-install bug (missing `proc.py`). |
+| W2-A | JetStream durable delivery | wave 2 | — | ⬜ | Unblocked (T1 merged) |
 | W2-B | Persistence: retention, analytics pushdown, backup | wave 2 | — | ⬜ | |
 | W2-C | Visualizer/observability to 100% | wave 2 | — | ⬜ | |
 | W2-D | File-lock broadcast (new feature) | wave 2 | — | ⬜ | |
+
+**Wave 1 integration (orchestrator, `iter2/integration`).** Merging T1 + T2 turned up three bugs that neither task's own tests caught. All are fixed with regression tests:
+1. **Missed heartbeats.** The wave orchestrator only listened on legacy `hub.presence`, so it missed T1's bound heartbeats and would fail live long tasks after the liveness TTL. It now subscribes to both, taking the identity from the subject (`subscribe_subject_tagged`). Regression: `bound_heartbeats_keep_long_running_task_alive`.
+2. **Scoping on permissive hubs.** Read scoping applied to bound callers even on a non-enforcing hub, hiding waves/sessions/DMs from their own operators. It now applies only when enforcing.
+3. **Admin-only writes.** All `wave.*`/`session.*` writes were admin-only, which broke orchestrators and session resume in bound mode. They are now owner-scoped (`src/query_api/write_authz.rs`, `tests/identity_owner_writes.rs`).
+
+Also: `make test-bound` (full suite with `--require-bound-identity`), and the JS-worker setup leftovers are removed.
 
 **Process (unchanged from iteration 1, solo repo):**
 - Each task has its own branch, and pushing it runs CI.

@@ -18,7 +18,6 @@ deliberately left unchanged until then, even though they disagree.
 | `claude-code-plugin/.claude-plugin/plugin.json` → `license` | `MIT` | The Claude Code plugin manifest |
 | `codex-plugin/.codex-plugin/plugin.json` → `license` | `MIT` | The Codex plugin manifest |
 | `hermes-plugin/plugin.yaml` | *(none)* | The Hermes plugin manifest has no license key |
-| `package.json` | *(none)* | Private JS-worker package, no license key |
 | `README.md` → "License" section | "BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apache 2.0." | Between `<!-- license:start -->` / `<!-- license:end -->` markers. The terms quoted (BSL 1.1 converting to Apache 2.0 on 2030-01-01) are **SurrealDB's**, as written up in `docs/DATABASE_PLAN.md`. They were probably never a decision about nats-hub itself. |
 | `LICENSE` | *(missing)* | Release tarballs pick up any `LICENSE*` file automatically |
 
@@ -63,7 +62,7 @@ It makes all of these changes together:
    verified by SHA-256. BUSL-1.1 gets its Parameters block (Licensor, Licensed
    Work, Additional Use Grant, Change Date, Change License).
 2. Sets the SPDX id (`MIT`, `Apache-2.0` or `BUSL-1.1`) in `Cargo.toml`, both
-   `plugin.json` manifests, `hermes-plugin/plugin.yaml` and `package.json`.
+   `plugin.json` manifests and `hermes-plugin/plugin.yaml`.
 3. Rewrites the README License section between the markers.
 4. Deletes this `LICENSE.md`.
 
@@ -76,7 +75,6 @@ copy of the tree in `tests/python/test_license_switch.py`.
 - [ ] `Cargo.toml`: `license = "<SPDX id>"`
 - [ ] `claude-code-plugin/.claude-plugin/plugin.json` and `codex-plugin/.codex-plugin/plugin.json`: `"license": "<SPDX id>"`
 - [ ] `hermes-plugin/plugin.yaml`: `license: <SPDX id>`
-- [ ] `package.json`: `"license": "<SPDX id>"`
 - [ ] `README.md`: License section
 - [ ] Delete `LICENSE.md`
 - [ ] Optional: cut a release so the tarballs ship the `LICENSE` (see `docs/RELEASING.md`)
