@@ -47,7 +47,7 @@ if __name__ == "__main__":
                    help="Hostname of the `kilo acp` HTTP server")
     p.add_argument("--repo", default=".",
                    help="Working directory passed to the backend (cwd)")
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--channel", default=None,
                    help="Optional broadcast channel for hub.send.* subjects")
     args = p.parse_args()

@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Fake `agy` (Antigravity headless) for tests: `agy [flags] -p <prompt>`
+prints "pong: <prompt>" (plus "(continued)" with --continue)."""
+import sys
+
+argv = sys.argv[1:]
+if "-p" not in argv or argv.index("-p") + 1 >= len(argv):
+    sys.stderr.write("fake agy: expected -p <prompt>\n")
+    sys.exit(2)
+prompt = argv[argv.index("-p") + 1]
+print(f"pong: {prompt}" + (" (continued)" if "--continue" in argv else ""))

@@ -69,7 +69,7 @@ if __name__ == "__main__":
     p.add_argument("--identity", default="grok-worker-1")
     p.add_argument("--model", default=None)
     p.add_argument("--repo", default=os.getcwd())
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--max-turns", type=int, default=40)
     p.add_argument("--channel", default=None)
     p.add_argument("--timeout-secs", type=float, default=900.0,

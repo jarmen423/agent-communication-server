@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from fixtures.helpers import MISBEHAVE, wait_dead, wait_for_file
+from fixtures.helpers import BIN, MISBEHAVE, wait_dead, wait_for_file
 from worker_backends.headless_cli import DEFAULT_TIMEOUT_SEC, HeadlessCliBackend, HeadlessCliSpec
 from worker_backends.presets import kilo_spec, opencode_spec
 from worker_backends.proc import run_streaming
@@ -145,3 +145,35 @@ def test_sigterm_to_worker_stops_cli_group(tmp_path):
         if host.poll() is None:
             host.kill()
     assert wait_dead([grandchild], timeout=5) == [], "CLI grandchild outlived its worker"
+
+
+# ── Fake kilo/opencode CLIs (yargs-style parsing, NDJSON output) ─────
+
+
+@pytest.mark.parametrize("name,make_spec", [("kilo", kilo_spec), ("opencode", opencode_spec)])
+def test_fake_cli_dash_prompt_and_session_resume(tmp_path, monkeypatch, name, make_spec):
+    """A prompt that looks like flags reaches the CLI as the message, and the
+    session id from the NDJSON stream is resumed with --session."""
+    argv_log = tmp_path / "argv.jsonl"
+    monkeypatch.setenv("FAKE_CLI_ARGV_LOG", str(argv_log))
+    spec = make_spec(repo=tmp_path, model="p/m", **{f"{name}_bin": str(BIN / name)})
+    backend = HeadlessCliBackend(spec)
+
+    text, ctx = asyncio.run(backend.run("-m evil --help", {}))
+    assert text == "pong: -m evil --help"
+    assert ctx[spec.resume_ctx_key] == f"ses_fake_{name}"
+    text2, _ = asyncio.run(backend.run("--continue", ctx))
+    assert text2 == "pong: --continue"
+
+    first, second = (json.loads(line) for line in argv_log.read_text().splitlines())
+    assert first[first.index("-m") + 1] == "p/m", "the model flag is the worker's, not the prompt's"
+    assert first[-2:] == ["--", "-m evil --help"]
+    assert second[-4:] == ["--session", f"ses_fake_{name}", "--", "--continue"]
+
+
+def test_fake_cli_without_separator_rejects_dash_prompt(tmp_path):
+    """Why `--` matters: without it yargs parses the prompt as flags."""
+    spec = kilo_spec(repo=tmp_path, kilo_bin=str(BIN / "kilo"))
+    spec.end_of_options = False
+    with pytest.raises(RuntimeError, match="Unknown argument: --help"):
+        asyncio.run(HeadlessCliBackend(spec).run("--help", {}))

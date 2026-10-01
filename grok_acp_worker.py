@@ -25,7 +25,7 @@ if __name__ == "__main__":
     p.add_argument("--identity", default="grok-acp-worker-1")
     p.add_argument("--model", default=None, help="e.g. grok-4.5 or grok-composer-2.5-fast")
     p.add_argument("--repo", default=os.getcwd())
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--channel", default=None)
     p.add_argument("--timeout", type=float, default=900.0, help="per-prompt ACP timeout seconds")
     p.add_argument("--permission-policy", default="allow_always",
