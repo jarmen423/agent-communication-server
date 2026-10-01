@@ -1,8 +1,8 @@
 # nats-hub — Refocus Brief (Sep 2026)
 
 > Living doc. The **status board** (§5) is ground truth for the refocus sprint:
-> update it whenever a task changes state. Other planning docs (`docs/PHASE*`,
-> `.planning/`) are historical.
+> update it whenever a task changes state. Historical planning docs now live in
+> `docs/archive/`. Iteration 2 is `refocus-iteration-2.md`.
 
 ## 1. TL;DR
 
@@ -206,5 +206,5 @@ The R1/R2 review follow-ups are done (F1/F2 in §5). What's left, roughly in pri
 - Analytics loads whole time ranges into memory; push the aggregation down into the DB (L2).
 - Split the visualizer into modules; replace third-party sprites with a theme manifest (this enables the customization skill in `TODO.md`).
 - Resolve the license (BSL vs MIT) and add a LICENSE file; add release binaries.
-- Archive historical planning docs (`docs/PHASE*`, `.planning/execution`).
+- ~~Archive historical planning docs~~: done in iteration 2 (T5), now under `docs/archive/`.
 - **File-lock broadcast** (`TODO.md`): the first *new* feature once the trust items land.

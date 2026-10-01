@@ -273,7 +273,7 @@ websocket {
 Generating the cert — pick one:
 
 - **Self-signed / private CA** — fine for internal teams, less polished.
-  One-liner in [`OPERATOR_AGENTS.md`](REMOTE_AGENTS.md) § "Production Setup",
+  One-liner in [`REMOTE_AGENTS.md`](REMOTE_AGENTS.md) § "Production Setup",
   or see [`OPERATOR_HUB.md`](OPERATOR_HUB.md) § "TLS certificate".
   You must ship the CA/cert file to every client.
 - **Public CA (ACME / Let's Encrypt)** — preferred for anything
