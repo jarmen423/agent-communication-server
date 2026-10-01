@@ -223,7 +223,7 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
         # session.set_backend_ctx + session.get round-trip.
         sid = f"sess-{uuid.uuid4().hex[:6]}"
         r = await conn.api_request("session.create", {
-            "session_id": sid, "orchestrator": "pytest", "worker": w1,
+            "session_id": sid, "orchestrator": conn.identity(), "worker": w1,
             "status": "active", "created_at": conn.now(),
             "updated_at": conn.now(),
         })
