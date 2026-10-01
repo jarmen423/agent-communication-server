@@ -252,7 +252,7 @@ def test_check_from_arg(monkeypatch):
 
 def test_all_tools_have_handlers_and_schemas_are_clean():
     names = {t.name for t in nats_hub_mcp.TOOLS}
-    assert names == set(hub_handlers.HANDLERS)
+    assert names == set(nats_hub_mcp.HANDLERS)
     for required in ("delegate_async", "task_status", "wait_for_task",
                      "read_inbox", "wait_for_message", "session_replies",
                      "check_providers"):

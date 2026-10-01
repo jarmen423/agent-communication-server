@@ -9,9 +9,10 @@ Identity: ``NATS_HUB_IDENTITY`` (required) is stamped as ``meta.from`` on every
 message; tool schemas take no ``from`` argument. Auth/TLS: the vendored
 ``nats_connect.connect_nats`` (``NATS_URL``, ``NATS_TOKEN``, TLS/creds env).
 
-Workflow (see skills/nats-hub/SKILL.md): ``list_agents`` → ``delegate_async`` →
-``wait_for_task``/``task_status`` → ``read_inbox``/``wait_for_message`` →
-sessions (``start_session``/``session_replies``) → waves for parallel work.
+Workflow (see skills/nats-hub/SKILL.md): ``check_providers`` → ``delegate_async``
+→ ``wait_for_task``/``task_status`` (``cancel_task`` to stop) →
+``read_inbox``/``wait_for_message`` → sessions → waves for parallel work.
+Arguments are validated against each tool's schema (``hub_validate``).
 """
 
 import asyncio
@@ -52,15 +53,46 @@ def _default_identity(server_dir: str | None = None) -> str | None:
     return None
 
 
-if (ident := _default_identity()) is not None:
-    os.environ.setdefault("NATS_HUB_IDENTITY", ident)
+# Where the bound identity came from: "env" (NATS_HUB_IDENTITY set by the
+# host/.mcp.json/shell), "plugin-manifest" (per-host default above) or None
+# (canonical copy with nothing set — every bus tool will refuse to run).
+if os.environ.get("NATS_HUB_IDENTITY", "").strip():
+    IDENTITY_SOURCE: str | None = "env"
+elif (ident := _default_identity()) is not None:
+    os.environ["NATS_HUB_IDENTITY"] = ident
+    IDENTITY_SOURCE = "plugin-manifest"
+else:
+    IDENTITY_SOURCE = None
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, Tool
 
+import hub_connection as conn
 from hub_tools import TOOLS
-from hub_handlers import HANDLERS
+from hub_handlers import HANDLERS as _RAW_HANDLERS
+from hub_validate import validated_handlers
+
+
+async def _whoami(args: dict) -> dict:
+    try:
+        ident = conn.identity()
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e) + " Set it in the MCP server env "
+                "(or install the plugin, which defaults it per host)."}
+    return {"ok": True, "data": {
+        "identity": ident,
+        "identity_source": IDENTITY_SOURCE,
+        "nats_url": conn.NATS_URL,
+        "server_dir": _HERE,
+        "note": "identity is bound to this server's environment and stamped "
+                "as meta.from on every message; tools take no `from` argument",
+    }}
+
+
+# Every handler validates its arguments against the tool's (strict) schema —
+# also for the Hermes plugin, which calls HANDLERS directly.
+HANDLERS = validated_handlers(TOOLS, {**_RAW_HANDLERS, "whoami": _whoami})
 
 server = Server("nats-hub")
 
@@ -70,12 +102,15 @@ async def list_tools() -> list[Tool]:
     return TOOLS
 
 
-@server.call_tool()
+# validate_input=False: HANDLERS already validate (with actionable messages),
+# and the same path must cover Hermes, which bypasses the MCP SDK.
+@server.call_tool(validate_input=False)
 async def call_tool(name: str, arguments: dict) -> CallToolResult:
     handler = HANDLERS.get(name)
     if handler is None:
         return CallToolResult(
-            content=[TextContent(type="text", text=f"Unknown tool: {name}")],
+            content=[TextContent(type="text", text=(
+                f"Unknown tool: {name}. Available: {', '.join(sorted(HANDLERS))}"))],
             isError=True,
         )
     try:

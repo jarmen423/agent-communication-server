@@ -104,9 +104,10 @@ class TaskTracker:
         self.other_messages = RingBuffer(100)
         self.last_status: str | None = None
         self.result: dict | None = None
-        self.state = "running"  # running | done | error
+        self.state = "running"  # running | done | error | cancelled
         self.done = asyncio.Event()
         self.created_at = time.time()
+        self.cancel_requested_at: float | None = None  # set by cancel_task
         self.sub = None  # NATS subscription on channel.<task_channel>
 
     async def close(self) -> None:
@@ -130,7 +131,9 @@ class TaskTracker:
         elif is_task_result(env, self.task_id) and self.result is None:
             self.result = env
             payload = env.get("payload", {})
-            self.state = "error" if payload.get("status") == "error" else "done"
+            status = payload.get("status")
+            # Terminal status set: done | error | cancelled (contract §4.2).
+            self.state = status if status in ("error", "cancelled") else "done"
             self.done.set()
         else:
             await self.other_messages.put(env)
@@ -142,6 +145,7 @@ class TaskTracker:
             "worker": self.worker,
             "state": self.state,
             "last_status": self.last_status,
+            "cancel_requested": self.cancel_requested_at is not None,
             "events": [
                 {"seq": it["seq"], "from": it["env"]["meta"].get("from"),
                  "kind": it["env"]["meta"].get("kind"),

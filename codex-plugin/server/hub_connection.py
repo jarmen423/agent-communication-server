@@ -90,8 +90,10 @@ async def get_nc() -> NATSClient:
                 # client otherwise retries the initial connect for ~2min.
                 connect_timeout=float(
                     os.environ.get("NATS_HUB_CONNECT_TIMEOUT", "5")),
-                max_reconnect_attempts=int(
-                    os.environ.get("NATS_HUB_CONNECT_RETRIES", "3")),
+                # nats-py treats <= 0 as "retry forever": clamp to >= 1 so
+                # NATS_HUB_CONNECT_RETRIES=0 can't turn fail-fast into a hang.
+                max_reconnect_attempts=max(1, int(
+                    os.environ.get("NATS_HUB_CONNECT_RETRIES", "3"))),
                 reconnect_time_wait=0.5,
             )
             # The fail-fast settings above are for the *initial* connect only.
