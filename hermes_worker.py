@@ -20,7 +20,7 @@ if __name__ == "__main__":
     p.add_argument("--skills", default=None)
     p.add_argument("--max-turns", type=int, default=15)
     p.add_argument("--repo", default=os.getcwd())
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--channel", default=None)
     args = p.parse_args()
     spec = hermes_spec(

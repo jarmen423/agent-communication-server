@@ -8,7 +8,7 @@ All workers use **`worker_runtime.run_worker()`** (NATS inbox, hub-delegate, hub
 |------|----------|-----------|
 | **HeadlessCli** | `worker_backends/headless_cli.py` | Subprocess per turn, prompt on argv; supports resume/continue and streaming (stream-json / JSONL) parsers |
 | **SdkAgent** | `worker_backends/sdk_agent.py` | In-process SDK; blocking calls run in thread pool |
-| **AcpAgent** | `worker_backends/acp_agent.py`, `acp_stdio.py` | Long-lived ACP agent over JSON-RPC (stdio: grok, opencode; HTTP: kilo) |
+| **AcpAgent** | `worker_backends/acp_agent.py`, `acp_stdio.py`, `acp_http_backend.py` | Long-lived ACP agent over JSON-RPC (stdio: hermes, grok, opencode; HTTP: kilo) |
 | **$ExecCli** | one-off Rust `hub-worker --execute` | Stdin prompt; one-shot unless the command is session-aware |
 
 The Claude Code and Codex workers are HeadlessCli subclasses
@@ -28,12 +28,56 @@ Shared plumbing lives in `worker_backends/proc.py`:
 | Pipes | stderr is drained concurrently into a bounded tail buffer. stdout is read in chunks (no 64 KiB line limit) and streamed line by line to the backend's parser. |
 | `--` | `HeadlessCliSpec(end_of_options=True)` puts `--` before a positional prompt, so a prompt that starts with `-` is never parsed as a flag (claude, codex, kilo, opencode). |
 
-ACP stdio backends (`worker_backends/acp_stdio.py`, used by `grok_acp.py` and `opencode_acp.py`):
+ACP stdio backends (`worker_backends/acp_stdio.py`, used by `hermes_acp.py`, `grok_acp.py` and `opencode_acp.py`; no extra Python package needed):
 
 - stderr is drained into a bounded buffer and quoted in errors when the agent dies.
 - The client advertises **no** `fs`/`terminal` capabilities, and any agent→client request it doesn't implement gets JSON-RPC `-32601`.
 - `session/request_permission` is answered by picking from the offered `options` **by kind**, per `permission_policy` (`allow_once` | `allow_always` | `reject`; `--permission-policy` on the ACP workers, default `allow_always`). If nothing matches, the answer is `cancelled`.
 - When stdout hits EOF, the backend is marked dead and pending requests fail with the stderr tail. The next turn restarts the agent and opens a fresh session, because sessions from the dead process are not reused.
+
+## Cancel (refocus-iteration-2.md §4.2)
+
+A DM with `kind = control` and payload `{"action": "cancel", "task_id": <task envelope id>}`
+stops that task. The worker publishes exactly one terminal result on the task
+channel with `status: "cancelled"` (payload `{status, task_id, result: null,
+error: "cancelled"}`), a `status: cancelled` envelope, and an `error` event
+with `cancelled: true` (so wave watchers see a terminal task). Unknown or
+finished task ids are ignored, with a debug log and no reply.
+
+The runtime's inbox callback never blocks: envelopes are queued and run one at
+a time (`worker_backends/inbox.py`), and a cancel is applied immediately. A
+queued delegated task is answered `cancelled` at once and never runs.
+
+| Backend type | What cancel does |
+|---|---|
+| HeadlessCli (claude, codex, agy, kilo, opencode, grok -p, hermes chat) | SIGTERM, then SIGKILL, of the CLI's process group, which is reaped before the result is published |
+| ACP stdio (hermes, grok, opencode acp) | ACP `session/cancel` notification, then a wait of up to `cancel_grace_sec` (5 s) for the prompt to end. An agent that ignores it has its process group killed, and the next turn restarts it. |
+| ACP HTTP (kilo acp) | ACP `session/cancel` notification (the agent is remote; there is no local process) |
+| SdkAgent (cursor, echo) | A Python thread can't be killed: the turn is abandoned and its eventual result discarded. Pass `cancel_sync=` when the SDK has a stop call. |
+| Rust `hub-worker --execute` | SIGKILL of the command's process group |
+
+`hub-delegate`: the first Ctrl-C sends the cancel and waits up to 10 s for the
+`cancelled` result (exit code 4). A second Ctrl-C exits at once (exit code 130).
+
+## Progress handlers are per turn
+
+Each turn runs `backend.run` in its own asyncio task with that turn's progress
+handler in a context variable (`worker_backends/progress.py`). Backends read it
+with `current_progress_handler()` at the start of `run()`. ACP backends capture
+it while they hold their turn lock, because their stream arrives on a reader
+task. Two concurrent session turns on one worker therefore never publish each
+other's progress. `set_progress_handler()` still exists as a fallback for direct
+callers and tests.
+
+## Session resume (stub until T2)
+
+`worker_backends/session_resume.py`, off unless `NATS_HUB_SESSION_RESUME=1`:
+on startup the worker calls `hub.api` `session.list {worker, status: "active"}`,
+resubscribes to each session channel, and hydrates `backend_ctx` from
+`session.get` (`data.session.backend_ctx`). A `session_send` for an unknown
+session does the same. After every successful turn the worker saves
+`backend_ctx` with `session.update_backend_ctx {session_id, backend_ctx}`.
+That op name is the integration point to confirm against T2.
 
 ## Runtime modes
 
@@ -65,29 +109,41 @@ Wave tasks mirror events to both the task channel and `wave.<id>` so the orchest
 
 See `worker_backends/presets.py`:
 - `agy_spec()` → `--continue` per session cwd
-- `hermes_chat_q_spec()` → `--resume`
-- `cursor_sdk_spec()` → Cursor SDK resume via `agent_id`
+- `hermes_spec()` → `hermes chat -Q`, `--resume`
 - `grok_spec()` → `grok -p` headless (prefer ACP for multi-turn)
 - `kilo_spec()` → `kilo run --format json --auto` (positional prompt, `--session` resume)
 - `opencode_spec()` → `opencode run` (positional prompt, `--session` resume)
 
 ## Starting a worker
 
+There is one entrypoint per worker type. Each accepts
+`--identity --repo --nats-url [--model]` (`--nats-url` defaults to `$NATS_URL`)
+and reads NATS auth from the `NATS_*` env vars (`nats_connect.py`). The
+supervisor's table, `worker_backends/providers.py`, is the source of truth.
+`tests/python/test_worker_entrypoints.py` starts every listed type with the
+supervisor's argv against fake CLIs and requires a reply-contract answer.
+
+| Provider id | Entrypoint | Needs |
+|---|---|---|
+| `claude` | `claude_worker.py` | `claude` CLI |
+| `codex` | `codex_worker.py` | `codex` CLI |
+| `grok` | `grok_acp_worker.py` | `grok` (`$GROK_BIN`) |
+| `hermes` | `hermes_acp_worker.py` | `hermes` (`$HERMES_BIN`) |
+| `agy` | `agy_worker.py` | `agy` |
+| `cursor` | `cursor_worker.py` | `CURSOR_API_KEY` + `make setup-extras` (cursor-sdk) |
+| `kilo` | `kilo_worker.py` | `kilo` |
+| `kilo-acp` | `kilo_acp_worker.py` | a running `kilo acp --port` server (`--port` / `$KILO_ACP_PORT`) |
+| `opencode` | `opencode_worker.py` | `opencode` |
+| `opencode-acp` | `opencode_acp_worker.py` | `opencode` (`$OPENCODE_BIN`) |
+| `echo` | `echo_worker.py` | nothing (testing) |
+
+Not spawned by the supervisor, but still usable by hand: `grok_worker.py`
+(headless `grok -p`) and `hermes_worker.py` (`hermes chat -Q`).
+
 ```bash
-# Claude Code / Codex (see sections below)
 .venv/bin/python claude_worker.py --identity claude-1 --repo /path/to/repo
 .venv/bin/python codex_worker.py  --identity codex-1  --repo /path/to/repo
-
-# Python (any backend)
-python3 cursor_worker.py --identity cursor-worker-1 --repo /path/to/repo
-python3 hermes_acp_worker.py --identity hermes-worker-1
-python3 grok_worker.py --identity grok-worker-1          # headless -p
-python3 grok_acp_worker.py --identity grok-acp-1         # ACP stdio sessions
-python3 kilo_worker.py --identity kilo-worker-1           # Kilo CLI
-python3 opencode_worker.py --identity opencode-worker-1   # OpenCode CLI
-
-# Universal JS entrypoint
-node hub_worker.js --type cursor --identity cursor-worker-1
+.venv/bin/python hermes_acp_worker.py --identity hermes-1 --repo /path/to/repo
 
 # Remote agent over WebSocket (distributed teams)
 python3 remote_agent_adapter.py \
@@ -341,7 +397,7 @@ python3 agy_worker.py --identity agy-worker-1 --model <model>
 
 ### Cursor
 
-**Requires:** Cursor SDK (`@cursor/sdk` npm package).
+**Requires:** the Python `cursor-sdk` package (`make setup-extras`) and `CURSOR_API_KEY`.
 
 **Worker example:**
 ```bash
@@ -351,6 +407,17 @@ python3 cursor_worker.py --identity cursor-worker-1 --repo /path/to/repo
 ### Echo (testing)
 
 Built-in echo backend for infrastructure testing — no model calls.
+
+### JS workers (removed)
+
+`worker.js` and `hub_worker.js` (Node + `@cline/sdk` 0.0.x) were removed in
+iteration 2. Only `--type cline` ever worked; `agy`, `hermes` and `cursor`
+threw "Unsupported type". They broke the reply contract: they sent two
+results (task channel plus a DM), DM'd status, read the task channel from
+`meta.reply_to`, never registered, had no auth, and couldn't cancel. They had
+no tests and the supervisor never spawned them. Every type they advertised has
+a Python worker above. A Cline worker, if wanted, belongs as a HeadlessCli
+preset over the `cline` CLI.
 
 ```bash
 python3 echo_worker.py --identity echo-worker-1

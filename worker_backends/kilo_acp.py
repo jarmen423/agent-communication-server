@@ -24,10 +24,8 @@ import logging
 import os
 from typing import Any
 
-from worker_backends.acp_http import (
-    AcpHttpBackend,
-    AcpHttpError,
-)
+from worker_backends.acp_http import AcpHttpError
+from worker_backends.acp_http_backend import AcpHttpBackend
 
 logger = logging.getLogger(__name__)
 

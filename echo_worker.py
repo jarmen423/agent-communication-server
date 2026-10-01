@@ -7,6 +7,7 @@ Requires the repo venv (see CONTRIBUTING.md):
   .venv/bin/python echo_worker.py --identity echo-1
 """
 import asyncio
+import os
 import sys
 
 try:
@@ -30,7 +31,7 @@ def echo_run(prompt: str, ctx: dict) -> tuple[str, dict]:
 
 async def main():
     identity = "echo-worker-1"
-    nats_url = "nats://127.0.0.1:4222"
+    nats_url = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
 
     # Parse minimal args
     for i, arg in enumerate(sys.argv):

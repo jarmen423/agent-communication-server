@@ -4,6 +4,8 @@
 Env:
   FAKE_CLAUDE_MODE      ok (default) | error | error_exit0 | sleep | nonzero_plain
   FAKE_CLAUDE_ARGV_LOG  append this invocation's argv (JSON) to the file
+  FAKE_CLAUDE_PIDFILE   in sleep mode: spawn a grandchild `sleep` and write
+                        {"pid", "child"} (JSON) here, to prove group kills
 """
 import json
 import os
@@ -37,6 +39,13 @@ emit({"type": "system", "subtype": "init", "session_id": sid, "model": "fake-mod
       "cwd": os.getcwd(), "permissionMode": argv[argv.index("--permission-mode") + 1]})
 
 if mode == "sleep":
+    pidfile = os.environ.get("FAKE_CLAUDE_PIDFILE")
+    if pidfile:
+        import subprocess
+        child = subprocess.Popen(["sleep", "300"])
+        with open(pidfile + ".tmp", "w") as f:
+            json.dump({"pid": os.getpid(), "child": child.pid}, f)
+        os.replace(pidfile + ".tmp", pidfile)
     time.sleep(300)
 if mode == "nonzero_plain":
     sys.stderr.write("fake claude: auth expired\n")

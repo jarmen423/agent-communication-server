@@ -23,7 +23,7 @@ if __name__ == "__main__":
     p.add_argument("--model", default=None, help="e.g. anthropic/claude-sonnet-4.5")
     p.add_argument("--kilo-bin", default="kilo", help="path to kilo binary")
     p.add_argument("--repo", default=os.getcwd())
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--channel", default=None)
     args = p.parse_args()
 
@@ -35,14 +35,17 @@ if __name__ == "__main__":
     backend = HeadlessCliBackend(spec)
 
     install_worker_signal_handlers()  # SIGTERM also stops the CLI's process group
-    asyncio.run(
-        run_worker(
-            WorkerConfig(
-                identity=args.identity,
-                backend=backend,
-                nats_url=args.nats_url,
-                log_prefix="kilo-worker",
-                broadcast_channel=args.channel,
+    try:
+        asyncio.run(
+            run_worker(
+                WorkerConfig(
+                    identity=args.identity,
+                    backend=backend,
+                    nats_url=args.nats_url,
+                    log_prefix="kilo-worker",
+                    broadcast_channel=args.channel,
+                )
             )
         )
-    )
+    except KeyboardInterrupt:
+        sys.exit(0)

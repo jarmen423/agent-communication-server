@@ -8,7 +8,8 @@ Listens (request-reply) on:
   hub.worker.models  {provider}            — live model list for any provider
   hub.worker.providers {}                  — catalog of model sources
 
-Maps provider ids (from arcade AgentDock) → worker entrypoints under this repo.
+Maps provider ids (from arcade AgentDock) → worker entrypoints under this repo
+(``worker_backends/providers.py``, re-exported here as ``PROVIDER_CMDS``).
 Each child logs to .tools/run/workers/<identity>.log, is restarted with
 bounded backoff if it crashes, and its process group is terminated when the
 supervisor exits.
@@ -39,6 +40,7 @@ except ModuleNotFoundError:
     )
     sys.exit(1)
 
+from worker_backends.providers import PROVIDER_CMDS, worker_argv
 from worker_backends.supervision import (
     Child,
     RestartPolicy,
@@ -55,23 +57,6 @@ REPO = Path(__file__).resolve().parent
 PY = sys.executable
 DEFAULT_LOG_DIR = REPO / ".tools" / "run" / "workers"
 READY_TIMEOUT_SEC = 30.0
-
-# provider_id → [script, *fixed args]; python / identity / repo / nats_url /
-# model are filled in at spawn time.
-PROVIDER_CMDS: dict[str, list[str]] = {
-    "claude": ["claude_worker.py"],
-    "codex": ["codex_worker.py"],
-    "grok": ["grok_acp_worker.py", "--timeout", "2400"],
-    "hermes": ["hermes_acp_worker.py"],
-    "echo": ["echo_worker.py"],
-    "agy": ["agy_worker.py"],
-    "cursor": ["cursor_worker.py"],
-    "kilo": ["kilo_worker.py"],
-    "kilo-acp": ["kilo_acp_worker.py"],
-    "opencode": ["opencode_worker.py"],
-    "opencode-acp": ["opencode_acp_worker.py"],
-}
-
 
 class Supervisor:
     def __init__(
@@ -113,15 +98,8 @@ class Supervisor:
               flush=True)
 
     def _cmd(self, provider: str, identity: str, model: str | None = None) -> list[str]:
-        base = PROVIDER_CMDS.get(provider)
-        if not base:
-            raise ValueError(f"unknown provider: {provider}")
-        script, *fixed = base
-        argv = [self.python, str(self.script_dir / script), *fixed,
-                "--identity", identity, "--repo", str(self.repo), "--nats-url", self.nats_url]
-        if model:
-            argv.extend(["--model", model])
-        return argv
+        return worker_argv(provider, identity, python=self.python, script_dir=self.script_dir,
+                           repo=self.repo, nats_url=self.nats_url, model=model)
 
     # ── readiness ──────────────────────────────────────────────────────
 

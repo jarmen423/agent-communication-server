@@ -7,6 +7,8 @@
 //!   hub-delegate --to worker-1 --prompt "implement phase 3"
 //!   hub-delegate --to worker-1 --prompt "fix the bug" --timeout 120
 //!   hub-delegate --to worker-1 --prompt "review this" --verbose
+//!   hub-delegate --to worker-1 --prompt-file task.md      # no 128 KiB argv limit
+//!   git diff | hub-delegate --to worker-1 --prompt -      # prompt from stdin
 //!   hub-delegate --to worker-1 --prompt "do work" --no-wait   # fire and forget
 //!
 //! Flow:
@@ -20,15 +22,28 @@
 //!   6. hub-delegate takes the first `message` whose meta.reply_to or
 //!      payload.task_id equals the task id, and prints it
 //!
-//! Exit codes: 0 done · 1 worker reported an error · 2 timeout · 3 channel closed
+//! Ctrl-C (refocus-iteration-2.md §4.2): the first one DMs the worker
+//! `kind = control {"action": "cancel", "task_id"}` and waits up to 10s for
+//! the `cancelled` result; a second Ctrl-C exits at once.
+//!
+//! stdout carries only the result; all logs and progress go to stderr.
+//!
+//! Exit codes: 0 done · 1 worker reported an error · 2 timeout · 3 channel
+//! closed · 4 cancelled · 130 interrupted without a cancel confirmation
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use nats_hub::client::is_task_result;
 use nats_hub::{Envelope, HubClient, MessageKind};
+use std::io::Read;
+use std::path::PathBuf;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
+
+/// How long the first Ctrl-C waits for the worker's `cancelled` result.
+const CANCEL_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Parser)]
 #[command(
@@ -40,9 +55,17 @@ struct Args {
     #[arg(long)]
     to: String,
 
-    /// The prompt/task to send to the worker
-    #[arg(long)]
-    prompt: String,
+    /// The prompt/task to send to the worker (`-` reads it from stdin)
+    #[arg(
+        long,
+        required_unless_present = "prompt_file",
+        conflicts_with = "prompt_file"
+    )]
+    prompt: Option<String>,
+
+    /// Read the prompt from this file (avoids the command-line length limit)
+    #[arg(long, value_name = "PATH")]
+    prompt_file: Option<PathBuf>,
 
     /// NATS server URL
     #[arg(long, default_value = "nats://127.0.0.1:4222")]
@@ -65,13 +88,36 @@ struct Args {
     from: String,
 }
 
+/// The prompt from `--prompt TEXT`, `--prompt -` (stdin) or `--prompt-file`.
+fn read_prompt(args: &Args) -> Result<String> {
+    let prompt = match (&args.prompt, &args.prompt_file) {
+        (_, Some(path)) => std::fs::read_to_string(path)
+            .with_context(|| format!("reading --prompt-file {}", path.display()))?,
+        (Some(p), None) if p == "-" => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("reading the prompt from stdin")?;
+            buf
+        }
+        (Some(p), None) => p.clone(),
+        (None, None) => anyhow::bail!("--prompt or --prompt-file is required"),
+    };
+    anyhow::ensure!(!prompt.trim().is_empty(), "the prompt is empty");
+    Ok(prompt)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Logs on stderr: stdout is the result, so `x=$(hub-delegate …)` works
+    // even with RUST_LOG set.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
 
     let args = Args::parse();
+    let prompt = read_prompt(&args)?;
 
     // Generate a short task UUID for the task channel
     let task_uuid = uuid::Uuid::new_v4();
@@ -81,7 +127,8 @@ async fn main() -> Result<()> {
     info!(
         to = %args.to,
         task_channel = %task_channel,
-        prompt = %args.prompt.chars().take(80).collect::<String>(),
+        prompt_len = prompt.len(),
+        prompt = %prompt.chars().take(80).collect::<String>(),
         "delegating task"
     );
 
@@ -96,7 +143,7 @@ async fn main() -> Result<()> {
     // The channel travels in payload.task_channel; meta.reply_to is only
     // ever a message id (rule 2), so it stays unset on the task itself.
     let payload = serde_json::json!({
-        "prompt": args.prompt,
+        "prompt": prompt,
         "task_channel": task_channel,
     });
 
@@ -109,6 +156,7 @@ async fn main() -> Result<()> {
     .to(&args.to);
 
     let task_id = env.meta.id.clone();
+    let mut interrupts = Interrupts::new()?;
     client.send(&env).await?;
     info!(%task_id, "task sent to {}", args.to);
 
@@ -118,30 +166,50 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let deadline =
-        (args.timeout > 0).then(|| tokio::time::Instant::now() + Duration::from_secs(args.timeout));
+    let mut deadline =
+        (args.timeout > 0).then(|| Instant::now() + Duration::from_secs(args.timeout));
+    let mut cancel_sent = false;
+    let wait_until = |d: Option<Instant>| async move {
+        match d {
+            Some(d) => tokio::time::sleep_until(d).await,
+            None => std::future::pending().await,
+        }
+    };
 
     let result = loop {
-        let recv = match deadline {
-            Some(d) => match tokio::time::timeout_at(d, task_rx.recv()).await {
-                Ok(r) => r,
-                Err(_) => {
-                    eprintln!(
-                        "\n[hub-delegate] TIMEOUT after {}s — no reply from {to}",
-                        args.timeout,
-                        to = args.to
-                    );
-                    let _ = client.drain().await;
-                    std::process::exit(2);
+        let recv = tokio::select! {
+            recv = task_rx.recv() => recv,
+            _ = wait_until(deadline) => {
+                if cancel_sent {
+                    eprintln!("\n[hub-delegate] no cancel confirmation from {} within {}s", args.to, CANCEL_WAIT.as_secs());
+                    match exit(&client, 130).await {}
                 }
-            },
-            None => task_rx.recv().await,
+                eprintln!(
+                    "\n[hub-delegate] TIMEOUT after {}s — no reply from {to}",
+                    args.timeout,
+                    to = args.to
+                );
+                match exit(&client, 2).await {}
+            }
+            () = interrupts.recv() => {
+                if cancel_sent {
+                    eprintln!("\n[hub-delegate] interrupted again — exiting without waiting");
+                    match exit(&client, 130).await {}
+                }
+                eprintln!(
+                    "\n[hub-delegate] cancelling task {task_id} on {} (Ctrl-C again to exit now)",
+                    args.to
+                );
+                send_cancel(&client, &args.to, &task_channel, &task_id).await;
+                cancel_sent = true;
+                deadline = Some(Instant::now() + CANCEL_WAIT);
+                continue;
+            }
         };
 
         let Some(env) = recv else {
             eprintln!("\n[hub-delegate] task channel closed unexpectedly");
-            let _ = client.drain().await;
-            std::process::exit(3);
+            match exit(&client, 3).await {}
         };
 
         // Rule 5: the result is the first `message` correlated to our task;
@@ -162,18 +230,68 @@ async fn main() -> Result<()> {
         .unwrap_or("done");
     let text = |key: &str| result.payload.get(key).and_then(|v| v.as_str());
 
-    if status == "error" {
-        let err = text("error")
-            .or_else(|| text("result"))
-            .unwrap_or("unknown error");
-        eprintln!("\n[hub-delegate] task failed: {err}");
-        let _ = client.drain().await;
-        std::process::exit(1);
+    match status {
+        "error" => {
+            let err = text("error")
+                .or_else(|| text("result"))
+                .unwrap_or("unknown error");
+            eprintln!("\n[hub-delegate] task failed: {err}");
+            match exit(&client, 1).await {}
+        }
+        "cancelled" => {
+            eprintln!("\n[hub-delegate] task cancelled by {}", result.meta.from);
+            match exit(&client, 4).await {}
+        }
+        _ => {}
     }
 
     println!("{}", text("result").unwrap_or("no result field"));
     let _ = client.drain().await;
     Ok(())
+}
+
+/// DM the worker the §4.2 cancel request for `task_id`.
+async fn send_cancel(client: &HubClient, worker: &str, channel: &str, task_id: &str) {
+    let cancel = Envelope::new(
+        client.identity(),
+        channel,
+        MessageKind::Control,
+        serde_json::json!({"action": "cancel", "task_id": task_id}),
+    )
+    .to(worker);
+    if let Err(e) = client.send(&cancel).await {
+        eprintln!("[hub-delegate] failed to send cancel: {e:#}");
+    }
+}
+
+/// Drain the connection (flushes pending publishes) and exit.
+async fn exit(client: &HubClient, code: i32) -> std::convert::Infallible {
+    let _ = client.drain().await;
+    std::process::exit(code);
+}
+
+/// SIGINT as a stream, installed before the task is sent so no Ctrl-C is
+/// missed (a fresh `ctrl_c()` per wait could drop one between waits).
+struct Interrupts {
+    #[cfg(unix)]
+    sig: tokio::signal::unix::Signal,
+}
+
+impl Interrupts {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            #[cfg(unix)]
+            sig: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .context("installing the SIGINT handler")?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        self.sig.recv().await;
+        #[cfg(not(unix))]
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// `--verbose`: print a progress envelope from the task channel to stderr.

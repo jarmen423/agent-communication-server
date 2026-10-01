@@ -58,7 +58,7 @@ async def main() -> None:
     p.add_argument("--identity", default="cursor-worker-1")
     p.add_argument("--model", default="composer-2.5")
     p.add_argument("--repo", default=os.getcwd())
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--channel", default=None)
     args = p.parse_args()
     api_key = get_api_key()
