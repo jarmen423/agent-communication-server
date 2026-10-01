@@ -628,3 +628,43 @@ async fn wave_cancel_marks_tasks_and_dms_workers() {
 
     hub.kill().await.unwrap();
 }
+
+/// Regression (iteration-2 integration): since T1, workers heartbeat on the
+/// bound `hub.presence.<identity>` subject. The orchestrator must count those,
+/// or a live worker running a long task without wave events is failed as
+/// "silent" once the liveness TTL passes.
+#[tokio::test]
+async fn bound_heartbeats_keep_long_running_task_alive() {
+    let _guard = STACK_LOCK.lock().unwrap();
+    let Some(stack) = TestStack::new().await else {
+        eprintln!("skipping: nats-server/hub-server binary not found");
+        return;
+    };
+    let mut hub = stack.start_hub();
+    stack.wait_hub().await;
+
+    let api = ApiClient::connect(&stack.nats_url).await.unwrap();
+    let w1 = HubClient::connect(&stack.nats_url, "w1").await.unwrap();
+    let mut inbox_w1 = w1.subscribe_inbox().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    create_and_spawn(&api, "w-alive", vec![task("t1", "w1", &[], None)]).await;
+    recv_session_start(&mut inbox_w1, "t1", 10).await;
+
+    // Work "silently" for well past the 3s TTL, heartbeating only (bound subject).
+    for _ in 0..8 {
+        w1.heartbeat().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let snap = wave_status(&api, "w-alive").await;
+    assert_eq!(
+        task_status(&snap, "t1"),
+        "running",
+        "a heartbeating worker must not be failed for silence: {snap}"
+    );
+
+    emit_task_event(&w1, "w-alive", "t1", "completed", json!({"result": "ok"})).await;
+    wait_status(&api, "w-alive", 15, |s| s["wave"]["status"] == "completed").await;
+
+    hub.kill().await.unwrap();
+}

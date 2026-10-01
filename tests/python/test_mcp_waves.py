@@ -112,6 +112,14 @@ def _worker_env(task_id: str, wave_id: str, sender: str,
     }
 
 
+async def _publish_as(nc, sender: str, channel: str, env: dict) -> None:
+    """Publish as `sender` on its bound subject (contract §4.1). The router
+    stamps meta.from from the subject, so a test that wants an event to count
+    as the worker's must actually send it as the worker."""
+    await nc.publish(f"hub.pub.{sender}.{channel}", json.dumps(env).encode())
+    await nc.flush()
+
+
 @live
 def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
     """create → spawn → worker events → wave completes; and a forged
@@ -170,7 +178,7 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
         # A foreign sender cannot complete ta.
         forged = _worker_env("ta", wave_id, "mallory", "completed",
                              {"result": "forged"})
-        await conn.publish(f"wave.{wave_id}.task.ta", forged)
+        await _publish_as(probe, "mallory", f"wave.{wave_id}.task.ta", forged)
         await asyncio.sleep(0.8)
         snap = await hub_queries._wave_status({"wave_id": wave_id})
         assert snap["ok"]
@@ -179,12 +187,12 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
 
         # The real worker verifies then completes; tb dispatches and its
         # worker completes → wave completes.
-        await conn.publish(f"wave.{wave_id}.task.ta",
-                           _worker_env("ta", wave_id, w1, "milestone",
-                                       {"name": "verify_passed"}))
-        await conn.publish(f"wave.{wave_id}.task.ta",
-                           _worker_env("ta", wave_id, w1, "completed",
-                                       {"result": "ok"}))
+        await _publish_as(probe, w1, f"wave.{wave_id}.task.ta",
+                          _worker_env("ta", wave_id, w1, "milestone",
+                                      {"name": "verify_passed"}))
+        await _publish_as(probe, w1, f"wave.{wave_id}.task.ta",
+                          _worker_env("ta", wave_id, w1, "completed",
+                                      {"result": "ok"}))
 
         snap = None
         deadline = asyncio.get_running_loop().time() + 15
@@ -197,9 +205,9 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
             await asyncio.sleep(0.25)
         assert tasks["tb"]["status"] == "running", f"tb never dispatched: {snap}"
 
-        await conn.publish(f"wave.{wave_id}.task.tb",
-                           _worker_env("tb", wave_id, "w2-x", "completed",
-                                       {"result": "ok"}))
+        await _publish_as(probe, "w2-x", f"wave.{wave_id}.task.tb",
+                          _worker_env("tb", wave_id, "w2-x", "completed",
+                                      {"result": "ok"}))
         deadline = asyncio.get_running_loop().time() + 15
         while asyncio.get_running_loop().time() < deadline:
             snap = await hub_queries._wave_status({"wave_id": wave_id})

@@ -228,6 +228,13 @@ impl ApiAuthz {
         let Caller::Bound(identity) = caller else {
             return resp; // legacy caller: permissive
         };
+        if !self.enforcing() {
+            // Neither --require-bound-identity nor --api-admin: the hub is
+            // permissive for everyone (module docs). Bound callers are the
+            // default for every client now, so scoping them here would make
+            // a default hub hide waves/sessions/DMs from their own operators.
+            return resp;
+        }
         if self.is_admin(identity) {
             return resp; // admins bypass scoping
         }
