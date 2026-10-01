@@ -325,53 +325,55 @@ async def _create_wave(args: dict) -> dict:
     if (bad := _from_guard(args)) is not None:
         return bad
     wave_id = uuid.uuid4().hex[:8]
-    now = conn.now()
-    result = await conn.api_request("wave.create", {
+    wave = {
         "wave_id": wave_id,
         "goal": args["goal"],
-        "status": "active",
+        "status": "pending",
         "orchestrator": conn.identity(),
-        "created_at": now,
-    })
-    if not result.get("ok"):
-        return result
-
-    tasks_created = []
+        "created_at": conn.now(),
+    }
+    tasks: list[dict[str, Any]] = []
     for t in args["tasks"]:
-        task_id = t.get("task_id") or uuid.uuid4().hex[:8]
-        record: dict[str, Any] = {
-            "wave_id": wave_id,
-            "task_id": task_id,
+        tasks.append({
+            "task_id": t.get("task_id") or uuid.uuid4().hex[:8],
             "worker": t["worker"],
             "goal": t["goal"],
-            "status": "pending",
             "write_scope": t.get("write_scope") or [],
             "dependencies": t.get("dependencies") or [],
             "handoff_path": t.get("handoff_path"),
             "verify_cmd": t.get("verify_cmd"),
-            "created_at": now,
-        }
-        r = await conn.api_request("wave.create_task", record)
-        tasks_created.append({
-            "task_id": task_id, "worker": t["worker"], "goal": t["goal"],
-            "ok": r.get("ok", False), "error": r.get("error"),
         })
-
-    return {"ok": True, "data": {"wave_id": wave_id, "tasks": tasks_created}}
+    # One atomic op: server-side validation (incl. dependency cycles)
+    # runs before anything is persisted.
+    result = await conn.api_request(
+        "wave.create", {"wave": wave, "tasks": tasks})
+    if not result.get("ok"):
+        return result
+    result["data"]["orchestration"] = "hub-server"
+    return result
 
 
 async def _spawn_wave(args: dict) -> dict:
-    try:
-        tracker = await hub().spawn_wave(args["wave_id"],
-                                         timeout=float(args.get("timeout", 3600)))
-    except Exception as e:
-        return _err(f"spawn_wave: {e}")
-    return {"ok": True, "data": {
-        "wave_id": tracker.wave_id,
-        "state": tracker.state,
-        "tasks": {tid: t.get("status") for tid, t in tracker.tasks.items()},
-        "note": "wave spawns in-process; this MCP server must stay alive until it finishes",
-    }}
+    """Hand the wave to the hub-server orchestrator and return.
+
+    The server dispatches ready tasks, enforces worker liveness, and drives
+    the wave to a terminal status — this MCP server does not need to stay
+    alive for the wave to finish.
+    """
+    if (bad := _from_guard(args)) is not None:
+        return bad
+    return await conn.api_request("wave.spawn", {
+        "wave_id": args["wave_id"],
+        "timeout_secs": int(args.get("timeout", 3600)),
+    })
+
+
+async def _cancel_wave(args: dict) -> dict:
+    """Cancel a wave: non-terminal tasks → cancelled; running workers get
+    the §4.2 cancel DM. Errors surface from the orchestrator."""
+    if (bad := _from_guard(args)) is not None:
+        return bad
+    return await conn.api_request("wave.cancel", {"wave_id": args["wave_id"]})
 
 
 HANDLERS = {
@@ -393,5 +395,6 @@ HANDLERS = {
     "session_replies": _session_replies,
     "create_wave": _create_wave,
     "spawn_wave": _spawn_wave,
+    "cancel_wave": _cancel_wave,
     **QUERY_HANDLERS,
 }

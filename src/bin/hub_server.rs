@@ -87,6 +87,13 @@ struct Args {
     /// is merged in.
     #[arg(long = "api-admin")]
     api_admin: Vec<String>,
+
+    /// Worker liveness TTL (seconds) for wave orchestration: a worker
+    /// silent longer than this loses its running wave tasks. Falls back
+    /// to env NATS_HUB_WAVE_LIVENESS_SECS, then 90.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    wave_liveness_secs: Option<u64>,
 }
 
 /// Spawn a minimal HTTP/1.0 server that responds to `GET /metrics` with the
@@ -280,6 +287,36 @@ async fn main() -> Result<()> {
                 }
             });
             info_log("query API listening on hub.api.>");
+
+            // Wave orchestration lives in hub-server: it owns wave state
+            // machines, resumes running waves after a restart, and enforces
+            // worker liveness for wave tasks.
+            let liveness_secs = args
+                .wave_liveness_secs
+                .or_else(|| {
+                    std::env::var("NATS_HUB_WAVE_LIVENESS_SECS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                })
+                .unwrap_or(nats_hub::orchestrator::DEFAULT_LIVENESS_SECS);
+            let orch_config = nats_hub::orchestrator::OrchestratorConfig {
+                liveness_ttl: std::time::Duration::from_secs(liveness_secs),
+            };
+            match nats_hub::orchestrator::WaveOrchestrator::start(
+                storage.clone(),
+                &args.nats_url,
+                orch_config,
+            )
+            .await
+            {
+                Ok(_) => info_log(&format!(
+                    "wave orchestrator running (worker liveness TTL {liveness_secs}s)"
+                )),
+                Err(e) => eprintln!(
+                    "[hub-server] wave orchestrator failed to start: {e:#} \
+                     (wave.spawn/cancel ops will return errors)"
+                ),
+            }
 
             let cp = cp.with_storage(storage);
             return cp.run().await;

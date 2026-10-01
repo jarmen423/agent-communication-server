@@ -66,6 +66,7 @@
 pub mod client;
 pub mod connect_opts;
 pub mod events;
+pub mod orchestrator;
 pub mod protocol;
 pub mod query_api;
 pub mod query_api_client;
@@ -115,7 +116,7 @@ pub use analytics::{
 // Always available — no storage dependency.
 pub use analytics::metrics::MetricsCollector;
 
-pub use wave::{evaluate_merge_gate, spawn_wave, validate_tasks, SpawnOutcome, WaveTaskInput};
+pub use wave::{evaluate_merge_gate, validate_tasks, WaveTaskInput};
 
 pub use query_api::{ApiAuthz, ApiRequest, ApiResponse, Caller};
 pub use query_api_client::ApiClient;

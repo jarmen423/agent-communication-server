@@ -55,6 +55,7 @@ pub struct WaveTaskRow {
     pub started_at: Option<DbTime>,
     pub completed_at: Option<DbTime>,
     pub result: Option<String>,
+    pub verify_result: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,13 +81,16 @@ pub struct WaveTaskRowWithId {
     completed_at: Option<StoredTime>,
     #[serde(default)]
     result: Option<String>,
+    #[serde(default)]
+    verify_result: Option<String>,
 }
 
 const WAVE_COLUMNS: &str =
     "id, wave_id, goal, status, orchestrator, created_at, closed_at, metadata";
 
 const WAVE_TASK_COLUMNS: &str = "id, wave_id, task_id, worker, goal, status, write_scope, \
-    dependencies, handoff_path, verify_cmd, created_at, started_at, completed_at, result";
+    dependencies, handoff_path, verify_cmd, created_at, started_at, completed_at, result, \
+    verify_result";
 
 /// Legacy rows used `""` for "unset".
 fn non_empty(s: Option<String>) -> Option<String> {
@@ -136,6 +140,7 @@ impl WaveTaskRowWithId {
             handoff_path: non_empty(self.handoff_path),
             verify_cmd: non_empty(self.verify_cmd),
             result: non_empty(self.result),
+            verify_result: non_empty(self.verify_result),
         })
     }
 }
@@ -167,6 +172,7 @@ pub fn wave_task_to_row(record: &WaveTaskRecord) -> WaveTaskRow {
         started_at: record.started_at.map(db_time),
         completed_at: record.completed_at.map(db_time),
         result: record.result.clone(),
+        verify_result: record.verify_result.clone(),
     }
 }
 
@@ -188,7 +194,7 @@ pub async fn create_wave(db: &Db, wave: WaveRecord) -> Result<()> {
 pub async fn update_wave_status(db: &Db, wave_id: &str, status: &str) -> Result<()> {
     debug!(%wave_id, %status, "updating wave status");
 
-    let closing = status == "completed" || status == "failed";
+    let closing = status == "completed" || status == "failed" || status == "cancelled";
     let sql = if closing {
         "UPDATE type::thing('waves', $id) SET status = $status, closed_at = $now"
     } else {
@@ -260,7 +266,7 @@ pub async fn update_wave_task_status(
     let mut sql = String::from("UPDATE type::thing('wave_tasks', $id) SET status = $status");
     let stamp = match status {
         "running" => Some("started_at"),
-        "done" | "failed" => Some("completed_at"),
+        "done" | "failed" | "cancelled" => Some("completed_at"),
         _ => None,
     };
     if let Some(field) = stamp {
