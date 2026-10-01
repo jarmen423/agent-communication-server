@@ -1,7 +1,7 @@
 //! TUI module — ratatui-based operations dashboard for nats-hub.
 //!
 //! Feature-gated behind `tui` (pulls ratatui + crossterm).
-//! See `docs/TUI_PLAN.md` for the full design.
+//! See `docs/archive/TUI_PLAN.md` for the full design.
 
 pub mod api;
 pub mod app;

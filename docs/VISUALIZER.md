@@ -12,7 +12,7 @@ send messages, start/stop agents, and watch live progress events.
                                    Static file server (visualizer HTML/JS)
 ```
 
-The WS bridge (`src/ws_bridge.rs`) is embedded in `hub-server`. When you pass
+The WS bridge (`src/ws_bridge/`) is embedded in `hub-server`. When you pass
 `--ws-addr`, hub-server opens a TCP listener that:
 
 1. Serves static files (the visualizer HTML/JS/CSS) from `--static-dir`

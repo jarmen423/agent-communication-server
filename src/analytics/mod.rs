@@ -6,7 +6,7 @@
 //! `envelopes` history. It does NOT write to the database and does NOT require
 //! any schema change — every signal is already in `EnvelopeRecord`.
 //!
-//! See `docs/PHASE4_PLAN.md` (sub-phase 4a) for the design rationale.
+//! See `docs/archive/PHASE4_PLAN.md` (sub-phase 4a) for the design rationale.
 
 use anyhow::Result;
 use async_trait::async_trait;

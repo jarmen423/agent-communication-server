@@ -1,0 +1,244 @@
+name: release
+
+# Builds release binaries for linux x86_64, linux arm64 and macOS arm64,
+# packages them (plus the Python remote-worker bundle) with SHA256SUMS, smoke-
+# tests both installers against the packaged assets, and — only for a pushed
+# `v*` tag — attaches everything to a GitHub Release.
+#
+#   tag push v*            → build + package + publish
+#   branch push (paths)    → dry run: build + package, never publish
+#   workflow_dispatch      → dry run by default; `dry_run: false` publishes only
+#                            when dispatched on a v* tag ref (re-run a release)
+#
+# See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    # Path filters don't apply to tag pushes; they limit branch dry runs to
+    # changes that can break the release pipeline.
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+      - "scripts/install_remote.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Asset version label for a dry run (default: v<Cargo version>-dryrun)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Build and package only; never publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Smaller downloads; release builds carry no debuginfo anyway.
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  meta:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: plan
+        name: Decide version + whether to publish
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          crate="v$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          publish=false
+          if [[ "$EVENT" == "push" && "$REF" == refs/tags/v* ]]; then
+            version="$REF_NAME"
+            if [[ "$version" != "$crate" && "$version" != "$crate"-* ]]; then
+              echo "::error::tag $version does not match Cargo.toml version $crate (bump Cargo.toml first)"
+              exit 1
+            fi
+            publish=true
+          elif [[ "$EVENT" == "workflow_dispatch" && "$INPUT_DRY_RUN" == "false" ]]; then
+            if [[ "$REF" != refs/tags/v* ]]; then
+              echo "::error::dry_run=false is only allowed on a v* tag ref (got $REF). Push a tag to release."
+              exit 1
+            fi
+            version="$REF_NAME"
+            publish=true
+          else
+            version="${INPUT_VERSION:-${crate}-dryrun}"
+          fi
+          if [[ ! "$version" =~ ^[A-Za-z0-9._+-]+$ ]]; then
+            echo "::error::invalid version label: $version"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "publish=$publish" >>"$GITHUB_OUTPUT"
+          echo "### release plan: \`$version\` — publish: **$publish**" >>"$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 → binaries need glibc ≥ 2.35 (Ubuntu 22.04+, Debian 12+).
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-latest }   # arm64 runner
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # No rust-cache here on purpose: caches written on a tag ref are only
+      # readable by that tag, so they would never be reused, and release
+      # artifacts should come from a clean build.
+
+      - name: System deps (RocksDB build)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev
+
+      - name: Build (release, all bins incl. hub-tui)
+        shell: bash
+        run: |
+          source scripts/dev/lib.sh   # bindgen header fix when needed; ./target
+          cargo build --release --locked --bins --features tui --target "$TARGET"
+
+      - name: Smoke-run every binary (--help)
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=0
+          for b in target/"$TARGET"/release/hub-*; do
+            [[ -f "$b" && -x "$b" && "$(basename "$b")" != *.* ]] || continue
+            "$b" --help >/dev/null
+            n=$((n + 1))
+          done
+          echo "ran --help on $n binaries"
+          (( n >= 15 ))
+
+      - name: Package
+        shell: bash
+        run: packaging/release/package.sh binaries "$VERSION" "$TARGET" "target/$TARGET/release" dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: checksums + install smoke test
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          merge-multiple: true
+          path: dist
+
+      - name: Remote-worker bundle + SHA256SUMS
+        run: |
+          packaging/release/package.sh remote-bundle "$VERSION" dist
+          packaging/release/package.sh checksums dist
+          cat dist/SHA256SUMS
+          test "$(wc -l < dist/SHA256SUMS)" -eq 4
+
+      - name: "Smoke: scripts/install_remote.sh from the packaged release"
+        run: |
+          export HOME="$(mktemp -d)"
+          bash scripts/install_remote.sh 127.0.0.1 --release-only \
+            --release-base-url "file://$PWD/dist"
+          "$HOME/bin/hub-delegate-remote" --help >/dev/null
+          ls -l "$HOME/.local/share/nats-hub/bin"
+
+      - name: "Smoke: packaging/remote/install.sh from the packaged bundle"
+        run: |
+          export HOME="$(mktemp -d)"
+          cp packaging/remote/install.sh "$HOME/install.sh"   # away from the checkout
+          bash "$HOME/install.sh" "$HOME/remote" --from-release "$VERSION" \
+            --release-base-url "file://$PWD/dist"
+          cd "$HOME/remote" && .venv/bin/python remote_agent_adapter.py --help >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        env:
+          PUBLISH: ${{ needs.meta.outputs.publish }}
+        run: |
+          {
+            echo "### assets for \`$VERSION\`"
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+            if [[ "$PUBLISH" != "true" ]]; then
+              echo "**Dry run** — nothing was published. Assets are in the \`release-assets\` artifact."
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: publish GitHub release
+    needs: [meta, assemble]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Create or update the release
+        run: |
+          set -euo pipefail
+          flags=()
+          [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/* --clobber
+          else
+            gh release create "$VERSION" dist/* --verify-tag \
+              --title "nats-hub $VERSION" --generate-notes "${flags[@]}"
+          fi
