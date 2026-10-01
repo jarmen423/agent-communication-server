@@ -1,22 +1,24 @@
-"""Worker-side session resume through the hub API (stub until T2 lands).
+"""Worker-side session resume through the hub API (T2's session durability).
 
 After a worker restart its in-memory sessions are gone, so a ``session_send``
 on ``channel.session.<id>`` reaches nobody. T2 persists each session's
 ``backend_ctx`` (Claude ``claude_session_id``, Codex ``codex_thread_id``,
 Cursor ``agent_id``, ACP session ids, ...) with the session record and
-returns it from ``session.get``. With resume enabled, the runtime:
+returns it from ``session.get`` (``data.session.backend_ctx``). The runtime
+(on ``hub.api.<identity>.<op>``; workers may write sessions they work on):
 
 1. on startup, lists this worker's active sessions (``session.list``
    ``{worker, status: "active"}``), resubscribes to each session channel, and
    hydrates ``backend_ctx`` from ``session.get``;
-2. on a ``session_send`` for a session it doesn't hold, fetches
-   ``backend_ctx`` the same way before running the turn;
-3. after every successful turn, saves the new ``backend_ctx`` (``SAVE_OP``).
+2. on a ``session_start`` or ``session_send`` for a session it doesn't hold,
+   fetches ``backend_ctx`` the same way before running the turn;
+3. whenever a turn creates or changes the backend session, saves the new
+   ``backend_ctx`` with ``session.set_backend_ctx``.
 
-Feature check: off unless ``NATS_HUB_SESSION_RESUME=1`` (or
-``WorkerConfig(session_resume=True)``), because until T2 merges
-``session.get`` returns no ``backend_ctx`` and ``SAVE_OP`` doesn't exist.
-Every call is best effort: API errors are logged, never raised into a turn.
+On by default; ``NATS_HUB_SESSION_RESUME=0`` (or
+``WorkerConfig(session_resume=False)``) turns it off. Every call is best
+effort: API errors (no hub-server, unknown session) are logged, never raised
+into a turn.
 """
 
 from __future__ import annotations
@@ -30,8 +32,7 @@ logger = logging.getLogger(__name__)
 RESUME_ENV = "NATS_HUB_SESSION_RESUME"
 GET_OP = "session.get"
 LIST_OP = "session.list"
-# T2 names the write op; this is the integration point to confirm at merge.
-SAVE_OP = "session.update_backend_ctx"
+SAVE_OP = "session.set_backend_ctx"
 
 # (op, params) -> hub.api response {"ok": bool, "data": ..., "error": ...}
 ApiRequest = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -39,7 +40,7 @@ ApiRequest = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 def resume_enabled(environ: dict[str, str] | None = None) -> bool:
     env = os.environ if environ is None else environ
-    return env.get(RESUME_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+    return env.get(RESUME_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def backend_ctx_from(resp: dict[str, Any]) -> dict[str, Any] | None:
@@ -90,9 +91,18 @@ def session_channel(record: dict[str, Any]) -> str:
     return meta.get("session_channel") or f"session.{record['session_id']}"
 
 
+def durable_ctx(ctx: dict[str, Any]) -> dict[str, Any]:
+    """What survives a restart: drop runtime-private keys (``_session_id``)
+    and ACP process generations (a restarted agent restarts the counter, so a
+    stale generation could falsely match; without it, ACP backends try
+    ``session/load``)."""
+    return {k: v for k, v in ctx.items()
+            if not k.startswith("_") and not k.endswith("_generation")}
+
+
 async def save_backend_ctx(api: ApiRequest, session_id: str, ctx: dict[str, Any]) -> None:
     try:
-        resp = await api(SAVE_OP, {"session_id": session_id, "backend_ctx": ctx})
+        resp = await api(SAVE_OP, {"session_id": session_id, "backend_ctx": durable_ctx(ctx)})
         if not resp.get("ok"):
             logger.debug("session %s: %s: %s", session_id, SAVE_OP, resp.get("error"))
     except Exception as e:  # noqa: BLE001

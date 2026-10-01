@@ -44,7 +44,7 @@ def fake_env(**extra: str) -> dict[str, str]:
 async def start_worker(nc, identity: str, argv: list[str], env: dict[str, str],
                        log: Path, within: float = 30.0) -> subprocess.Popen:
     """Spawn a worker and wait for its first `hub.register`."""
-    reg = await nc.subscribe("hub.register")
+    reg = await nc.subscribe("hub.register.*")
     await nc.flush()
     with open(log, "ab") as out:
         proc = subprocess.Popen(argv, cwd=REPO_ROOT, env=env, stdout=out,
@@ -83,7 +83,7 @@ async def send_task(nc, sender: str, worker: str, prompt: str) -> tuple[str, Any
     await nc.flush()
     env = make_envelope(sender, worker, channel, "message",
                         {"prompt": prompt, "task_channel": channel})
-    await nc.publish(f"hub.send.{channel}", env)
+    await nc.publish(f"hub.pub.{sender}.{channel}", env)
     await nc.flush()
     return json.loads(env)["meta"]["id"], sub
 
@@ -92,7 +92,7 @@ async def send_cancel(nc, sender: str, worker: str, task_id: str) -> None:
     channel = f"inbox.{worker}"
     env = make_envelope(sender, worker, channel, "control",
                         {"action": "cancel", "task_id": task_id})
-    await nc.publish(f"hub.send.{channel}", env)
+    await nc.publish(f"hub.pub.{sender}.{channel}", env)
     await nc.flush()
 
 

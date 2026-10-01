@@ -61,7 +61,7 @@ async fn recv_until(rx: &mut Rx, secs: u64, pred: impl Fn(&Envelope) -> bool) ->
 /// Spawn a worker and wait for its `hub.register`.
 async fn spawn_worker(url: &str, identity: &str, mut cmd: Command) -> Child {
     let probe = HubClient::connect(url, uniq("probe")).await.unwrap();
-    let mut reg = probe.subscribe_subject("hub.register").await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
     let child = cmd
         .current_dir(repo_root())
         .stdin(Stdio::null())
