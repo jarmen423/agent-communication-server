@@ -13,7 +13,14 @@ Hardening:
     offered ``options`` by *kind*, per ``permission_policy``;
   - when stdout hits EOF the backend is marked dead, pending requests fail
     with the stderr tail, and the next ``run()`` restarts the agent process
-    (sessions from the dead process are not reused).
+    (sessions from the dead process are not reused unless the subclass can
+    ``session/load`` them);
+  - cancelling a turn (hub cancel, refocus-iteration-2.md §4.2) sends the
+    ACP ``session/cancel`` notification and waits ``cancel_grace_sec`` for
+    the prompt to end; an agent that ignores it has its process group killed
+    (the next turn restarts it);
+  - progress goes to the handler of the turn holding the lock (captured per
+    turn from ``worker_backends.progress``), never to a concurrent turn.
 """
 
 from __future__ import annotations
@@ -25,6 +32,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from worker_backends.acp_permissions import (  # noqa: F401  (re-exported)
+    CLIENT_CAPABILITIES,
+    PERMISSION_POLICIES,
+    choose_permission_option,
+    permission_result,
+)
+from worker_backends.progress import current_progress_handler
 from worker_backends.proc import (
     StderrTail,
     drain_stream,
@@ -36,37 +50,9 @@ from worker_backends.proc import (
 
 logger = logging.getLogger(__name__)
 
-PERMISSION_POLICIES = ("allow_once", "allow_always", "reject")
-_POLICY_PREFERENCE = {
-    "allow_always": ("allow_always", "allow_once"),
-    "allow_once": ("allow_once", "allow_always"),
-    "reject": ("reject_once", "reject_always"),
-}
-CLIENT_CAPABILITIES: dict[str, Any] = {
-    "fs": {"readTextFile": False, "writeTextFile": False},
-    "terminal": False,
-}
 _MESSAGE_CHUNKS = ("agent_message_chunk", "agentMessageChunk")
 _THOUGHT_CHUNKS = ("agent_thought_chunk", "agentThoughtChunk")
 _TOOL_UPDATES = ("tool_call", "tool_call_update", "agent_tool_call", "tool_call_start")
-
-
-def choose_permission_option(options: Any, policy: str) -> str | None:
-    """Pick an ``optionId`` from ACP permission ``options`` by kind."""
-    if not isinstance(options, list):
-        return None
-    for kind in _POLICY_PREFERENCE.get(policy, ()):
-        for opt in options:
-            if isinstance(opt, dict) and opt.get("kind") == kind and opt.get("optionId"):
-                return str(opt["optionId"])
-    return None
-
-
-def permission_result(params: dict[str, Any], policy: str) -> dict[str, Any]:
-    chosen = choose_permission_option((params or {}).get("options"), policy)
-    if chosen:
-        return {"outcome": {"outcome": "selected", "optionId": chosen}}
-    return {"outcome": {"outcome": "cancelled"}}
 
 
 class AcpStdioBackend:
@@ -99,7 +85,9 @@ class AcpStdioBackend:
         self._alive = False
         self._chunks: list[str] = []
         self._lock = asyncio.Lock()
-        self._progress_handler: Any = None
+        self._progress_handler: Any = None  # fallback for direct callers
+        self._turn_handler: Any = None  # handler of the turn holding _lock
+        self.cancel_grace_sec = 5.0
         self._stream_buf = ""
         self._thought_buf = ""
         self._last_stream_emit = 0.0
@@ -123,6 +111,12 @@ class AcpStdioBackend:
 
     async def _on_resume(self, session_id: str, ctx: dict[str, Any]) -> None:
         """Called before a turn on an existing session (e.g. model switch)."""
+
+    async def _load_session(self, session_id: str) -> bool:
+        """Reattach a session from an earlier agent process (``session/load``).
+
+        Default: unsupported, so a fresh session is opened instead."""
+        return False
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -186,15 +180,15 @@ class AcpStdioBackend:
     # ── turns ──────────────────────────────────────────────────────────
 
     def set_progress_handler(self, handler) -> None:
-        """Optional async callback: handler(kind: str, data: dict)."""
+        """Fallback async callback handler(kind, data) for direct callers; the
+        runtime passes a per-turn handler via ``worker_backends.progress``."""
         self._progress_handler = handler
 
     def clear_progress_handler(self) -> None:
         self._progress_handler = None
-        self._stream_buf = ""
-        self._thought_buf = ""
 
     async def run(self, prompt: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        handler = current_progress_handler(self._progress_handler)
         async with self._lock:
             if not self.alive:
                 if self.generation:
@@ -202,7 +196,12 @@ class AcpStdioBackend:
                 await self.start()
             ctx = dict(ctx or {})
             gen_key = f"{self.session_ctx_key}_generation"
-            session_id = ctx.get(self.session_ctx_key) if ctx.get(gen_key) == self.generation else None
+            session_id = ctx.get(self.session_ctx_key)
+            if session_id and ctx.get(gen_key) != self.generation:
+                # From an earlier agent process (restart / persisted ctx).
+                session_id = session_id if await self._load_session(str(session_id)) else None
+                if session_id:
+                    ctx[gen_key] = self.generation
             if session_id:
                 await self._on_resume(session_id, ctx)
             else:
@@ -214,17 +213,47 @@ class AcpStdioBackend:
             self._chunks.clear()
             self._stream_buf = self._thought_buf = ""
             self._last_stream_emit = 0.0
-            result = await self._request("session/prompt", {
-                "sessionId": session_id,
-                "prompt": [{"type": "text", "text": prompt}],
-            }, timeout=self.request_timeout_sec)
+            self._turn_handler = handler
+            try:
+                result = await self._prompt(session_id, prompt)
+                # Flush any throttled tail so visualizers see the final partials.
+                if self._stream_buf:
+                    await self._emit_stream("message", "", force=True)
+                if self._thought_buf:
+                    await self._emit_stream("thought", "", force=True)
+                return self._final_text(result), ctx
+            finally:
+                self._turn_handler = None
+                self._stream_buf = self._thought_buf = ""
 
-            # Flush any throttled tail so visualizers see the final partials.
-            if self._stream_buf:
-                await self._emit_stream("message", "", force=True)
-            if self._thought_buf:
-                await self._emit_stream("thought", "", force=True)
-            return self._final_text(result), ctx
+    async def _prompt(self, session_id: str, prompt: str) -> Any:
+        req = asyncio.ensure_future(self._request("session/prompt", {
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": prompt}],
+        }, timeout=self.request_timeout_sec))
+        req.add_done_callback(lambda t: t.cancelled() or t.exception())  # always retrieved
+        try:
+            return await asyncio.shield(req)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._cancel_prompt(session_id, req))
+            raise
+
+    async def _cancel_prompt(self, session_id: str, req: asyncio.Future[Any]) -> None:
+        """ACP cancel: ``session/cancel``, then wait for the prompt to end;
+        an agent that ignores it gets its process group killed."""
+        try:
+            await self._send({"jsonrpc": "2.0", "method": "session/cancel",
+                              "params": {"sessionId": session_id}})
+            await asyncio.wait_for(asyncio.shield(req), timeout=self.cancel_grace_sec)
+            logger.info("[%s] turn cancelled (session/cancel)", self.log_label)
+            return
+        except (asyncio.TimeoutError, OSError) as e:
+            logger.warning("[%s] session/cancel not honoured (%s); killing the agent",
+                           self.log_label, type(e).__name__)
+        except Exception:  # noqa: BLE001 - the prompt ended with an error reply: honoured
+            return
+        req.cancel()
+        await self.close()
 
     def _final_text(self, result: Any) -> str:
         text = "".join(self._chunks).strip()
@@ -240,12 +269,13 @@ class AcpStdioBackend:
 
     async def _emit_stream(self, kind: str, text: str, *, force: bool = False) -> None:
         """Throttle streaming hub publishes so we don't flood NATS."""
-        if not self._progress_handler:
+        handler = self._turn_handler
+        if not handler:
             return
         now = time.monotonic()
         try:
             if kind == "tool":
-                await self._progress_handler("tool", {"text": text, "message": text})
+                await handler("tool", {"text": text, "message": text})
                 self._last_stream_emit = now
                 return
             attr = "_thought_buf" if kind == "thought" else "_stream_buf"
@@ -255,7 +285,7 @@ class AcpStdioBackend:
                 return
             due = (now - self._last_stream_emit) >= self._stream_min_interval
             if force or due or len(buf) >= self._stream_min_chars:
-                await self._progress_handler(
+                await handler(
                     "thought" if kind == "thought" else "message",
                     {"text": buf[-800:], "delta": text, "full_len": len(buf)},
                 )
