@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use crate::client::{AgentInfo, AgentRegistry};
-use crate::protocol::{subjects, Envelope};
+use crate::protocol::{subjects, valid_identity, Envelope};
 use crate::storage::{AgentFilter, AgentRecord, Storage};
 use crate::MetricsCollector;
 
@@ -23,7 +23,10 @@ mod routing;
 mod tests;
 
 pub use mirror::DEFAULT_MIRROR_CAPACITY;
-pub use routing::{channel_from_send_subject, route_subject, RoutingTable};
+pub use routing::{
+    bound_identity_subject, bound_send_subject, channel_from_send_subject, route_channel,
+    route_subject, RoutingTable,
+};
 
 use mirror::{MirrorOp, StorageMirror};
 
@@ -33,6 +36,10 @@ pub(crate) struct RouterCore {
     routing: RoutingTable,
     registry: AgentRegistry,
     metrics: Option<Arc<MetricsCollector>>,
+    /// When true, legacy self-asserted subjects (`hub.send.*`, `hub.register`,
+    /// `hub.presence`) are dropped instead of routed; only bound subjects
+    /// carrying the connection's identity are accepted.
+    require_bound: bool,
     /// Optional WS bridge broadcast channel. When set, every routed envelope
     /// is serialized to JSON and pushed to all connected visualizer clients.
     ws_event_tx: Option<crate::ws_bridge::EventTx>,
@@ -46,8 +53,43 @@ impl RouterCore {
             routing: RoutingTable::new(),
             registry: AgentRegistry::new(),
             metrics: None,
+            require_bound: false,
             ws_event_tx: None,
             mirror: OnceLock::new(),
+        }
+    }
+
+    /// A message arrived on a legacy, self-asserted subject. Either count it
+    /// and let the caller continue (compat mode) or count it and tell the
+    /// caller to drop it (`--require-bound-identity`).
+    fn legacy_subject(&self, subject: &str) -> bool {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_unbound();
+        }
+        if self.require_bound {
+            warn!(%subject, "dropping legacy unbound subject (require-bound-identity)");
+            return false;
+        }
+        true
+    }
+
+    /// Identity bound to `subject` when it is a bound register/presence
+    /// subject, handling validation + legacy-policy bookkeeping. `None`
+    /// means the caller must drop the message.
+    fn bound_or_legacy_identity(&self, subject: &str, prefix: &str) -> BoundIdentity {
+        match bound_identity_subject(subject, prefix) {
+            Some(ident) if valid_identity(ident) => BoundIdentity::Bound(ident.to_string()),
+            Some(bad) => {
+                warn!(%subject, identity = %bad, "invalid identity in bound subject, dropping");
+                BoundIdentity::Drop
+            }
+            None => {
+                if self.legacy_subject(subject) {
+                    BoundIdentity::Legacy
+                } else {
+                    BoundIdentity::Drop
+                }
+            }
         }
     }
 
@@ -57,14 +99,51 @@ impl RouterCore {
         }
     }
 
-    /// Decode an envelope from `hub.send.<channel>`, record metrics, push it
-    /// to the WS bridge and decide its destination. `None` = undecodable.
-    pub(crate) fn on_send(&self, subject: &str, payload: &[u8]) -> Option<(String, Envelope)> {
-        let env = match Envelope::from_json_bytes(payload) {
+    /// Decode an envelope from `hub.send.<channel>` (legacy) or
+    /// `hub.pub.<identity>.<channel>` (bound), record metrics, push it
+    /// to the WS bridge and decide its destination.
+    ///
+    /// Returns `(dest_subject, envelope, publish_bytes)`. On a bound subject
+    /// `meta.from` is overwritten with the subject's identity and
+    /// `publish_bytes` is the re-serialized envelope so downstream consumers
+    /// see the corrected sender; on a legacy subject `publish_bytes` is the
+    /// original payload verbatim. `None` = drop (undecodable, invalid bound
+    /// identity, or a legacy subject while `--require-bound-identity` is on).
+    pub(crate) fn on_send(
+        &self,
+        subject: &str,
+        payload: &[u8],
+    ) -> Option<(String, Envelope, Vec<u8>)> {
+        let mut env = match Envelope::from_json_bytes(payload) {
             Ok(env) => env,
             Err(e) => {
                 warn!(%subject, error = %e, "failed to decode envelope, dropping");
                 return None;
+            }
+        };
+
+        let (channel, rewritten): (&str, Option<Vec<u8>>) = match bound_send_subject(subject) {
+            Some((ident, channel)) if valid_identity(ident) => {
+                // The subject is the identity proof: overwrite the
+                // self-asserted `meta.from` before routing/mirroring.
+                env.meta.from = ident.to_string();
+                match env.to_json_bytes() {
+                    Ok(bytes) => (channel, Some(bytes)),
+                    Err(e) => {
+                        warn!(%subject, error = %e, "failed to re-encode envelope, dropping");
+                        return None;
+                    }
+                }
+            }
+            Some((bad, _)) => {
+                warn!(%subject, identity = %bad, "invalid identity in bound subject, dropping");
+                return None;
+            }
+            None => {
+                if !self.legacy_subject(subject) {
+                    return None;
+                }
+                (channel_from_send_subject(subject), None)
             }
         };
 
@@ -79,7 +158,8 @@ impl RouterCore {
             }
         }
 
-        let dest = route_subject(subject, &env);
+        let dest = route_channel(channel, &env);
+        let publish = rewritten.unwrap_or_else(|| payload.to_vec());
         debug!(
             id = %env.meta.id,
             from = %env.meta.from,
@@ -88,7 +168,7 @@ impl RouterCore {
             %dest,
             "routing envelope"
         );
-        Some((dest, env))
+        Some((dest, env, publish))
     }
 
     /// Queue a routed envelope for the storage mirror (non-blocking).
@@ -96,9 +176,11 @@ impl RouterCore {
         self.enqueue(MirrorOp::Envelope(Box::new(env)));
     }
 
-    /// `hub.register`: record identity + capabilities (replacing any
-    /// previous capabilities) and persist the registration.
-    pub(crate) async fn on_register(&self, payload: &[u8]) {
+    /// `hub.register` / `hub.register.<identity>`: record identity +
+    /// capabilities (replacing any previous capabilities) and persist the
+    /// registration. On the bound subject the identity comes from the
+    /// subject token, not from `payload.identity`.
+    pub(crate) async fn on_register(&self, subject: &str, payload: &[u8]) {
         let env = match Envelope::from_json_bytes(payload) {
             Ok(env) => env,
             Err(e) => {
@@ -106,9 +188,15 @@ impl RouterCore {
                 return;
             }
         };
-        let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) else {
-            return;
+        let bound = match self.bound_or_legacy_identity(subject, subjects::REGISTER) {
+            BoundIdentity::Bound(id) => Some(id),
+            BoundIdentity::Legacy => None,
+            BoundIdentity::Drop => return,
         };
+        let ident = bound
+            .as_deref()
+            .or_else(|| env.payload.get("identity").and_then(|v| v.as_str()));
+        let Some(ident) = ident else { return };
         let caps: Vec<String> = env
             .payload
             .get("capabilities")
@@ -136,9 +224,11 @@ impl RouterCore {
         }));
     }
 
-    /// `hub.presence`: refresh liveness only. Capabilities are preserved
-    /// (an unknown agent is added with none until it registers).
-    pub(crate) async fn on_presence(&self, payload: &[u8]) {
+    /// `hub.presence` / `hub.presence.<identity>`: refresh liveness only.
+    /// Capabilities are preserved (an unknown agent is added with none
+    /// until it registers). On the bound subject the identity comes from
+    /// the subject token.
+    pub(crate) async fn on_presence(&self, subject: &str, payload: &[u8]) {
         let env = match Envelope::from_json_bytes(payload) {
             Ok(env) => env,
             Err(e) => {
@@ -146,20 +236,38 @@ impl RouterCore {
                 return;
             }
         };
-        let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) else {
-            return;
+        let bound = match self.bound_or_legacy_identity(subject, subjects::PRESENCE) {
+            BoundIdentity::Bound(id) => Some(id),
+            BoundIdentity::Legacy => None,
+            BoundIdentity::Drop => return,
         };
+        let ident = bound
+            .as_deref()
+            .or_else(|| env.payload.get("identity").and_then(|v| v.as_str()));
+        let Some(ident) = ident else { return };
         debug!(identity = %ident, "heartbeat received");
         self.registry.touch(ident).await;
         self.enqueue(MirrorOp::Touch(ident.to_string()));
     }
 }
 
+/// How a register/presence subject carries the caller's identity.
+enum BoundIdentity {
+    /// Bound subject with a valid identity token.
+    Bound(String),
+    /// Legacy subject, allowed while `--require-bound-identity` is off.
+    Legacy,
+    /// Drop the message.
+    Drop,
+}
+
 /// The control plane worker. Runs an event loop that:
-/// 1. Subscribes to `hub.send.>` — all outgoing agent messages.
-/// 2. Routes each envelope with [`route_subject`].
-/// 3. Subscribes to `hub.register` — tracks agent registrations.
-/// 4. Subscribes to `hub.presence` — tracks heartbeats.
+/// 1. Subscribes to `hub.send.>` + `hub.pub.*.>` — all outgoing agent
+///    messages (legacy + bound subjects; contract §4.1).
+/// 2. Routes each envelope with [`route_subject`]; on bound subjects the
+///    `<identity>` token overwrites `meta.from` before delivery.
+/// 3. Subscribes to `hub.register` + `hub.register.*` — agent registrations.
+/// 4. Subscribes to `hub.presence` + `hub.presence.*` — heartbeats.
 /// 5. Mirrors envelopes + registrations to `Storage` via a bounded queue.
 pub struct ControlPlane {
     nats: async_nats::Client,
@@ -198,6 +306,15 @@ impl ControlPlane {
     /// Every routed envelope is serialized to JSON and pushed here.
     pub fn with_ws_events(mut self, tx: crate::ws_bridge::EventTx) -> Self {
         self.core.ws_event_tx = Some(tx);
+        self
+    }
+
+    /// When set, the router drops messages on legacy subjects (`hub.send.>`,
+    /// bare `hub.register`, bare `hub.presence`) — every sender must use the
+    /// bound subjects that pin `meta.from` to the connection identity
+    /// (contract §4.1). Default off during the migration window.
+    pub fn with_require_bound_identity(mut self, require: bool) -> Self {
+        self.core.require_bound = require;
         self
     }
 
@@ -277,36 +394,57 @@ impl ControlPlane {
             .subscribe(format!("{}.>", subjects::SEND_PREFIX))
             .await
             .context("control plane: subscribe to hub.send.> failed")?;
+        let mut bound_send_sub = self
+            .nats
+            .subscribe(format!("{}.*.>", subjects::PUB_PREFIX))
+            .await
+            .context("control plane: subscribe to hub.pub.*.> failed")?;
         let mut reg_sub = self
             .nats
             .subscribe(subjects::REGISTER)
             .await
             .context("control plane: subscribe to hub.register failed")?;
+        let mut bound_reg_sub = self
+            .nats
+            .subscribe(format!("{}.*", subjects::REGISTER))
+            .await
+            .context("control plane: subscribe to hub.register.* failed")?;
         let mut presence_sub = self
             .nats
             .subscribe(subjects::PRESENCE)
             .await
             .context("control plane: subscribe to hub.presence failed")?;
+        let mut bound_presence_sub = self
+            .nats
+            .subscribe(format!("{}.*", subjects::PRESENCE))
+            .await
+            .context("control plane: subscribe to hub.presence.* failed")?;
 
-        info!("control plane subscribed to hub.send.>, hub.register, hub.presence");
+        info!(
+            require_bound = self.core.require_bound,
+            "control plane subscribed to hub.send.>, hub.pub.*.>, hub.register(.*), hub.presence(.*)"
+        );
 
         loop {
             tokio::select! {
                 Some(msg) = send_sub.next() => self.handle_send(&msg).await,
-                Some(msg) = reg_sub.next() => self.core.on_register(&msg.payload).await,
-                Some(msg) = presence_sub.next() => self.core.on_presence(&msg.payload).await,
+                Some(msg) = bound_send_sub.next() => self.handle_send(&msg).await,
+                Some(msg) = reg_sub.next() => self.core.on_register(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = bound_reg_sub.next() => self.core.on_register(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = presence_sub.next() => self.core.on_presence(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = bound_presence_sub.next() => self.core.on_presence(msg.subject.as_str(), &msg.payload).await,
             }
         }
     }
 
-    /// Route one `hub.send.<channel>` message. No per-message `flush()`:
-    /// async-nats batches and flushes outgoing publishes on its own, so the
-    /// loop never waits on a network round-trip.
+    /// Route one `hub.send.<channel>` / `hub.pub.<id>.<channel>` message.
+    /// No per-message `flush()`: async-nats batches and flushes outgoing
+    /// publishes on its own, so the loop never waits on a network round-trip.
     async fn handle_send(&self, msg: &async_nats::Message) {
-        let Some((dest, env)) = self.core.on_send(msg.subject.as_str(), &msg.payload) else {
+        let Some((dest, env, bytes)) = self.core.on_send(msg.subject.as_str(), &msg.payload) else {
             return;
         };
-        if let Err(e) = self.nats.publish(dest.clone(), msg.payload.clone()).await {
+        if let Err(e) = self.nats.publish(dest.clone(), bytes.into()).await {
             error!(%dest, error = %e, "failed to route envelope");
         }
         self.core.mirror_envelope(env);

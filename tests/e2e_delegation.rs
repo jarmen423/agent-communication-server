@@ -55,7 +55,7 @@ async fn recv_until(rx: &mut Rx, secs: u64, pred: impl Fn(&Envelope) -> bool) ->
 /// `hub.register` (it subscribes to its inbox before registering).
 async fn spawn_worker(url: &str, identity: &str, mut cmd: Command) -> Child {
     let probe = HubClient::connect(url, uniq("probe")).await.unwrap();
-    let mut reg = probe.subscribe_subject("hub.register").await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
     let child = cmd
         .current_dir(repo_root())
         .stdin(Stdio::null())
@@ -305,7 +305,7 @@ async fn e2e_rust_worker_reannounces_registration() {
 
     // spawn_rust_worker consumed the first registration; expect another.
     let probe = HubClient::connect(&url, uniq("probe")).await.unwrap();
-    let mut reg = probe.subscribe_subject("hub.register").await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
     recv_until(&mut reg, 3, |e| e.payload["identity"] == worker.as_str()).await;
     let _ = probe.drain().await;
 }

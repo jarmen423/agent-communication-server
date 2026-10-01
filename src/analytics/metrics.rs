@@ -114,6 +114,11 @@ pub struct MetricsCollector {
     /// Storage-mirror writes dropped because the bounded mirror queue was
     /// full (the DB could not keep up). Routing is unaffected.
     pub storage_mirror_dropped: AtomicU64,
+    /// Messages that arrived on legacy self-asserted subjects (`hub.send.>`,
+    /// bare `hub.register`/`hub.presence`) while bound subjects exist.
+    /// Counted whether or not `--require-bound-identity` is on, so an
+    /// operator can watch the migration to bound identity drain to zero.
+    pub unbound_sends_total: AtomicU64,
 }
 
 /// Map a [`MessageKind`] to a stable index into `by_kind`.
@@ -166,6 +171,17 @@ impl MetricsCollector {
     /// Storage-mirror writes dropped so far.
     pub fn mirror_dropped(&self) -> u64 {
         self.storage_mirror_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Count one message that arrived on a legacy (self-asserted) subject.
+    /// Non-blocking; safe on the hot path.
+    pub fn record_unbound(&self) {
+        self.unbound_sends_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Legacy-subject arrivals so far.
+    pub fn unbound_sends(&self) -> u64 {
+        self.unbound_sends_total.load(Ordering::Relaxed)
     }
 
     /// Render the Prometheus text exposition format.
@@ -230,6 +246,16 @@ impl MetricsCollector {
         out.push_str(&format!(
             "natshub_storage_mirror_dropped_total {}\n",
             self.storage_mirror_dropped.load(Ordering::Relaxed)
+        ));
+
+        // Legacy (unbound) subject arrivals
+        out.push_str(
+            "# HELP natshub_unbound_sends_total Messages on legacy self-asserted subjects\n",
+        );
+        out.push_str("# TYPE natshub_unbound_sends_total counter\n");
+        out.push_str(&format!(
+            "natshub_unbound_sends_total {}\n",
+            self.unbound_sends_total.load(Ordering::Relaxed)
         ));
 
         out

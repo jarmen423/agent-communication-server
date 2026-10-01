@@ -27,7 +27,7 @@ from typing import Any, Protocol, runtime_checkable
 from nats.aio.client import Client as NATSClient  # noqa: F401  (re-exported)
 from nats.aio.msg import Msg
 
-from nats_connect import connect_nats
+from nats_connect import connect_nats, validate_identity
 from worker_backends import session_resume
 from worker_backends.envelope import (  # noqa: F401  (re-exported: tests, bridges)
     PROMPT_KEYS,
@@ -74,12 +74,14 @@ class WorkerConfig:
     nats_auth: dict[str, Any] | None = None
     capabilities: list[str] = field(default_factory=lambda: ["worker"])
     heartbeat_secs: float = 30.0
-    # Resume sessions from backend_ctx persisted through the hub API (see
-    # worker_backends/session_resume.py). Off unless NATS_HUB_SESSION_RESUME=1.
+    # Persist/resume backend_ctx through the hub API (session.set_backend_ctx /
+    # session.get, see worker_backends/session_resume.py). On unless
+    # NATS_HUB_SESSION_RESUME=0.
     session_resume: bool = field(default_factory=session_resume.resume_enabled)
 
 
 async def run_worker(cfg: WorkerConfig) -> None:
+    validate_identity(cfg.identity)
     connect_kwargs: dict[str, Any] = {"name": cfg.identity}
     if cfg.nats_auth:
         connect_kwargs.update(cfg.nats_auth)
@@ -92,8 +94,10 @@ async def run_worker(cfg: WorkerConfig) -> None:
     registry = TaskRegistry()  # queued + running turns, by task envelope id
 
     async def publish(channel: str, kind: str, payload: dict, reply_to: str | None = None) -> None:
+        # Bound subject: hub.pub.<identity>.<channel> (contract §4.1) — the
+        # router overwrites meta.from with the subject identity.
         await nc.publish(
-            f"hub.send.{channel}",
+            f"hub.pub.{cfg.identity}.{channel}",
             make_envelope(cfg.identity, None, channel, kind, payload, reply_to=reply_to),
         )
 
@@ -135,7 +139,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
             result = await run_to_result(cfg.backend, prompt, {}, task_id, registry.get(task_id))
             channel = meta.get("channel") or f"inbox.{sender}"
             await nc.publish(
-                f"hub.send.{channel}",
+                f"hub.pub.{cfg.identity}.{channel}",
                 make_envelope(cfg.identity, sender, channel, "message", result, reply_to=task_id),
             )
             return
@@ -188,8 +192,9 @@ async def run_worker(cfg: WorkerConfig) -> None:
             registry.finish(task_id)
         if outcome is not None:
             _, new_ctx = outcome
+            changed = new_ctx != backend_ctx
             session["backend_ctx"] = new_ctx
-            if cfg.session_resume:
+            if cfg.session_resume and changed:  # a backend session appeared/changed
                 await session_resume.save_backend_ctx(api_request, session_id, new_ctx)
         else:
             print(f"[{log}] session {session_id} failed or was cancelled")
@@ -221,8 +226,8 @@ async def run_worker(cfg: WorkerConfig) -> None:
         }
 
     async def resume_session(session_id: str, session_channel: str, sender: str) -> bool:
-        """Session resume (stub, behind cfg.session_resume): rebuild a session
-        this process doesn't hold from the backend_ctx persisted via the API."""
+        """Rebuild a session this process doesn't hold (worker restart) from
+        the backend_ctx persisted via the API (session.get)."""
         if not cfg.session_resume or session_id in active_sessions:
             return session_id in active_sessions
         ctx = await session_resume.fetch_backend_ctx(api_request, session_id)
@@ -259,7 +264,11 @@ async def run_worker(cfg: WorkerConfig) -> None:
             sender = meta.get("from", "unknown")
             prompt = payload.get("prompt")
             print(f"[{log}] session_start: {session_id} from {sender} on {session_channel}")
-            await open_session(session_id, session_channel, sender, payload)
+            if session_id not in active_sessions:  # a re-sent start reuses the session
+                # After a worker restart the backend session may still exist.
+                ctx = (await session_resume.fetch_backend_ctx(api_request, session_id)
+                       if cfg.session_resume else None)
+                await open_session(session_id, session_channel, sender, payload, ctx)
             await publish(session_channel, "status", {"status": "ready"})
             if prompt:
                 await run_session_turn(session_id, session_channel, prompt, meta.get("id"))
@@ -305,7 +314,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
 
     async def api_request(op: str, params: dict) -> dict:
         req = json.dumps({"op": op, "params": params}).encode()
-        reply = await nc.request(f"hub.api.{op}", req, timeout=5)
+        reply = await nc.request(f"hub.api.{cfg.identity}.{op}", req, timeout=5)
         return json.loads(reply.data)
 
     await nc.subscribe(inbox_subject, cb=inbox.on_message)
@@ -320,11 +329,11 @@ async def run_worker(cfg: WorkerConfig) -> None:
         (or survived a router restart) still shows up in `hub-agents`."""
         payload = {"identity": cfg.identity, **cfg.extra_heartbeat}
         await nc.publish(
-            "hub.presence",
+            f"hub.presence.{cfg.identity}",
             make_envelope(cfg.identity, None, "hub.presence", "status", payload),
         )
         await nc.publish(
-            "hub.register",
+            f"hub.register.{cfg.identity}",
             make_envelope(
                 cfg.identity,
                 None,

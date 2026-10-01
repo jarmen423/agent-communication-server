@@ -7,7 +7,7 @@ DEV   := scripts/dev
 ENV   := source $(DEV)/lib.sh &&
 PY    := .venv/bin/python
 
-.PHONY: help doctor setup setup-extras setup-js build build-release test test-rust test-py lint fmt up clean-run clean prune
+.PHONY: help doctor setup setup-extras setup-js build build-release test test-rust test-py test-bound lint fmt up clean-run clean prune
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -34,6 +34,9 @@ test: test-rust test-py ## Run all tests (Rust against a throwaway NATS + hub-se
 
 test-rust: ## Rust tests against an isolated nats-server + hub-server (random port)
 	@$(DEV)/with_stack.sh cargo test --features tui
+
+test-bound: ## Full suite with --require-bound-identity (identity-bound subjects only)
+	@NATS_HUB_REQUIRE_BOUND=1 $(MAKE) --no-print-directory test
 
 test-py: ## Python tests (pytest) against an isolated nats-server + hub-server
 	@$(DEV)/with_stack.sh $(PY) -m pytest -q tests/python

@@ -83,6 +83,10 @@ name = "hub-tui"
 path = "src/bin/hub_tui.rs"
 required-features = ["storage-surreal", "tui"]
 
+[[bin]]
+name = "hub-admin"
+path = "src/bin/hub_admin.rs"
+
 # ── Library dependencies (what downstream crates pull in) ──────
 [dependencies]
 async-nats = "0.38"
@@ -95,6 +99,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 async-trait = "0.1"
+nkeys = "0.4"
 
 # Binaries also need clap + tracing-subscriber (not needed by library consumers)
 clap = { version = "4", features = ["derive"] }

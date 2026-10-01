@@ -170,6 +170,12 @@ pub struct SessionRecord {
     pub closed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub metadata: serde_json::Value,
+    /// Backend-native session reference (e.g. `{"claude_session_id": "…"}`,
+    /// `{"thread_id": "…"}`, `{"agent_id": "…"}`) so a restarted worker can
+    /// resume a session it no longer holds in memory. Owned by the worker;
+    /// written via the `session.set_backend_ctx` API op.
+    #[serde(default)]
+    pub backend_ctx: Option<serde_json::Value>,
 }
 
 /// Filter for session queries.
@@ -247,4 +253,11 @@ pub struct WaveTaskRecord {
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub result: Option<String>,
+    /// Outcome of the task's `verify_cmd`, recorded by the wave orchestrator
+    /// from the worker's `milestone verify_passed` event (`"passed"`), a
+    /// worker `error` event (`"failed"`), or a task completing without the
+    /// expected milestone (`"missing"`). `None` when the task has no
+    /// `verify_cmd` or hasn't finished.
+    #[serde(default)]
+    pub verify_result: Option<String>,
 }

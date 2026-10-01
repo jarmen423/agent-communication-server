@@ -38,6 +38,7 @@ fn make_task(wave_id: &str, task_id: &str, worker: &str) -> WaveTaskRecord {
         started_at: None,
         completed_at: None,
         result: None,
+        verify_result: None,
     }
 }
 
@@ -175,6 +176,7 @@ fn test_evaluate_merge_gate() {
         started_at: None,
         completed_at: None,
         result: None,
+        verify_result: None,
     }];
     assert_eq!(evaluate_merge_gate(&done), "completed");
 
