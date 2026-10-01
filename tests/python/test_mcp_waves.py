@@ -112,6 +112,16 @@ def _worker_env(task_id: str, wave_id: str, sender: str,
     }
 
 
+async def _as_worker(nc, channel: str, env: dict) -> None:
+    """Publish as the envelope's sender on its bound subject. The router
+    stamps meta.from from hub.pub.<identity>.<channel> (contract §4.1), so
+    worker events must come from the worker's own identity, not from the
+    orchestrator's MCP connection."""
+    await nc.publish(f"hub.pub.{env['meta']['from']}.{channel}",
+                     json.dumps(env).encode())
+    await nc.flush()
+
+
 @live
 def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
     """create → spawn → worker events → wave completes; and a forged
@@ -170,7 +180,7 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
         # A foreign sender cannot complete ta.
         forged = _worker_env("ta", wave_id, "mallory", "completed",
                              {"result": "forged"})
-        await conn.publish(f"wave.{wave_id}.task.ta", forged)
+        await _as_worker(probe, f"wave.{wave_id}.task.ta", forged)
         await asyncio.sleep(0.8)
         snap = await hub_queries._wave_status({"wave_id": wave_id})
         assert snap["ok"]
@@ -179,10 +189,10 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
 
         # The real worker verifies then completes; tb dispatches and its
         # worker completes → wave completes.
-        await conn.publish(f"wave.{wave_id}.task.ta",
+        await _as_worker(probe, f"wave.{wave_id}.task.ta",
                            _worker_env("ta", wave_id, w1, "milestone",
                                        {"name": "verify_passed"}))
-        await conn.publish(f"wave.{wave_id}.task.ta",
+        await _as_worker(probe, f"wave.{wave_id}.task.ta",
                            _worker_env("ta", wave_id, w1, "completed",
                                        {"result": "ok"}))
 
@@ -197,7 +207,7 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
             await asyncio.sleep(0.25)
         assert tasks["tb"]["status"] == "running", f"tb never dispatched: {snap}"
 
-        await conn.publish(f"wave.{wave_id}.task.tb",
+        await _as_worker(probe, f"wave.{wave_id}.task.tb",
                            _worker_env("tb", wave_id, "w2-x", "completed",
                                        {"result": "ok"}))
         deadline = asyncio.get_running_loop().time() + 15
@@ -215,7 +225,7 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
         # session.set_backend_ctx + session.get round-trip.
         sid = f"sess-{uuid.uuid4().hex[:6]}"
         r = await conn.api_request("session.create", {
-            "session_id": sid, "orchestrator": "pytest", "worker": w1,
+            "session_id": sid, "orchestrator": "pytest-orch", "worker": w1,
             "status": "active", "created_at": conn.now(),
             "updated_at": conn.now(),
         })
