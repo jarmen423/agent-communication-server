@@ -185,6 +185,7 @@ if [[ ${#REMOTE_FILES[@]} -eq 0 ]]; then
         "worker_events.py"
         "worker_backends/__init__.py"
         "worker_backends/headless_cli.py"
+        "worker_backends/proc.py"
         "worker_backends/presets.py"
         "worker_backends/sdk_agent.py"
         "requirements-remote.txt"

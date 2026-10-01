@@ -89,6 +89,7 @@ and watch it round-trip.
 | `worker_events.py` | Structured progress events. |
 | `worker_backends/__init__.py` | Backend package init. |
 | `worker_backends/headless_cli.py` | `HeadlessCliBackend` + spec dataclass. |
+| `worker_backends/proc.py` | Subprocess plumbing (process groups, timeouts) imported by `headless_cli.py`. |
 | `worker_backends/presets.py` | `kilo_spec()`, `opencode_spec()`, `hermes_spec()`, `agy_spec()`, `grok_spec()`. |
 | `worker_backends/sdk_agent.py` | In-process SDK backend (re-exported by `__init__.py`). |
 | `requirements-remote.txt` | One line: `nats-py>=2.6.0`. |

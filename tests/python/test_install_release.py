@@ -12,6 +12,7 @@ import platform
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -208,6 +209,16 @@ def test_remote_bundle_from_release(
     for rel in ("remote_agent_adapter.py", "worker_backends/presets.py", "requirements-remote.txt"):
         assert (target / rel).read_bytes() == (REPO / rel).read_bytes()
     assert (target / ".venv" / "bin" / "python").exists()
+    # The installed file set must be a complete import closure on its own:
+    # run the adapter from the target dir with no repo on sys.path (-E -s).
+    # (Regression: FILES.txt lacked worker_backends/proc.py.)
+    probe = _run(
+        [sys.executable, "-E", "-s", "-c",
+         "import remote_agent_adapter, worker_backends.presets; print('ok')"],
+        cwd=target,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert str(REPO) not in probe.stderr
 
 
 def test_remote_bundle_mismatch_is_fatal(

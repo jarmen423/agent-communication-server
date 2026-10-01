@@ -22,6 +22,7 @@ worker_events.py
 # and the *_spec factories used by the kilo / opencode backends).
 worker_backends/__init__.py
 worker_backends/headless_cli.py        # HeadlessCliBackend + HeadlessCliSpec
+worker_backends/proc.py                # subprocess plumbing (imported by headless_cli.py)
 worker_backends/presets.py             # kilo_spec(), opencode_spec(), hermes_spec(), agy_spec(), grok_spec()
 worker_backends/sdk_agent.py           # SdkAgentBackend (imported by worker_backends/__init__.py)
 
