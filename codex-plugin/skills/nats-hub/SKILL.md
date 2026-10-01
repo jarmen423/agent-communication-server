@@ -130,12 +130,22 @@ create_wave(goal="Split auth module", tasks=[
   {task_id: "b", worker: "codex-1",  goal: "Update auth-api", write_scope: ["api/**"], dependencies: ["a"]},
 ])
   → {wave_id, tasks: [...]}
-spawn_wave(wave_id)                   → dispatches ready tasks, honors deps
-list_wave_tasks(wave_id) / get_wave(wave_id)   → watch it
+spawn_wave(wave_id)                   → hands the wave to hub-server, which dispatches
+                                       ready tasks and honors deps
+wave_status(wave_id)                  → wave + every task (incl. verify results),
+                                       per-status counts and the merge gate
+cancel_wave(wave_id)                  → unfinished tasks → cancelled; running
+                                       workers get a cancel DM
 ```
 
-Read the `note` in `spawn_wave`'s result. If the wave is driven from this MCP
-server, keep your session alive until the wave finishes.
+- The wave runs **in hub-server**, not in this MCP server. It survives a hub
+  restart, and you don't need to keep your session open.
+- Watch it with `wave_status`. `list_wave_tasks` and `get_wave` give the raw
+  records.
+- `cancel_wave` stops a whole wave. Use `cancel_task` for a single task you
+  started with `delegate_async`.
+- On a hub with per-agent credentials, you can only spawn or cancel waves and
+  sessions that your identity owns.
 
 ## Everything else
 
