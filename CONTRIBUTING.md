@@ -12,7 +12,6 @@ read [`refocus-iteration-2.md`](refocus-iteration-2.md) first.
 | Rust (stable, ≥ 1.74) | the crate | <https://rustup.rs> |
 | C/C++ toolchain + libclang | SurrealDB's embedded RocksDB is compiled from source through `bindgen` | Debian/Ubuntu: `sudo apt install build-essential clang libclang-dev` · Fedora: `sudo dnf install gcc-c++ clang-devel` · macOS: `xcode-select --install` |
 | Python ≥ 3.10 | workers, bridges, MCP plugin server | system Python is fine; `uv` is used when present |
-| Node ≥ 20 *(optional)* | only for the JS Cline workers (`worker.js`, `hub_worker.js`) | <https://nodejs.org> |
 
 You do **not** need to install `nats-server` yourself. `make setup` downloads a
 pinned, checksum-verified copy into `.tools/bin/`.
@@ -46,7 +45,6 @@ Optional extras:
 
 ```bash
 make setup-extras # ACP / Cursor / Telegram / Discord SDKs
-make setup-js     # node_modules for the JS Cline workers
 make lint         # cargo fmt --check + clippy
 ```
 

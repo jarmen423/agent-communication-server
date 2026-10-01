@@ -7,7 +7,7 @@ DEV   := scripts/dev
 ENV   := source $(DEV)/lib.sh &&
 PY    := .venv/bin/python
 
-.PHONY: help doctor setup setup-extras setup-js build build-release test test-rust test-py test-bound lint fmt up clean-run clean prune
+.PHONY: help doctor setup setup-extras build build-release test test-rust test-py test-bound lint fmt up clean-run clean prune
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -20,9 +20,6 @@ setup: ## Install nats-server (.tools/bin) + Python venv (.venv). Idempotent.
 
 setup-extras: ## setup + optional SDKs (ACP, Cursor, Telegram, Discord)
 	@$(DEV)/setup.sh --extras
-
-setup-js: ## setup + node_modules for the JS Cline workers
-	@$(DEV)/setup.sh --js
 
 build: ## cargo build (all bins, incl. hub-tui)
 	@$(ENV) cargo build --bins --features tui

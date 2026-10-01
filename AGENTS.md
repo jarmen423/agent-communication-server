@@ -102,7 +102,6 @@ worker_supervisor.py       — spawn/stop workers on demand (visualizer "ensure 
 remote_agent_adapter.py    — WebSocket-connected worker for remote machines
 telegram_bridge.py, discord_bridge.py — human bridges (docs/BRIDGES.md)
 nats_connect.py            — shared Python connect helper (token/user/creds/TLS; NATS_* env)
-worker.js, hub_worker.js   — Node Cline workers (`make setup-js`)
 ```
 
 MCP server and plugins:
@@ -191,7 +190,7 @@ Manual commands (against a running stack):
 | `hub-agents [--capability CAP] [--alive SECS] [--identity ID]` | List/search agents |
 | `hub-worker --identity ID --execute CMD` | Universal worker: prompt on stdin → CMD → result |
 | `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
-| `hub-delegate --to AGENT --prompt MSG [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel |
+| `hub-delegate --to AGENT (--prompt MSG \| --prompt-file PATH \| --prompt -) [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel. Only the result goes to stdout; logs go to stderr. Ctrl-C sends a cancel (§4.2) and a second Ctrl-C exits. Exit codes: 0 done, 1 worker error, 2 timeout, 3 channel closed, 4 cancelled, 130 interrupted. |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
 | `hub-wave create/spawn/status/close/list` | Parallel wave orchestration |
