@@ -148,11 +148,20 @@ impl WaveOrchestrator {
             .subscribe_subject("channel.wave.>")
             .await
             .context("orchestrator: subscribe channel.wave.> failed")?;
+        // Heartbeats arrive on the legacy `hub.presence` and on the bound
+        // `hub.presence.<identity>` (contract §4.1, what workers send since
+        // T1). Missing the bound form would fail live long-running tasks as
+        // "silent" after the liveness TTL.
         let mut presence_rx = self
             .client
-            .subscribe_subject(subjects::PRESENCE)
+            .subscribe_subject_tagged(subjects::PRESENCE)
             .await
             .context("orchestrator: subscribe hub.presence failed")?;
+        let mut bound_presence_rx = self
+            .client
+            .subscribe_subject_tagged(&format!("{}.*", subjects::PRESENCE))
+            .await
+            .context("orchestrator: subscribe hub.presence.* failed")?;
 
         if let Err(e) = self.resume().await {
             warn!(error = %e, "wave resume failed; starting with an empty slate");
@@ -168,7 +177,8 @@ impl WaveOrchestrator {
         loop {
             tokio::select! {
                 Some(env) = wave_rx.recv() => self.on_wave_envelope(env).await,
-                Some(env) = presence_rx.recv() => self.on_presence(&env),
+                Some((subj, env)) = presence_rx.recv() => self.on_presence(&subj, &env),
+                Some((subj, env)) = bound_presence_rx.recv() => self.on_presence(&subj, &env),
                 Some(cmd) = self.cmd_rx.recv() => self.on_command(cmd).await,
                 _ = sweep.tick() => self.sweep().await,
             }
@@ -765,8 +775,16 @@ impl WaveOrchestrator {
 
     // ── Liveness ─────────────────────────────────────────────────────────
 
-    fn on_presence(&mut self, env: &Envelope) {
-        if let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) {
+    /// Record a heartbeat. On the bound `hub.presence.<identity>` subject the
+    /// identity comes from the subject (pinned to the credential by NATS
+    /// permissions); only the legacy subject falls back to the payload.
+    fn on_presence(&mut self, subject: &str, env: &Envelope) {
+        let bound = subject
+            .strip_prefix(subjects::PRESENCE)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .filter(|id| !id.is_empty());
+        let ident = bound.or_else(|| env.payload.get("identity").and_then(|v| v.as_str()));
+        if let Some(ident) = ident {
             self.last_seen.insert(ident.to_string(), Instant::now());
         }
     }
