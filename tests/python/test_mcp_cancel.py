@@ -190,7 +190,7 @@ def test_cancel_task_live_through_router(monkeypatch):
         running: dict[str, asyncio.Task] = {}
 
         async def send(env: dict) -> None:
-            await wnc.publish(f"hub.send.{env['meta']['channel']}",
+            await wnc.publish(f"hub.pub.{worker_id}.{env['meta']['channel']}",
                               json.dumps(env).encode())
 
         def env(ch, payload, kind, reply_to):

@@ -98,11 +98,48 @@ impl Envelope {
     }
 }
 
+/// Returns true when `identity` is a valid identity token: one or more
+/// characters from `[A-Za-z0-9_-]` and nothing else (contract §4.1). NATS
+/// subjects use `.` as the token separator, so an identity containing `.` or
+/// `*`/`>` would corrupt bound subjects; empty identities are rejected too.
+pub fn valid_identity(identity: &str) -> bool {
+    !identity.is_empty()
+        && identity
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Validates `identity` per [`valid_identity`], returning the offending string
+/// in the error for diagnostics.
+pub fn require_valid_identity(identity: &str) -> anyhow::Result<()> {
+    if valid_identity(identity) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "invalid identity '{identity}': must be one or more of [A-Za-z0-9_-] (no '.', '*', '>')"
+        )
+    }
+}
+
 /// Subject conventions used through nats-hub.
+///
+/// Clients publish on *bound* subjects that embed their identity
+/// (`hub.pub.<identity>.<channel>`, `hub.register.<identity>`,
+/// `hub.presence.<identity>`, `hub.api.<identity>.<op>`); the router trusts
+/// the identity in the subject — which NATS ACLs can pin to the connection's
+/// credentials — over any `meta.from` the payload asserts. `hub.send.*` and
+/// bare `hub.register`/`hub.presence`/`hub.api.<op>` are the legacy,
+/// self-asserted forms kept for compatibility until
+/// `--require-bound-identity` removes them.
 pub mod subjects {
-    /// Agents publish messages here: `hub.send.<channel>`.
-    /// The control plane subscribes to `hub.send.>` and routes.
+    /// Agents publish messages here: `hub.send.<channel>` (legacy,
+    /// self-asserted identity). The control plane subscribes to `hub.send.>`.
     pub const SEND_PREFIX: &str = "hub.send";
+
+    /// Bound-send prefix: `hub.pub.<identity>.<channel>`. The control plane
+    /// subscribes to `hub.pub.*.>` and overwrites `meta.from` with the
+    /// `<identity>` token from the subject.
+    pub const PUB_PREFIX: &str = "hub.pub";
 
     /// The control plane publishes routed messages here: `channel.<name>`.
     pub const CHANNEL_PREFIX: &str = "channel";
@@ -113,9 +150,24 @@ pub mod subjects {
     /// Presence / heartbeat subject.
     pub const PRESENCE: &str = "hub.presence";
 
-    /// Build a send subject: `hub.send.<channel>`.
+    /// Build a legacy send subject: `hub.send.<channel>`.
     pub fn send(channel: &str) -> String {
         format!("{SEND_PREFIX}.{channel}")
+    }
+
+    /// Build a bound send subject: `hub.pub.<identity>.<channel>`.
+    pub fn send_bound(identity: &str, channel: &str) -> String {
+        format!("{PUB_PREFIX}.{identity}.{channel}")
+    }
+
+    /// Build a bound registration subject: `hub.register.<identity>`.
+    pub fn register_bound(identity: &str) -> String {
+        format!("{REGISTER}.{identity}")
+    }
+
+    /// Build a bound heartbeat subject: `hub.presence.<identity>`.
+    pub fn presence_bound(identity: &str) -> String {
+        format!("{PRESENCE}.{identity}")
     }
 
     /// Build a channel subject: `channel.<name>`.

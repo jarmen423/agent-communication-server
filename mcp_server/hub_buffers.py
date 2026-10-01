@@ -5,7 +5,6 @@ Owns every long-lived NATS subscription the server makes:
 - ``channel.inbox.<identity>`` — DMs to this orchestrator (ring buffer).
 - ``channel.task.<id>`` — per ``delegate_async``; progress + result tracking.
 - ``channel.session.<id>`` — lazily per ``session_replies`` call.
-- ``channel.wave.<id>(.>)`` — per ``spawn_wave``; task lifecycle tracking.
 
 Result matching follows the shared reply contract (refocus.md §6): the
 terminal result on a task channel is the first ``kind == "message"`` envelope
@@ -20,7 +19,6 @@ import json
 import sys
 import time
 import uuid
-from typing import Any
 
 import hub_connection as conn
 from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
@@ -35,7 +33,6 @@ from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
     RingBuffer,
     TaskTracker,
     ChannelBuffer,
-    WaveTracker,
 )
 
 MAX_SESSION_BUFFERS = 50  # open channel.session.<id> subscriptions
@@ -48,7 +45,6 @@ class HubState:
         self.inbox = ChannelBuffer("channel.inbox.placeholder", INBOX_BUFFER_MAX)
         self.tasks: dict[str, TaskTracker] = {}
         self.sessions: dict[str, ChannelBuffer] = {}
-        self.waves: dict[str, WaveTracker] = {}
         self._started = False
         self._generation = 0
         self._lock = asyncio.Lock()
@@ -226,145 +222,6 @@ class HubState:
                 oldest = next(iter(self.sessions))
                 await self.drop_session(oldest)
         return ch
-
-    async def spawn_wave(self, wave_id: str, timeout: float = 3600) -> WaveTracker:
-        """Start the in-process spawn loop for a wave (see hub_wave.rs)."""
-        await self.ensure_started()
-        if wave_id in self.waves and self.waves[wave_id].state == "running":
-            return self.waves[wave_id]
-        resp = await conn.api_request("wave.list_tasks", {"wave_id": wave_id})
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("error", "wave.list_tasks failed"))
-        tasks = resp.get("data", {}).get("tasks") or []
-        if not tasks:
-            raise RuntimeError(f"no tasks found for wave {wave_id!r}")
-        tracker = WaveTracker(wave_id, tasks)
-        self.waves[wave_id] = tracker
-        tracker._bg = asyncio.create_task(self._run_wave(tracker, timeout))
-        return tracker
-
-    async def _run_wave(self, tracker: WaveTracker, timeout: float) -> None:
-        wave_id = tracker.wave_id
-        wave_prefix = f"wave.{wave_id}"
-        events = ChannelBuffer(f"channel.{wave_prefix}.>")
-        wave_ch = ChannelBuffer(f"channel.{wave_prefix}")
-        try:
-            await events.start()
-            await wave_ch.start()
-            await conn.api_request("wave.update_status",
-                                   {"wave_id": wave_id, "status": "running"})
-            deadline = time.monotonic() + timeout
-            while tracker.state == "running":
-                tmap = tracker.tasks
-                failed = [t["task_id"] for t in tmap.values()
-                          if t["status"] == "failed"]
-                if failed:
-                    # Mirror hub_wave.rs: abort on the first failed task —
-                    # dependents would otherwise sit pending until timeout.
-                    tracker.state = "failed"
-                    tracker.error = f"task(s) failed: {', '.join(failed)}"
-                    break
-                if all(t["status"] in ("done", "failed") for t in tmap.values()):
-                    any_failed = any(t["status"] == "failed" for t in tmap.values())
-                    tracker.state = "failed" if any_failed else "completed"
-                    break
-                if time.monotonic() >= deadline:
-                    tracker.state = "timeout"
-                    break
-                ready = [
-                    t for t in tmap.values()
-                    if t["status"] == "pending"
-                    and all(d in tracker.completed
-                            for d in (t.get("dependencies") or []))
-                ]
-                for task in ready:
-                    await self._start_wave_task(tracker, task)
-                    tmap[task["task_id"]]["status"] = "running"
-                    await conn.api_request("wave.update_task_status", {
-                        "wave_id": wave_id, "task_id": task["task_id"],
-                        "status": "running",
-                    })
-                env = await self._next_wave_envelope(tracker, events, wave_ch)
-                if env is not None:
-                    self._handle_wave_event(tracker, env)
-        except Exception as e:
-            tracker.state = "failed"
-            tracker.error = str(e)
-        finally:
-            await events.stop()
-            await wave_ch.stop()
-            final = {"completed": "completed", "failed": "failed",
-                     "timeout": "failed"}.get(tracker.state)
-            if final:
-                await conn.api_request(
-                    "wave.update_status",
-                    {"wave_id": wave_id, "status": final})
-            tracker.done.set()
-
-    async def _next_wave_envelope(
-        self, tracker: WaveTracker, events: ChannelBuffer, wave_ch: ChannelBuffer
-    ) -> dict | None:
-        """One envelope from the wave's channel buffers; ~1s tick when idle."""
-        seqs = tracker.__dict__.setdefault("_buf_seqs", {})
-        for ch in (events, wave_ch):
-            items = ch.buf.since(seqs.get(ch.subject, 0), limit=1)
-            if items:
-                seqs[ch.subject] = items[0]["seq"]
-                return items[0]["env"]
-        it = await events.buf.wait_for(
-            lambda _e: True, since=seqs.get(events.subject, 0), timeout=1.0)
-        if it is not None:
-            seqs[events.subject] = it["seq"]
-            return it["env"]
-        return None
-
-    async def _start_wave_task(self, tracker: WaveTracker, task: dict) -> None:
-        wave_id = tracker.wave_id
-        task_id = task["task_id"]
-        task_channel = f"wave.{wave_id}.task.{task_id}"
-        payload: dict[str, Any] = {
-            "action": "session_start", "session_id": task_id,
-            "wave_id": wave_id, "channel": task_channel,
-            "prompt": task["goal"], "write_scope": task.get("write_scope"),
-        }
-        if task.get("verify_cmd"):
-            payload["verify_cmd"] = task["verify_cmd"]
-        if task.get("handoff_path"):
-            payload["handoff_path"] = task["handoff_path"]
-        env = conn.envelope(task_channel, payload, kind="message",
-                            to=task["worker"])
-        await conn.publish(task_channel, env)
-
-    def _handle_wave_event(self, tracker: WaveTracker, env: dict) -> None:
-        if env.get("meta", {}).get("kind") != "event":
-            return
-        payload = env.get("payload", {})
-        etype = payload.get("event_type")
-        task_id = env["meta"].get("channel", "").rsplit(".task.", 1)[-1]
-        if task_id == env["meta"].get("channel"):
-            task_id = payload.get("data", {}).get("task_id") or payload.get("task_id")
-        task = tracker.tasks.get(task_id)
-        if task is None:
-            return
-        data = payload.get("data", {})
-        if etype == "completed":
-            self._finish_wave_task(tracker, task, "done",
-                                  data.get("result", ""))
-        elif etype == "error":
-            self._finish_wave_task(tracker, task, "failed",
-                                  data.get("error", "failed"))
-
-    def _finish_wave_task(
-        self, tracker: WaveTracker, task: dict, status: str, result: str
-    ) -> None:
-        task["status"] = status
-        task["result"] = result
-        if status == "done":
-            tracker.completed.add(task["task_id"])
-        self.spawn_bg(conn.api_request("wave.update_task_status", {
-            "wave_id": tracker.wave_id, "task_id": task["task_id"],
-            "status": status, "result": result,
-        }))
 
 
 _state: HubState | None = None

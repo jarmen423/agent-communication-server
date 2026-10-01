@@ -225,7 +225,7 @@ def test_check_providers_live(monkeypatch):
                         "channel": "system", "to": None, "kind": "control",
                         "timestamp": conn.now(), "reply_to": None},
                "payload": {"identity": ghost_id, "capabilities": ["worker"]}}
-        await gnc.publish("hub.register", json.dumps(reg).encode())
+        await gnc.publish(f"hub.register.{ghost_id}", json.dumps(reg).encode())
         await gnc.subscribe(f"channel.inbox.{ghost_id}")  # receives, never answers
         await gnc.flush()
         try:

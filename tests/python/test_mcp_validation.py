@@ -51,6 +51,8 @@ SAMPLE_ARGS: dict[str, dict] = {
     "get_wave": {"wave_id": "wv1"},
     "list_wave_tasks": {"wave_id": "wv1"},
     "get_wave_task": {"wave_id": "wv1", "task_id": "t1"},
+    "wave_status": {"wave_id": "wv1"},
+    "cancel_wave": {"wave_id": "wv1"},
     "get_analytics": {"metric": "latency", "secs": 60},
 }
 

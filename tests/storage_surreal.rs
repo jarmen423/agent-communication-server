@@ -252,6 +252,7 @@ async fn test_session_and_wave_metadata_persisted() {
             updated_at: now,
             closed_at: None,
             metadata: json!({"ticket": "L2", "nested": {"n": [1, 2]}}),
+            backend_ctx: None,
         })
         .await
         .unwrap();
@@ -297,6 +298,7 @@ async fn test_wave_task_optional_fields_round_trip() {
             started_at: None,
             completed_at: None,
             result: None,
+            verify_result: None,
         })
         .await
         .unwrap();

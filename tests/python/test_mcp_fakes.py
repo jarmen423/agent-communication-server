@@ -153,7 +153,7 @@ class FakeWorker:
         return self
 
     async def _send(self, env: dict) -> None:
-        await self.bus.publish(f"hub.send.{env['meta']['channel']}",
+        await self.bus.publish(f"hub.pub.{self.identity}.{env['meta']['channel']}",
                                json.dumps(env).encode())
 
     async def _result(self, task_env: dict, status: str, result, error) -> None:

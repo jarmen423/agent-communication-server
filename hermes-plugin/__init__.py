@@ -114,7 +114,7 @@ ACTIONS = [
     "list_sessions", "get_session",
     "get_history", "get_thread", "list_pending",
     "create_wave", "spawn_wave", "list_waves", "get_wave",
-    "list_wave_tasks", "get_wave_task",
+    "list_wave_tasks", "get_wave_task", "wave_status", "cancel_wave",
     "get_analytics",
 ]
 

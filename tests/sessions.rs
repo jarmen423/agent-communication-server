@@ -28,6 +28,7 @@ fn make_record(id: &str, worker: &str, orch: &str) -> SessionRecord {
         updated_at: now,
         closed_at: None,
         metadata: json!({}),
+        backend_ctx: None,
     }
 }
 

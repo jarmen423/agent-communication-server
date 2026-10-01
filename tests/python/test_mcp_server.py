@@ -294,7 +294,7 @@ def test_delegate_async_wait_for_task_round_trip(monkeypatch):
         # subscribes to its inbox) instead of a fixed sleep — a DM published
         # before the subscription exists is dropped by core NATS.
         probe = await nats.connect(os.environ["NATS_URL"])
-        reg = await probe.subscribe("hub.register")
+        reg = await probe.subscribe("hub.register.*")
         await probe.flush()
         worker = subprocess.Popen(
             [sys.executable, "echo_worker.py", "--identity", worker_id,

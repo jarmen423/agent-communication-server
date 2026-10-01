@@ -31,6 +31,7 @@ pub struct SessionRow {
     pub updated_at: DbTime,
     pub closed_at: Option<DbTime>,
     pub metadata: serde_json::Value,
+    pub backend_ctx: Option<serde_json::Value>,
 }
 
 /// Row type read back from the DB (includes the record ID; tolerant of
@@ -54,6 +55,8 @@ pub struct SessionRowWithId {
     closed_at: Option<StoredTime>,
     #[serde(default)]
     metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    backend_ctx: Option<serde_json::Value>,
 }
 
 /// Legacy rows used `""` for "unset".
@@ -78,13 +81,14 @@ impl SessionRowWithId {
             model: non_empty(self.model),
             provider: non_empty(self.provider),
             metadata: metadata_object(self.metadata.unwrap_or_default()),
+            backend_ctx: self.backend_ctx.filter(|v| !v.is_null()),
         })
     }
 }
 
 /// SQL columns shared between SELECT queries and row conversion.
 const SESSION_COLUMNS: &str = "id, session_id, orchestrator, worker, status, \
-     cwd, model, provider, created_at, updated_at, closed_at, metadata";
+     cwd, model, provider, created_at, updated_at, closed_at, metadata, backend_ctx";
 
 /// Convert a `SessionRecord` into a `SessionRow` for storage.
 pub fn session_to_row(record: &SessionRecord) -> SessionRow {
@@ -100,6 +104,7 @@ pub fn session_to_row(record: &SessionRecord) -> SessionRow {
         updated_at: db_time(record.updated_at),
         closed_at: record.closed_at.map(db_time),
         metadata: metadata_object(record.metadata.clone()),
+        backend_ctx: record.backend_ctx.clone(),
     }
 }
 
