@@ -25,6 +25,7 @@ pub mod authz;
 mod handlers;
 #[cfg(feature = "storage-surreal")]
 mod stats;
+mod write_authz;
 
 pub use authz::{ApiAuthz, Caller};
 use handlers::*;
@@ -211,12 +212,18 @@ pub async fn handle_request_authorized(
     debug!(op, ?caller, "query API request");
 
     // Writes are gated *before* dispatch — post-filtering cannot undo a
-    // mutation the handler already applied.
+    // mutation the handler already applied. Non-admins may only mutate
+    // waves/sessions they own (see `write_authz`).
     if authz.enforcing() {
         if let Caller::Bound(identity) = &caller {
-            if ApiAuthz::is_write_op(op) && !authz.is_admin(identity) {
+            if ApiAuthz::is_write_op(op)
+                && !authz
+                    .write_allowed(storage.as_ref(), identity, op, &req.params)
+                    .await
+            {
                 return ApiResponse::err(format!(
-                    "forbidden: '{op}' requires an admin identity (--api-admin)"
+                    "forbidden: '{op}' — non-admin callers may only modify waves/sessions \
+                     they own (admins: --api-admin)"
                 ));
             }
         }

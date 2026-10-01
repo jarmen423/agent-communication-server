@@ -207,9 +207,19 @@ The router and query API add a second enforcement layer, active whenever
   public; wave and session records are visible to their orchestrator and
   workers. `envelope.get` on an invisible record returns "envelope not
   found" — existence is not leaked.
-- **Write ops are admin-only.** `wave.*` / `session.*` mutations require
-  the caller identity to be listed via `--api-admin <id>` (repeatable) or
-  `NATS_HUB_API_ADMINS`. Admins bypass read scoping.
+- **Write ops are owner-scoped; admins can do anything.** A non-admin may
+  mutate only what it owns. Admins are listed via `--api-admin <id>`
+  (repeatable) or `NATS_HUB_API_ADMINS`; they bypass write checks and read
+  scoping.
+  - `wave.create`: the new wave's `orchestrator` must be the caller.
+  - `wave.create_task` / `spawn` / `cancel` / `update_status`: the caller must
+    orchestrate the wave.
+  - `wave.update_task_status`: the wave's orchestrator, or the task's worker.
+  - `session.create`: the new session's `orchestrator` must be the caller.
+  - `session.update_status` / `set_backend_ctx`: the session's orchestrator or
+    worker.
+  - Any other write op is admin-only. Implemented in
+    `src/query_api/write_authz.rs`.
 - **Bound subjects still work in permissive mode.** Clients always publish
   bound subjects; enforcement is what changes.
 
@@ -223,7 +233,7 @@ refuses to mint them, and the API's subject parser would otherwise read
 | Deployment mode | Who can claim `meta.from = "alice"`? | Can alice read bob's inbox? | `hub.api` visibility |
 |---|---|---|---|
 | Anonymous / shared token, permissive (default) | **Anyone** — `from` is self-asserted on legacy subjects; bound subjects get overwritten but nothing pins identity to a credential | **Anyone** — default ACLs allow `channel.inbox.>` | Unscoped legacy callers; bound callers scoped only if `--api-admin`/`--require-bound` set |
-| Per-agent users + `--require-bound-identity` (+ `--api-admin`) | **Only alice's credential** — publish ACL allows `hub.pub.alice.>` only, legacy subjects dropped, `meta.from` overwritten | **No** — ACL allows only `channel.inbox.bob` for bob's credential | Scoped to caller; writes need `--api-admin` |
+| Per-agent users + `--require-bound-identity` (+ `--api-admin`) | **Only alice's credential** — publish ACL allows `hub.pub.alice.>` only, legacy subjects dropped, `meta.from` overwritten | **No** — ACL allows only `channel.inbox.bob` for bob's credential | Scoped to caller; writes limited to waves/sessions the caller owns (admins: `--api-admin`) |
 
 So the claim holds only when **both** halves are true: per-agent
 credentials (NATS layer) *and* `hub-server --require-bound-identity` (hub
@@ -324,7 +334,7 @@ reachable by anything but localhost.
 | Auth: transitional | `authorization { token: "..." }` — identity NOT bound; hub stays permissive |
 | Auth: per-agent (required for binding) | `authorization { users: [...] }` via `hub-admin render-config` |
 | Identity binding | `hub-server --require-bound-identity` + per-agent users |
-| API write ops | `hub-server --api-admin <id>` (repeatable) or `NATS_HUB_API_ADMINS` |
+| API write ops | Owner-scoped by default; full access via `hub-server --api-admin <id>` (repeatable) or `NATS_HUB_API_ADMINS` |
 | Per-agent authZ | identity-bound allowlists — `hub.pub.<id>.>`, `channel.inbox.<id>` — mint via `hub-admin add-agent` |
 | TLS on WS | `websocket { cert_file, key_file }` |
 | Visualizer bridge | `--ws-token` (or `HUB_WS_TOKEN`) + Origin allowlist; loopback-only without a token |

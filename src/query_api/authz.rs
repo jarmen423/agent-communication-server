@@ -60,7 +60,13 @@ pub const OP_NAMESPACES: &[&str] = &[
 
 /// Read ops under `wave.*` / `session.*`; any other op in those namespaces
 /// is treated as a write.
-const WAVE_READ_OPS: &[&str] = &["wave.get", "wave.list", "wave.list_tasks", "wave.get_task"];
+const WAVE_READ_OPS: &[&str] = &[
+    "wave.get",
+    "wave.list",
+    "wave.list_tasks",
+    "wave.get_task",
+    "wave.status",
+];
 const SESSION_READ_OPS: &[&str] = &["session.get", "session.list"];
 
 /// How the caller reached the API.
@@ -146,7 +152,7 @@ impl ApiAuthz {
             "thread.get" => OpKind::EnvelopeList("thread"),
             "thread.pending" => OpKind::ThreadPending,
             "envelope.get" => OpKind::EnvelopeGet,
-            "wave.get" | "wave.list_tasks" | "wave.get_task" => OpKind::WaveRecord,
+            "wave.get" | "wave.list_tasks" | "wave.get_task" | "wave.status" => OpKind::WaveRecord,
             "wave.list" => OpKind::WaveList,
             "session.get" => OpKind::SessionRecord,
             "session.list" => OpKind::SessionList,
@@ -230,9 +236,9 @@ impl ApiAuthz {
         }
 
         match Self::op_kind(op) {
-            OpKind::Write => ApiResponse::err(format!(
-                "forbidden: '{op}' requires an admin identity (--api-admin)"
-            )),
+            // Writes were already gated before dispatch (owner-scoped,
+            // `write_authz`); a response here means the write was allowed.
+            OpKind::Write => resp,
             OpKind::Unscoped => resp,
             OpKind::EnvelopeList(key) => {
                 let mut resp = resp;
