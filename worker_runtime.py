@@ -9,52 +9,48 @@ New CLI workers only implement a backend:
             ...
 
     await run_worker(WorkerConfig(identity="...", backend=MyBackend(), ...))
+
+Cancel (refocus-iteration-2.md §4.2): a DM ``kind=control`` with payload
+``{"action": "cancel", "task_id": <task envelope id>}`` stops that turn
+(queued or running) and yields one ``status: "cancelled"`` result. Inbox
+envelopes are queued and run one at a time by a dispatcher, so the inbox
+subscription itself never blocks and a cancel is handled while a task runs.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import signal
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 from nats.aio.client import Client as NATSClient  # noqa: F401  (re-exported)
 from nats.aio.msg import Msg
 
 from nats_connect import connect_nats
-from worker_events import execute_with_events, publish_event as emit_event, run_to_result
+from worker_backends import session_resume
+from worker_backends.envelope import (  # noqa: F401  (re-exported: tests, bridges)
+    PROMPT_KEYS,
+    extract_prompt,
+    install_stop_signals,
+    is_task_result,
+    make_envelope,
+)
+from worker_backends.inbox import NON_TASK_KINDS, InboxDispatcher
+from worker_backends.task_registry import TaskRegistry
+from worker_events import (
+    execute_with_events,
+    publish_cancelled,
+    publish_event as emit_event,
+    run_to_result,
+)
 
-# Payload keys a one-shot prompt may arrive under (bridges send "message").
-PROMPT_KEYS = ("prompt", "text", "command", "message")
 # Seconds between the first re-announcements (then every heartbeat_secs).
 ANNOUNCE_BACKOFF = (1.0, 2.0, 4.0, 8.0)
-# Kinds that are progress/bookkeeping, never tasks.
-NON_TASK_KINDS = ("status", "event", "control")
 
 
-def make_envelope(
-    from_id: str,
-    to_id: str | None,
-    channel: str,
-    kind: str,
-    payload: dict,
-    reply_to: str | None = None,
-) -> bytes:
-    meta = {
-        "id": str(uuid.uuid4()),
-        "from": from_id,
-        "channel": channel,
-        "kind": kind,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    if to_id:
-        meta["to"] = to_id
-    if reply_to:
-        meta["reply_to"] = reply_to
-    return json.dumps({"meta": meta, "payload": payload}).encode()
+async def _ignore(_msg: Msg) -> None:
+    return None
 
 
 @runtime_checkable
@@ -78,36 +74,9 @@ class WorkerConfig:
     nats_auth: dict[str, Any] | None = None
     capabilities: list[str] = field(default_factory=lambda: ["worker"])
     heartbeat_secs: float = 30.0
-
-
-def extract_prompt(payload: dict) -> str | None:
-    for key in PROMPT_KEYS:
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def install_stop_signals(task: asyncio.Task) -> None:
-    """SIGTERM/SIGHUP → cancel ``task`` so run_worker closes NATS cleanly.
-
-    Skipped for any signal that already has a handler, so an entrypoint that
-    installs its own (e.g. forwarding to CLI process groups) keeps it.
-    """
-    loop = asyncio.get_running_loop()
-    for name in ("SIGTERM", "SIGHUP"):
-        sig = getattr(signal, name, None)
-        if sig is None or signal.getsignal(sig) is not signal.SIG_DFL:
-            continue
-        try:
-            loop.add_signal_handler(sig, task.cancel)
-        except (NotImplementedError, RuntimeError, ValueError):
-            pass  # non-main thread or unsupported platform
-
-
-def is_task_result(payload: dict) -> bool:
-    """Results carry task_id + status; never answer one (avoids DM ping-pong)."""
-    return "task_id" in payload and "status" in payload
+    # Resume sessions from backend_ctx persisted through the hub API (see
+    # worker_backends/session_resume.py). Off unless NATS_HUB_SESSION_RESUME=1.
+    session_resume: bool = field(default_factory=session_resume.resume_enabled)
 
 
 async def run_worker(cfg: WorkerConfig) -> None:
@@ -120,6 +89,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
 
     active_sessions: dict[str, dict[str, Any]] = {}
     inbox_subject = f"channel.inbox.{cfg.identity}"
+    registry = TaskRegistry()  # queued + running turns, by task envelope id
 
     async def publish(channel: str, kind: str, payload: dict, reply_to: str | None = None) -> None:
         await nc.publish(
@@ -162,7 +132,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
             if not sender or msg.subject != inbox_subject:
                 return
             print(f"[{log}] oneshot DM from {sender}: {prompt[:80]}...")
-            result = await run_to_result(cfg.backend, prompt, {}, task_id)
+            result = await run_to_result(cfg.backend, prompt, {}, task_id, registry.get(task_id))
             channel = meta.get("channel") or f"inbox.{sender}"
             await nc.publish(
                 f"hub.send.{channel}",
@@ -182,6 +152,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
             task_id=task_id,
             working_status="working",
             done_status="done",
+            cancel=registry.get(task_id),
         )
 
     # ── Stateful sessions (hub-session) ─────────────────────────
@@ -197,24 +168,69 @@ async def run_worker(cfg: WorkerConfig) -> None:
             return
 
         backend_ctx = session.get("backend_ctx") or {}
-        outcome = await execute_with_events(
-            publish=publish,
-            publish_event_fn=publish_event,
-            backend=cfg.backend,
-            channel=session_channel,
-            prompt=prompt,
-            ctx=backend_ctx,
-            task_id=task_id,
-            working_status="working",
-            done_status="idle",
-            wave_channel=session.get("wave_channel"),
-            verify_cmd=session.get("verify_cmd"),
-        )
+        cancel = registry.get(task_id) or registry.register(task_id)
+        try:
+            outcome = await execute_with_events(
+                publish=publish,
+                publish_event_fn=publish_event,
+                backend=cfg.backend,
+                channel=session_channel,
+                prompt=prompt,
+                ctx=backend_ctx,
+                task_id=task_id,
+                working_status="working",
+                done_status="idle",
+                wave_channel=session.get("wave_channel"),
+                verify_cmd=session.get("verify_cmd"),
+                cancel=cancel,
+            )
+        finally:
+            registry.finish(task_id)
         if outcome is not None:
             _, new_ctx = outcome
             session["backend_ctx"] = new_ctx
+            if cfg.session_resume:
+                await session_resume.save_backend_ctx(api_request, session_id, new_ctx)
         else:
-            print(f"[{log}] session {session_id} failed")
+            print(f"[{log}] session {session_id} failed or was cancelled")
+
+    async def open_session(
+        session_id: str,
+        session_channel: str,
+        sender: str,
+        payload: dict,
+        backend_ctx: dict[str, Any] | None = None,
+    ) -> None:
+        sub = await nc.subscribe(f"channel.{session_channel}", cb=process_session_msg)
+        wave_id = payload.get("wave_id")
+        wave_channel = f"wave.{wave_id}" if wave_id else None
+        wave_sub = None
+        if wave_channel:
+            wave_sub = await nc.subscribe(f"channel.{wave_channel}", cb=_ignore)
+            print(f"[{log}] subscribed to wave channel {wave_channel}")
+
+        active_sessions[session_id] = {
+            "channel": session_channel,
+            "subscription": sub,
+            "wave_subscription": wave_sub,
+            "wave_channel": wave_channel,
+            "verify_cmd": payload.get("verify_cmd"),
+            "write_scope": payload.get("write_scope"),
+            "backend_ctx": {**(backend_ctx or {}), "_session_id": session_id},
+            "sender": sender,
+        }
+
+    async def resume_session(session_id: str, session_channel: str, sender: str) -> bool:
+        """Session resume (stub, behind cfg.session_resume): rebuild a session
+        this process doesn't hold from the backend_ctx persisted via the API."""
+        if not cfg.session_resume or session_id in active_sessions:
+            return session_id in active_sessions
+        ctx = await session_resume.fetch_backend_ctx(api_request, session_id)
+        if ctx is None:
+            return False
+        await open_session(session_id, session_channel, sender, {}, ctx)
+        print(f"[{log}] resumed session {session_id} from persisted backend_ctx")
+        return True
 
     async def process_session_msg(msg: Msg) -> None:
         try:
@@ -240,40 +256,17 @@ async def run_worker(cfg: WorkerConfig) -> None:
                 or payload.get("channel")
                 or f"session.{session_id}"
             )
-            wave_id = payload.get("wave_id")
-            wave_channel = f"wave.{wave_id}" if wave_id else None
             sender = meta.get("from", "unknown")
             prompt = payload.get("prompt")
             print(f"[{log}] session_start: {session_id} from {sender} on {session_channel}")
-
-            async def session_callback(smsg: Msg) -> None:
-                await process_session_msg(smsg)
-
-            sub = await nc.subscribe(f"channel.{session_channel}", cb=session_callback)
-            wave_sub = None
-            if wave_channel:
-                async def wave_callback(_msg: Msg) -> None:
-                    pass
-
-                wave_sub = await nc.subscribe(f"channel.{wave_channel}", cb=wave_callback)
-                print(f"[{log}] subscribed to wave channel {wave_channel}")
-
-            active_sessions[session_id] = {
-                "channel": session_channel,
-                "subscription": sub,
-                "wave_subscription": wave_sub,
-                "wave_channel": wave_channel,
-                "verify_cmd": payload.get("verify_cmd"),
-                "write_scope": payload.get("write_scope"),
-                "backend_ctx": {"_session_id": session_id},
-                "sender": sender,
-            }
+            await open_session(session_id, session_channel, sender, payload)
             await publish(session_channel, "status", {"status": "ready"})
             if prompt:
                 await run_session_turn(session_id, session_channel, prompt, meta.get("id"))
 
         elif action == "session_send":
-            if session_id not in active_sessions:
+            channel = meta.get("channel") or f"session.{session_id}"
+            if not await resume_session(session_id, channel, meta.get("from", "unknown")):
                 print(f"[{log}] session_send unknown session {session_id}")
                 return
             session = active_sessions[session_id]
@@ -295,25 +288,31 @@ async def run_worker(cfg: WorkerConfig) -> None:
 
     # ── Inbox router ────────────────────────────────────────────
 
-    async def inbox_callback(msg: Msg) -> None:
-        try:
-            envelope = json.loads(msg.data.decode())
-            action = envelope.get("payload", {}).get("action")
-            if action in ("session_start", "session_send", "session_close"):
-                await process_session_msg(msg)
-            else:
-                await process_oneshot(msg)
-        except Exception as e:
-            print(f"[{log}] handler error: {e}")
+    async def route(msg: Msg, envelope: dict) -> None:
+        action = (envelope.get("payload") or {}).get("action")
+        if action in ("session_start", "session_send", "session_close"):
+            await process_session_msg(msg)
+        else:
+            await process_oneshot(msg)
 
-    await nc.subscribe(inbox_subject, cb=inbox_callback)
+    async def report_cancelled(envelope: dict) -> None:
+        """A queued delegated task was cancelled before it started."""
+        task_id = (envelope.get("meta") or {}).get("id")
+        await publish_cancelled(publish, publish_event, envelope["payload"]["task_channel"],
+                                task_id, by="cancel")
+
+    inbox = InboxDispatcher(inbox_subject, registry, route, report_cancelled, log)
+
+    async def api_request(op: str, params: dict) -> dict:
+        req = json.dumps({"op": op, "params": params}).encode()
+        reply = await nc.request(f"hub.api.{op}", req, timeout=5)
+        return json.loads(reply.data)
+
+    await nc.subscribe(inbox_subject, cb=inbox.on_message)
     print(f"[{log}] subscribed to {inbox_subject} (oneshot + sessions)")
 
     if cfg.broadcast_channel:
-        async def broadcast_callback(msg: Msg) -> None:
-            await inbox_callback(msg)
-
-        await nc.subscribe(f"channel.{cfg.broadcast_channel}", cb=broadcast_callback)
+        await nc.subscribe(f"channel.{cfg.broadcast_channel}", cb=inbox.on_message)
 
     async def announce() -> None:
         """Heartbeat + (idempotent, upserting) registration. Re-registering on
@@ -352,11 +351,14 @@ async def run_worker(cfg: WorkerConfig) -> None:
         install_stop_signals(current)
 
     heartbeat_task: asyncio.Task | None = None
+    dispatcher = asyncio.create_task(inbox.run())
     try:
         # Announce ourselves right after subscribing, so `hub-agents` shows
         # the worker immediately instead of after the first heartbeat interval.
         await announce()
         heartbeat_task = asyncio.create_task(heartbeat_loop())
+        if cfg.session_resume:
+            await session_resume.resume_all(api_request, cfg.identity, resume_session)
         print(f"[{log}] ready")
 
         while True:
@@ -366,4 +368,6 @@ async def run_worker(cfg: WorkerConfig) -> None:
     finally:
         if heartbeat_task is not None:
             heartbeat_task.cancel()
+        dispatcher.cancel()  # cancels the running turn too (kills CLI groups)
+        await asyncio.gather(dispatcher, return_exceptions=True)
         await nc.close()

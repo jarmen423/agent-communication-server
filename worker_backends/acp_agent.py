@@ -9,10 +9,15 @@ Current status:
 
 This module avoids placeholder success paths. If no transport is
 reachable, it fails fast with a clear error instead of pretending to work.
+
+Cancel (refocus-iteration-2.md §4.2): a cancelled turn calls the transport's
+optional ``cancel_turn(session_handle)`` (e.g. ACP ``session/cancel``) before
+the cancellation propagates.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -27,6 +32,9 @@ class AcpAgentTransport:
     ) -> tuple[str, str]:
         """Return (assistant_text, new_or_existing_session_handle)."""
         raise NotImplementedError
+
+    async def cancel_turn(self, session_handle: str | None) -> None:
+        """Stop the in-flight turn (optional; default: nothing to stop)."""
 
 
 class AcpAgentBackend(WorkerBackend):
@@ -47,6 +55,9 @@ class AcpAgentBackend(WorkerBackend):
         session_handle = ctx.get("acp_session_handle")
         try:
             text, session_handle = await self.transport.send_turn(prompt, session_handle)
+        except asyncio.CancelledError:
+            await asyncio.shield(self.transport.cancel_turn(session_handle))
+            raise
         except NotImplementedError as e:
             raise RuntimeError(
                 "No ACP transport wired. Use a concrete backend like "
