@@ -132,24 +132,56 @@ sudo $EDITOR /etc/nats/nats-server.conf
 
 Pick **exactly one** of the two authN modes:
 
-- **`token`** — one shared secret. Easiest. Fine for a small trusted team.
-- **`users`** — per-agent credentials (recommended). One `users[]` entry per
-  agent; each one has an `allowed_connection_types:["WEBSOCKET"]` restriction
-  and a `permissions` allowlist. Individually revocable.
+- **`token`** — one shared secret. Transitional only: it authenticates the
+  connection but binds no identity, so `meta.from` stays self-asserted and
+  every inbox is readable by every credential holder. Run hub-server WITHOUT
+  `--require-bound-identity` in this mode.
+- **`users`** — per-agent credentials **(required for identity binding)**.
+  Each agent's allowlist pins every send/register/heartbeat/API subject to
+  its own identity (contract §4.1); `allowed_connection_types:["WEBSOCKET"]`
+  keeps agent credentials off the loopback TCP listener. See
+  [`SECURITY.md`](SECURITY.md) Layer 3.
 
-For each user you configure, tighten the `permissions.subscribe.allow` list
-from the default `channel.inbox.>` down to `channel.inbox.<their-identity>`
-whenever possible. The default in the template is the **ceiling**, not a
-target. See [`SECURITY.md`](SECURITY.md) Layer 3 and
-[`REMOTE_AGENTS.md`](REMOTE_AGENTS.md) § "Subject-level permissions".
-
-**Generating strong secrets:**
+**Do not hand-write the users[] entries** — generate them:
 
 ```bash
-# Token
-openssl rand -hex 32
-# Per-user password
-openssl rand -base64 24
+# On any machine with the repo built (cargo build --bin hub-admin)
+hub-admin add-agent echo-1 --role worker --channel chat        # prints one entry
+hub-admin add-agent boss --role admin --nkey                   # nkey instead of password
+```
+
+The prod template (`config/nats-server.prod.conf.example`) shows the full
+shape including the `hub-server` service user. For a fleet, keep an
+`agents.txt` (lines: `<id> <role> <pw:pass|nkey:PUB> [ws-only] [channels]`)
+and regenerate the whole file:
+
+```bash
+hub-admin render-config --agents agents.txt \
+    --tls-cert /etc/nats/tls/nats-server.crt \
+    --tls-key  /etc/nats/tls/nats-server.key \
+    --hub-password "$HUB_SERVER_PW" \
+    --out /etc/nats/nats-server.conf
+```
+
+`render-config` always emits a `hub-server` service user; pass its password
+back to hub-server via `NATS_USER=hub-server NATS_PASSWORD=...` (an
+`EnvironmentFile` on the systemd unit is the usual place).
+
+**Run hub-server in bound mode** so the hub layer enforces what the ACLs
+claim (see SECURITY.md § threat model):
+
+```bash
+hub-server --db-path /var/lib/nats-hub/nats_hub.db \
+    --require-bound-identity \
+    --api-admin boss          # repeatable; or NATS_HUB_API_ADMINS=a,b
+```
+
+**Generating strong secrets** (hub-admin generates passwords/nkeys for you;
+for anything by hand):
+
+```bash
+openssl rand -hex 32      # token
+openssl rand -base64 24   # password
 ```
 
 Lock the config down:
@@ -226,8 +258,9 @@ follow the pointer in the right column.
 | 6 | TLS cert is valid for your hostname | `openssl x509 -in /etc/nats/tls/nats-server.crt -noout -text \| grep -A1 'Subject Alternative Name'` | §3, regenerate with right SAN |
 | 7 | Firewall denies 4222 from outside | from another host: `nc -zv hub.example.com 4222` → refused/timeout | §5 |
 | 8 | Firewall allows 8080 from outside | from another host: `nc -zv hub.example.com 8080` → open | §5 |
-| 9 | AuthN rejects anonymous | `nats-py` connect with no token → `Authorization Violation` | §4 authN block |
-| 10 | AuthZ blocks out-of-allowlist pub | publish to `hub.api.foo` from a remote user → rejected | §4 permissions block |
+| 9 | AuthN rejects anonymous | connect with no credentials → `Authorization Violation` | §4 authN block |
+| 10 | Identity is bound | as user `alice`, publish `hub.pub.bob.x` → permission denied; send forged `meta.from` → arrives rewritten | `scripts/dogfood_identity.sh` |
+| 10b | Inbox is private | user `alice` subscribe `channel.inbox.bob` → permission denied | `scripts/dogfood_identity.sh` |
 | 11 | Round-trip from a remote agent | run the `JOIN_HUB.md` "Verifying your connection" snippet | [`JOIN_HUB.md`](JOIN_HUB.md) |
 | 12 | Logs are writing | `ls -lh /var/log/nats-hub/` shows growing file | perms on log dir, §2 |
 | 13 | Backups scheduled | see [Backup](#backup) below | — |
@@ -236,17 +269,24 @@ follow the pointer in the right column.
 
 For each new agent:
 
-1. Generate a credential (`openssl rand -base64 24` for the password).
-2. Append a `users[]` entry to `/etc/nats/nats-server.conf` with a tight
-   `permissions` allowlist scoped to their identity.
+1. Mint its entry: `hub-admin add-agent <identity> --role worker` (add
+   `--nkey` for key-based creds, `--channel <ch>` per broadcast channel,
+   `--ws-only` for WebSocket-only credentials).
+2. Paste the printed `users[]` entry into `/etc/nats/nats-server.conf` — or,
+   if you maintain `agents.txt`, add a line and re-run `render-config`.
 3. Reload NATS:
    ```bash
    sudo systemctl reload nats-hub-nats.service   # or restart
    ```
-4. Hand the user their credential and the URL; send them to
-   [`JOIN_HUB.md`](JOIN_HUB.md).
+4. Hand the user their credential (and nkey *seed* if `--nkey` was used —
+   the seed is printed once as a `# SEED:` comment) and the URL; send them
+   to [`JOIN_HUB.md`](JOIN_HUB.md).
 
 To **revoke**, delete their `users[]` entry and reload.
+
+Identity names must be single NATS tokens (`[A-Za-z0-9_-]+`) and may not be
+`wave`, `session`, `agent`, `history`, `thread`, `envelope`, `stats`, or
+`ping` — those collide with API op namespaces; `hub-admin` refuses them.
 
 ## Backup
 

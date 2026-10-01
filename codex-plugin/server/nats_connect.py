@@ -53,6 +53,28 @@ def _first(explicit: Any, env_name: str) -> Any:
     return _env(env_name)
 
 
+#: Characters permitted in a hub identity (one NATS token; contract §4.1).
+_IDENTITY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
+
+
+def validate_identity(identity: str) -> str:
+    """Return `identity` unchanged or raise ``ValueError``.
+
+    Identities are embedded in bound subjects (`hub.pub.<id>.<channel>`,
+    `hub.register.<id>`, `hub.presence.<id>`, `hub.api.<id>.<op>`), so they
+    must be exactly one NATS token drawn from `[A-Za-z0-9_-]` — no `.`,
+    `*`, `>`, spaces, or empty strings.
+    """
+    if not identity or any(c not in _IDENTITY_CHARS for c in identity):
+        raise ValueError(
+            f"invalid identity {identity!r}: must be one or more of "
+            "[A-Za-z0-9_-] (no '.', '*', '>')"
+        )
+    return identity
+
+
 def build_tls_context(
     *,
     ca_file: Optional[str],

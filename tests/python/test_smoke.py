@@ -78,7 +78,7 @@ def test_echo_worker_round_trip():
             task = make_envelope("pytest", identity, task_channel, "message",
                                  {"prompt": "abc", "task_channel": task_channel})
             task_id = json.loads(task)["meta"]["id"]
-            await nc.publish(f"hub.send.{task_channel}", task)
+            await nc.publish(f"hub.pub.pytest.{task_channel}", task)
             deadline = asyncio.get_running_loop().time() + 15
             while True:
                 remaining = deadline - asyncio.get_running_loop().time()
