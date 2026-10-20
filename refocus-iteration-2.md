@@ -97,10 +97,10 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done (verified + merged) · �
 | T3 | Delegation & workers to 100% | native subagent | `iter2/t3-delegation` | ✅ | Cancel end to end (Rust + Python workers, every backend, `hub-delegate` Ctrl-C → exit 4). `hub-delegate` logs to stderr; `--prompt-file`/stdin. Per-turn progress (cross-talk fixed, regression-tested). JS workers removed (evidence in WORKER_BACKENDS.md). All 11 advertised worker types start (fake-CLI test). Session resume via T2's API. Smoke tests: claude → `pong` 28s, codex → `pong` 35s, cancel killed the process group. |
 | T4 | MCP surface to 100% | native subagent | `iter2/t4-mcp` | ✅ | `cancel_task`; real `check_providers` (registry plus parallel ping, ok/slow/error/unresponsive, with what it can't verify stated); plugin install-layout test plus `plugins.yml` CI (3.10/3.12); schema-validated arguments for every tool; `whoami`; SKILL updated. Real smoke test: Claude ping `ok` 9.0s. |
 | T5 | Portability, release, docs | native subagent | `iter2/t5-release` | ✅ | `release.yml` (linux x86_64/arm64, macOS arm64, SHA256SUMS); dry-run green with all builds and install smoke tests, nothing published. `install_remote.sh` installs from release with checksum (mismatch is fatal); `no-storage` CI job; docs archived under `docs/archive/`; README/AGENTS/CONTRIBUTING current; license-switch script (decision pending). Fixed a remote-install bug (missing `proc.py`). |
-| H1 | Hardening: identity & authz (review 2026-10-20) | native subagent | `iter2/h1-identity` | 🟡 | Brief: `.planning/refocus-2/HARDENING.md` |
-| H2 | Hardening: wave orchestrator | native subagent | `iter2/h2-waves` | 🟡 | Brief: `.planning/refocus-2/HARDENING.md` |
-| H3 | Hardening: workers, cancel, MCP | native subagent | `iter2/h3-workers` | 🟡 | Brief: `.planning/refocus-2/HARDENING.md` |
-| W2-A | JetStream durable delivery | wave 2 | — | ⬜ | Unblocked (T1 merged) |
+| H1 | Hardening: identity & authz (review 2026-10-20) | native subagent | `iter2/h1-identity` | ✅ | Per-identity reply inboxes `_INBOX.<id>` (C1) plus `allow_responses`; create can't take over another owner's wave or session (authz and storage both enforce it); the hub-server user can subscribe `channel.>`; legacy API callers are anonymous under `--api-admin`; the WS bridge connects as `--ws-identity`; Telegram and Discord use bound subjects; router validates `meta.to` and stamps `meta.channel`; `hub-admin` reserves names and validates channels; scoped reads over-fetch. New `scripts/dogfood_prod_config.sh`. |
+| H2 | Hardening: wave orchestrator | native subagent | `iter2/h2-waves` | ✅ | `engine.rs` (961 LOC) split into 9 modules of ≤301 LOC each; `handlers.rs` split. `timeout_secs` clamped to 1 s…7 d with `checked_add` (no restart panic); cancels carry the `session_start` envelope id (C2, persisted); sessions are `<wave>--<task>` and get closed (C4); `task_channel` is sent to the Rust worker (C6); resume waits for the router; cycle bypass fixed; terminal states are final; liveness tracked after the sender check. `tests/wave_hardening.rs`. |
+| H3 | Hardening: workers, cancel, MCP | native subagent | `iter2/h3-workers` | ✅ | `verify_cmd` runs in its own process group with a drained output tail, a timeout and cancel. C5 sender checks on cancel, result, `session_send` and `session_close` (Python and Rust). C3 dedupes re-dispatches. `hub-worker` handles SIGTERM and uses `libc::killpg`, with a bounded queue. Exactly one terminal result. Timeouts send a cancel, and MCP timeouts are capped at 3600 s. MCP eviction now signals waiters. `tests/e2e_hardening.rs`. |
+| W2-A | JetStream durable delivery | wave 2 | `iter2/w2a-jetstream` | ⬜ | Brief: `.planning/refocus-2/W2-A-jetstream.md`. First in wave 2: the hosted north star depends on it. |
 | W2-B | Persistence: retention, analytics pushdown, backup | wave 2 | — | ⬜ | |
 | W2-C | Visualizer/observability to 100% | wave 2 | — | ⬜ | |
 | W2-D | File-lock broadcast (new feature) | wave 2 | — | ⬜ | |
@@ -111,6 +111,15 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done (verified + merged) · �
 3. **Admin-only writes.** All `wave.*`/`session.*` writes were admin-only, which broke orchestrators and session resume in bound mode. They are now owner-scoped (`src/query_api/write_authz.rs`, `tests/identity_owner_writes.rs`).
 
 Also: `make test-bound` (full suite with `--require-bound-identity`), and the JS-worker setup leftovers are removed.
+
+**Wave 1 hardening (2026-10-20).** An independent review of `iter2/integration` found merge blockers that the task tests and CI had missed. H1–H3 fixed them in parallel, and orchestrator follow-up `4410fb7` closed the cross-task gaps. The gates ran locally because this machine has no GitHub push credentials; the CI gate replacement was a local full run of every gate. All green:
+- `make lint` exit 0.
+- `make test`: 251 Rust passed, 0 failed (3 ignored); 290 Python passed (1 skipped).
+- `make test-bound`: 251 Rust, 291 Python, 0 failed.
+- `dogfood_prod_config.sh` 12/12, including `wave.cancel`: the worker reports cancelled and its backend is gone.
+- `dogfood_identity.sh` PASS; the `no-storage` check passes.
+
+Merged to `main`.
 
 **Process (unchanged from iteration 1, solo repo):**
 - Each task has its own branch, and pushing it runs CI.
