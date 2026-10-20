@@ -6,9 +6,11 @@
 //!   ([`crate::protocol::valid_identity`]) naming the caller. Operator ACLs
 //!   pin the token to the connection's credentials (`hub.api.<id>.>` publish
 //!   permission per user), so the subject is the identity proof.
-//! - **Legacy** `hub.api.<op>` — self-asserted, unauthenticated. Accepted only
-//!   while `--require-bound-identity` is off, and treated as a fully
-//!   privileged caller for backward compatibility.
+//! - **Legacy** `hub.api.<op>` — self-asserted, unauthenticated. Rejected
+//!   under `--require-bound-identity`. Otherwise it is fully privileged only
+//!   on a permissive hub (neither knob set); once `--api-admin` is set a
+//!   legacy caller is a non-admin that owns nothing ([`Scope::Anonymous`]):
+//!   no writes, broadcast envelopes only, no waves/sessions/pending.
 //!
 //! Ambiguity rule: after `hub.api.`, a first token that names a known op
 //! namespace (`wave`, `session`, `agent`, `history`, `thread`, `envelope`,
@@ -20,13 +22,16 @@
 //!
 //! - **Write ops** (`wave.create`, `wave.create_task`, `wave.update_status`,
 //!   `wave.update_task_status`, `session.create`, `session.update_status`,
-//!   and any future `wave.*`/`session.*` op not in the read set) require the
-//!   caller identity to be listed via `--api-admin` / `NATS_HUB_API_ADMINS`.
+//!   and any future `wave.*`/`session.*` op not in the read set) are
+//!   owner-scoped for bound callers (see `write_authz`); admins listed via
+//!   `--api-admin` / `NATS_HUB_API_ADMINS` may do anything.
 //! - **Read scoping** for a bound caller `C`:
 //!   - `history.query`, `thread.get` — return only envelopes where
 //!     `from_identity == C`, `to_identity == C`, or `to_identity` is empty
 //!     (a broadcast message on any channel, including `task.*`,
-//!     `session.*`, `wave.*` channels).
+//!     `session.*`, `wave.*` channels). The filter runs over an
+//!     over-fetched result (`scoped_reads`), so pages are not short just
+//!     because invisible rows filled the `LIMIT`.
 //!   - `thread.pending` — `params.identity` must equal `C` (admins may
 //!     query anyone's pending inbox).
 //!   - `envelope.get` — same visibility rule; an invisible record returns a
@@ -78,6 +83,29 @@ pub enum Caller {
     Legacy,
 }
 
+/// Whose view a request is answered with (derived from [`Caller`] and the
+/// hub's [`ApiAuthz`] by [`ApiAuthz::scope`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// Unscoped: a permissive hub, or an admin caller.
+    Full,
+    /// A bound non-admin caller: sees and writes what it owns or takes part in.
+    Identity(&'a str),
+    /// A legacy caller on an enforcing hub: owns nothing, writes nothing,
+    /// sees only broadcast envelopes and unscoped metadata.
+    Anonymous,
+}
+
+impl Scope<'_> {
+    /// The scoped identity, if any (`None` for `Full` and `Anonymous`).
+    pub fn identity(&self) -> Option<&str> {
+        match self {
+            Scope::Identity(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
 /// Authorization configuration for the query API.
 #[derive(Debug, Clone, Default)]
 pub struct ApiAuthz {
@@ -103,6 +131,22 @@ impl ApiAuthz {
     /// Is `identity` an API admin?
     pub fn is_admin(&self, identity: &str) -> bool {
         self.admins.contains(identity)
+    }
+
+    /// The view `caller` gets on this hub (see [`Scope`]).
+    pub fn scope<'a>(&self, caller: &'a Caller) -> Scope<'a> {
+        if !self.enforcing() {
+            // Neither --require-bound-identity nor --api-admin: the hub is
+            // permissive for everyone (module docs). Bound callers are the
+            // default for every client now, so scoping them here would make
+            // a default hub hide waves/sessions/DMs from their own operators.
+            return Scope::Full;
+        }
+        match caller {
+            Caller::Bound(id) if self.is_admin(id) => Scope::Full,
+            Caller::Bound(id) => Scope::Identity(id),
+            Caller::Legacy => Scope::Anonymous,
+        }
     }
 
     /// Parse `hub.api.<rest>` into (caller, op). Errors are returned as a
@@ -176,16 +220,24 @@ impl ApiAuthz {
         }
     }
 
-    /// Envelope visibility rule (documented in the module comment).
-    fn envelope_visible(caller: &str, record: &Value) -> bool {
+    /// Envelope visibility rule (documented in the module comment):
+    /// broadcasts are public; a DM is visible to its sender and recipient
+    /// (never to [`Scope::Anonymous`]).
+    pub(super) fn envelope_visible(scope: Scope<'_>, record: &Value) -> bool {
+        let caller = match scope {
+            Scope::Full => return true,
+            Scope::Identity(id) => Some(id),
+            Scope::Anonymous => None,
+        };
         let from = record.get("from_identity").and_then(Value::as_str);
         let to = record
             .get("to_identity")
             .and_then(Value::as_str)
             .filter(|t| !t.is_empty());
-        match to {
-            Some(t) => t == caller || from == Some(caller),
-            None => true, // broadcast on a channel — public
+        match (to, caller) {
+            (None, _) => true, // broadcast on a channel — public
+            (Some(t), Some(c)) => t == c || from == Some(c),
+            (Some(_), None) => false,
         }
     }
 
@@ -225,22 +277,12 @@ impl ApiAuthz {
         params: &Value,
         resp: ApiResponse,
     ) -> ApiResponse {
-        let Caller::Bound(identity) = caller else {
-            return resp; // legacy caller: permissive
-        };
-        if !self.enforcing() {
-            // Neither --require-bound-identity nor --api-admin: the hub is
-            // permissive for everyone (module docs). Bound callers are the
-            // default for every client now, so scoping them here would make
-            // a default hub hide waves/sessions/DMs from their own operators.
-            return resp;
+        let scope = self.scope(caller);
+        if scope == Scope::Full || !resp.ok {
+            return resp; // unscoped, or a handler error (left untouched)
         }
-        if self.is_admin(identity) {
-            return resp; // admins bypass scoping
-        }
-        if !resp.ok {
-            return resp; // don't touch handler errors
-        }
+        // `None` = anonymous legacy caller: owns no wave/session/inbox.
+        let identity = scope.identity();
 
         match Self::op_kind(op) {
             // Writes were already gated before dispatch (owner-scoped,
@@ -251,14 +293,14 @@ impl ApiAuthz {
                 let mut resp = resp;
                 if let Some(data) = resp.data.as_mut() {
                     if let Some(arr) = data.get_mut(key).and_then(Value::as_array_mut) {
-                        arr.retain(|rec| Self::envelope_visible(identity, rec));
+                        arr.retain(|rec| Self::envelope_visible(scope, rec));
                     }
                 }
                 resp
             }
             OpKind::ThreadPending => {
                 let target = params.get("identity").and_then(Value::as_str);
-                if target != Some(identity.as_str()) {
+                if identity.is_none() || target != identity {
                     return ApiResponse::err(
                         "forbidden: thread.pending only returns the caller's own pending \
                          messages (admins may query any identity)",
@@ -271,7 +313,7 @@ impl ApiAuthz {
                     .data
                     .as_ref()
                     .and_then(|d| d.get("envelope"))
-                    .map(|e| Self::envelope_visible(identity, e))
+                    .map(|e| Self::envelope_visible(scope, e))
                     .unwrap_or(false);
                 if visible {
                     resp
@@ -281,9 +323,10 @@ impl ApiAuthz {
             }
             OpKind::WaveRecord => {
                 let wave_id = params.get("wave_id").and_then(Value::as_str);
-                let visible = match wave_id {
-                    Some(id) => self.wave_visible(storage.as_ref(), identity, id).await,
-                    None => true, // missing param → handler already errored
+                let visible = match (wave_id, identity) {
+                    (Some(id), Some(me)) => self.wave_visible(storage.as_ref(), me, id).await,
+                    (Some(_), None) => false,
+                    (None, _) => true, // missing param → handler already errored
                 };
                 if visible {
                     resp
@@ -293,9 +336,10 @@ impl ApiAuthz {
             }
             OpKind::SessionRecord => {
                 let session_id = params.get("session_id").and_then(Value::as_str);
-                let visible = match session_id {
-                    Some(id) => self.session_visible(storage.as_ref(), identity, id).await,
-                    None => true,
+                let visible = match (session_id, identity) {
+                    (Some(id), Some(me)) => self.session_visible(storage.as_ref(), me, id).await,
+                    (Some(_), None) => false,
+                    (None, _) => true,
                 };
                 if visible {
                     resp
@@ -314,14 +358,15 @@ impl ApiAuthz {
                     .unwrap_or_default();
                 let mut kept = Vec::with_capacity(waves.len());
                 for w in waves {
+                    let Some(me) = identity else { break };
                     // Fast path: the serialized record already names the
                     // orchestrator — skip the DB probe for that common case.
-                    if w.get("orchestrator").and_then(Value::as_str) == Some(identity.as_str()) {
+                    if w.get("orchestrator").and_then(Value::as_str) == Some(me) {
                         kept.push(w);
                         continue;
                     }
                     let id = w.get("wave_id").and_then(Value::as_str).unwrap_or_default();
-                    if self.wave_visible(storage.as_ref(), identity, id).await {
+                    if self.wave_visible(storage.as_ref(), me, id).await {
                         kept.push(w);
                     }
                 }
@@ -335,9 +380,9 @@ impl ApiAuthz {
                 if let Some(data) = resp.data.as_mut() {
                     if let Some(arr) = data.get_mut("sessions").and_then(Value::as_array_mut) {
                         arr.retain(|s| {
-                            s.get("orchestrator").and_then(Value::as_str) == Some(identity.as_str())
-                                || s.get("worker").and_then(Value::as_str)
-                                    == Some(identity.as_str())
+                            identity.is_some()
+                                && (s.get("orchestrator").and_then(Value::as_str) == identity
+                                    || s.get("worker").and_then(Value::as_str) == identity)
                         });
                     }
                 }
@@ -348,7 +393,7 @@ impl ApiAuthz {
 }
 
 enum OpKind {
-    /// Mutating op — admin only.
+    /// Mutating op — gated before dispatch (owner-scoped).
     Write,
     /// Unscoped metadata/aggregates.
     Unscoped,

@@ -180,15 +180,57 @@ fn wave_task_key(wave_id: &str, task_id: &str) -> String {
     format!("{wave_id}:{task_id}")
 }
 
+/// Store (create or replace) a wave record.
+///
+/// The write refuses to change the orchestrator of an existing wave: it
+/// runs as one transaction that checks the stored owner before the upsert,
+/// so a create can't take over another orchestrator's wave even when two
+/// creates race past the API's ownership check.
 pub async fn create_wave(db: &Db, wave: WaveRecord) -> Result<()> {
     debug!(wave_id = %wave.wave_id, "storing wave record");
     let row = wave_to_row(&wave);
-    let _: Option<WaveRow> = db
-        .upsert(("waves", &wave.wave_id))
-        .content(row)
+    let resp = db
+        .query(owner_guarded_upsert("waves", "wave"))
+        .bind(("id", wave.wave_id.clone()))
+        .bind(("orch", wave.orchestrator.clone()))
+        .bind(("row", row))
         .await
         .context("failed to create wave")?;
-    Ok(())
+    check_guarded(resp).with_context(|| format!("failed to create wave '{}'", wave.wave_id))
+}
+
+/// Surface the real cause of a failed [`owner_guarded_upsert`]: every
+/// statement of a failed transaction reports "failed transaction"; the
+/// `THROW` (or the statement that actually failed) says why.
+pub(crate) fn check_guarded(mut resp: surrealdb::Response) -> Result<()> {
+    let mut errors: Vec<(usize, String)> = resp
+        .take_errors()
+        .into_iter()
+        .map(|(i, e)| (i, e.to_string()))
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    errors.sort();
+    let cause = errors
+        .iter()
+        .find(|(_, e)| !e.contains("failed transaction"))
+        .unwrap_or(&errors[0]);
+    anyhow::bail!("{}", cause.1)
+}
+
+/// SurrealQL for an upsert of `$row` at `<table>:$id` that fails when the
+/// record exists with an orchestrator other than `$orch`.
+pub(crate) fn owner_guarded_upsert(table: &str, what: &str) -> String {
+    format!(
+        "BEGIN TRANSACTION;\n\
+         LET $owner = (SELECT VALUE orchestrator FROM ONLY type::thing('{table}', $id));\n\
+         IF $owner != NONE AND $owner != $orch {{\n\
+           THROW 'forbidden: {what} ' + $id + ' belongs to another orchestrator';\n\
+         }};\n\
+         UPSERT type::thing('{table}', $id) CONTENT $row;\n\
+         COMMIT TRANSACTION;"
+    )
 }
 
 pub async fn update_wave_status(db: &Db, wave_id: &str, status: &str) -> Result<()> {
