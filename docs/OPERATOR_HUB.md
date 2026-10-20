@@ -252,6 +252,24 @@ sleep 2
 sudo systemctl enable --now nats-hub-server.service
 ```
 
+## 8b. Durable delivery (optional, recommended for remote/laptop agents)
+
+To keep DMs for offline agents, survive hub-server restarts and let
+delegators resume results (details: [`DELIVERY.md`](DELIVERY.md)):
+
+1. Render the config with `hub-admin render-config ... --durable
+   --js-store-dir /var/lib/nats-hub/jetstream` (or uncomment the
+   `jetstream {}` block in the prod example). Create the directory, owned
+   by the NATS service user.
+2. Add `--durable` to hub-server's `ExecStart` (optionally
+   `--delivery-config /etc/nats-hub/delivery.json` for retention limits).
+3. Restart both units. Check with `scripts/dogfood_durable.sh` on a staging
+   box, or `nats stream ls` (shows `HUB_INGRESS`, `HUB_INBOX`, `HUB_TASKS`).
+
+Run **one hub-server per hub**: a second one routes correctly (they share
+the `router` consumer), but it can't share the embedded DB. See
+[`DELIVERY.md` → Several hub-servers](DELIVERY.md#several-hub-servers).
+
 ## Verification checklist
 
 Run every one of these on a fresh hub. Each one should succeed; if not,
@@ -317,6 +335,10 @@ Put whichever you pick behind cron or systemd-timer; keep at least 14 days.
 
 Also back up `/etc/nats/nats-server.conf` — losing the user list means
 re-issuing every credential.
+
+With durable delivery on, the JetStream store (`/var/lib/nats-hub/jetstream`)
+holds undelivered DMs and recent task results. Archive it while nats-server
+is stopped, or accept losing in-flight messages on a restore.
 
 ## Rotation
 
