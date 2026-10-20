@@ -9,9 +9,11 @@ use crate::storage::{AgentFilter, HistoryQuery, Storage, MAX_THREAD_DEPTH};
 
 mod session;
 mod wave;
+mod wave_orch;
 
 pub(super) use session::*;
 pub(super) use wave::*;
+pub(super) use wave_orch::{wave_cancel, wave_spawn, wave_status};
 
 // ── Agent handlers ─────────────────────────────────────────────
 

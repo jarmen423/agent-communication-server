@@ -1,6 +1,5 @@
 //! Session query-API handlers (`session.*`).
 
-use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::query_api::ApiResponse;
@@ -10,7 +9,9 @@ use crate::storage::{SessionFilter, SessionRecord, Storage};
 /// backend-native session reference (claude session id, codex thread id,
 /// cursor agent id, …) on the session record so a restarted worker can
 /// resume a session it no longer holds in memory. `session.get` returns
-/// the stored value.
+/// the stored value. Wave tasks have a session record too (id
+/// `<wave_id>--<task_id>`, created by the orchestrator at dispatch), so this
+/// works for them as well.
 pub(in crate::query_api) async fn session_set_backend_ctx(
     s: &dyn Storage,
     p: &Value,
@@ -25,15 +26,14 @@ pub(in crate::query_api) async fn session_set_backend_ctx(
     if !backend_ctx.is_object() {
         return ApiResponse::err("backend_ctx must be a JSON object");
     }
-    let mut session = match s.get_session(session_id).await {
-        Ok(Some(session)) => session,
-        Ok(None) => return ApiResponse::err(format!("session '{session_id}' not found")),
-        Err(e) => return ApiResponse::err(e.to_string()),
-    };
-    session.backend_ctx = Some(backend_ctx.clone());
-    session.updated_at = Utc::now();
-    match s.create_session(session).await {
-        Ok(()) => ApiResponse::ok(json!({"updated": true})),
+    // A single-field update: a concurrent `session.update_status` (or a
+    // second backend_ctx write) is never lost to a whole-record rewrite.
+    match s
+        .set_session_backend_ctx(session_id, backend_ctx.clone())
+        .await
+    {
+        Ok(true) => ApiResponse::ok(json!({"updated": true})),
+        Ok(false) => ApiResponse::err(format!("session '{session_id}' not found")),
         Err(e) => ApiResponse::err(e.to_string()),
     }
 }

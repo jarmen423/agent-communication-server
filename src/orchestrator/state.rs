@@ -16,10 +16,39 @@ pub const ORCHESTRATOR_IDENTITY: &str = "hub-orchestrator";
 /// Default liveness TTL: a worker silent longer loses its running tasks.
 pub const DEFAULT_LIVENESS_SECS: u64 = 90;
 /// Fallback wave timeout when spawn passes none and the record lacks one.
-pub(super) const DEFAULT_TIMEOUT_SECS: u64 = 3600;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 3600;
+/// Shortest accepted wave timeout.
+pub const MIN_TIMEOUT_SECS: u64 = 1;
+/// Longest accepted wave timeout (7 days). Larger values are clamped: an
+/// unclamped `u64::MAX` overflowed `Instant + Duration` and panicked the
+/// orchestrator, and again on every restart when the wave was resumed.
+pub const MAX_TIMEOUT_SECS: u64 = 7 * 24 * 3600;
+/// `wave.metadata` key holding `{task_id: <session_start envelope id>}`, the
+/// id workers register a dispatched turn under (contract C2).
+pub(super) const DISPATCH_IDS_KEY: &str = "dispatch_ids";
 
+/// Clamp a wave timeout to [`MIN_TIMEOUT_SECS`] ..= [`MAX_TIMEOUT_SECS`].
+pub fn clamp_timeout_secs(secs: u64) -> u64 {
+    secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS)
+}
+
+/// `start + secs` (clamped), never panicking on overflow.
+pub(super) fn deadline_after(start: Instant, secs: u64) -> Instant {
+    let timeout = Duration::from_secs(clamp_timeout_secs(secs));
+    start
+        .checked_add(timeout)
+        .or_else(|| Instant::now().checked_add(timeout))
+        .unwrap_or_else(Instant::now)
+}
+
+/// Terminal *task* status.
 pub(super) fn is_terminal(status: &str) -> bool {
     matches!(status, "done" | "failed" | "cancelled")
+}
+
+/// Terminal *wave* status (the merge-gate outcomes). A terminal wave is final.
+pub(super) fn is_wave_terminal(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
 }
 
 /// Read a payload field as text (strings pass through; other JSON is
@@ -72,12 +101,17 @@ pub struct OrchestratorConfig {
     /// How long a worker may stay silent (no heartbeat, no wave-channel
     /// envelope) before its running task is failed.
     pub liveness_ttl: Duration,
+    /// hub-server runs with `--require-bound-identity`: legacy bare
+    /// `hub.presence` heartbeats (identity taken from the payload) are
+    /// ignored, only `hub.presence.<identity>` counts.
+    pub require_bound_identity: bool,
 }
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             liveness_ttl: Duration::from_secs(DEFAULT_LIVENESS_SECS),
+            require_bound_identity: false,
         }
     }
 }
@@ -85,12 +119,55 @@ impl Default for OrchestratorConfig {
 /// Live (non-persisted) per-wave state. Persisted state always wins: the
 /// task map is seeded from storage and every mutation is written back.
 pub(super) struct WaveRt {
+    /// The wave's owner (`WaveRecord::orchestrator`); owns the task sessions.
+    pub(super) owner: String,
     pub(super) tasks: HashMap<String, WaveTaskRecord>,
     pub(super) done: HashSet<String>,
     pub(super) deadline: Instant,
     /// task_id → last instant its `session_start` was sent. Liveness
     /// baseline for a worker never heard from.
     pub(super) dispatched: HashMap<String, Instant>,
+    /// task_id → envelope id of the latest `session_start` sent for it
+    /// (contract C2: the cancel DM's `task_id`). Mirrored to
+    /// `wave.metadata.dispatch_ids` so a cancel after a restart still works.
+    pub(super) dispatch_ids: HashMap<String, String>,
+}
+
+impl WaveRt {
+    pub(super) fn new(wave: &WaveRecord, tasks: Vec<WaveTaskRecord>, deadline: Instant) -> Self {
+        let done = tasks
+            .iter()
+            .filter(|t| t.status == "done")
+            .map(|t| t.task_id.clone())
+            .collect();
+        let dispatch_ids = wave
+            .metadata
+            .get(DISPATCH_IDS_KEY)
+            .and_then(Value::as_object)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            owner: wave.orchestrator.clone(),
+            tasks: tasks.into_iter().map(|t| (t.task_id.clone(), t)).collect(),
+            done,
+            deadline,
+            dispatched: HashMap::new(),
+            dispatch_ids,
+        }
+    }
+
+    /// Ids of tasks currently `running`.
+    pub(super) fn running_ids(&self) -> Vec<String> {
+        self.tasks
+            .values()
+            .filter(|t| t.status == "running")
+            .map(|t| t.task_id.clone())
+            .collect()
+    }
 }
 
 pub(super) fn non_empty_or(s: String, fallback: &str) -> String {
@@ -110,5 +187,36 @@ pub(super) fn task_to_input(t: &WaveTaskRecord) -> WaveTaskInput {
         dependencies: t.dependencies.clone(),
         handoff_path: t.handoff_path.clone(),
         verify_cmd: t.verify_cmd.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_is_clamped() {
+        assert_eq!(clamp_timeout_secs(0), MIN_TIMEOUT_SECS);
+        assert_eq!(clamp_timeout_secs(60), 60);
+        assert_eq!(clamp_timeout_secs(u64::MAX), MAX_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn deadline_never_overflows() {
+        // Regression: `Instant::now() + Duration::from_secs(u64::MAX)` panicked.
+        let now = Instant::now();
+        let d = deadline_after(now, u64::MAX);
+        assert_eq!(d - now, Duration::from_secs(MAX_TIMEOUT_SECS));
+        assert_eq!(deadline_after(now, 5) - now, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn completed_wave_is_terminal() {
+        for s in ["completed", "failed", "cancelled"] {
+            assert!(is_wave_terminal(s), "{s}");
+        }
+        for s in ["pending", "running"] {
+            assert!(!is_wave_terminal(s), "{s}");
+        }
     }
 }

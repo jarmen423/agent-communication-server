@@ -1,14 +1,44 @@
-//! Wave query-API handlers (`wave.*`). Orchestration ops (`spawn`,
-//! `cancel`) forward to the hub-server wave orchestrator.
+//! Wave record handlers (`wave.create`, `wave.get`, task CRUD, status
+//! updates). Orchestration ops live in [`super::wave_orch`].
+//!
+//! Terminal states are final: a `completed`/`failed`/`cancelled` wave and a
+//! `done`/`failed`/`cancelled` task never change again, and while a wave is
+//! `running` its task statuses change only through the orchestrator's state
+//! machine.
 
 use chrono::Utc;
 use serde_json::{json, Value};
-use tokio::sync::oneshot;
 
-use crate::orchestrator::{orchestrator_handle, snapshot_json, OrchCommand};
+use super::wave_orch::ask_orchestrator;
+use crate::orchestrator::OrchCommand;
 use crate::query_api::ApiResponse;
 use crate::storage::{Storage, WaveRecord, WaveTaskRecord};
-use crate::wave::{validate_tasks, WaveTaskInput};
+use crate::wave::{validate_id, validate_tasks, WaveTaskInput};
+
+fn is_wave_terminal(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+fn is_task_terminal(status: &str) -> bool {
+    matches!(status, "done" | "failed" | "cancelled")
+}
+
+/// A wave may be (re)created only while it doesn't exist or is still
+/// pending: overwriting a running or finished wave would reset its tasks
+/// behind the orchestrator's back.
+async fn check_recreate(s: &dyn Storage, wave_id: &str) -> Result<(), ApiResponse> {
+    validate_id("wave_id", wave_id).map_err(|e| ApiResponse::err(format!("{e:#}")))?;
+    match s.get_wave(wave_id).await {
+        Ok(Some(w)) if w.status == "running" || is_wave_terminal(&w.status) => {
+            Err(ApiResponse::err(format!(
+                "wave '{wave_id}' already exists and is '{}'",
+                w.status
+            )))
+        }
+        Ok(_) => Ok(()),
+        Err(e) => Err(ApiResponse::err(e.to_string())),
+    }
+}
 
 /// `wave.create`.
 ///
@@ -30,6 +60,9 @@ pub(in crate::query_api) async fn wave_create(s: &dyn Storage, p: &Value) -> Api
                 Err(e) => return ApiResponse::err(format!("bad tasks list: {e}")),
             },
         };
+        if let Err(resp) = check_recreate(s, &wave.wave_id).await {
+            return resp;
+        }
         if !inputs.is_empty() {
             if let Err(e) = validate_tasks(&inputs) {
                 return ApiResponse::err(format!("{e:#}"));
@@ -73,97 +106,12 @@ pub(in crate::query_api) async fn wave_create(s: &dyn Storage, p: &Value) -> Api
         Ok(w) => w,
         Err(e) => return ApiResponse::err(format!("bad wave record: {e}")),
     };
+    if let Err(resp) = check_recreate(s, &wave.wave_id).await {
+        return resp;
+    }
     match s.create_wave(wave).await {
         Ok(()) => ApiResponse::ok(json!({"created": true})),
         Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-/// `wave.spawn`: `{wave_id, timeout_secs?}` — hand the wave to the
-/// hub-server orchestrator, which dispatches ready tasks and drives the
-/// wave to a terminal status. Returns the wave snapshot.
-pub(in crate::query_api) async fn wave_spawn(_s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let timeout_secs = p
-        .get("timeout_secs")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(3600);
-    let Some(handle) = orchestrator_handle() else {
-        return ApiResponse::err(
-            "wave orchestration requires a running hub-server with storage \
-             (the wave orchestrator is not active)",
-        );
-    };
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .send(OrchCommand::Spawn {
-            wave_id: wave_id.to_string(),
-            timeout_secs,
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return ApiResponse::err("wave orchestrator is unavailable");
-    }
-    match rx.await {
-        Ok(Ok(data)) => ApiResponse::ok(data),
-        Ok(Err(e)) => ApiResponse::err(e),
-        Err(_) => ApiResponse::err("wave orchestrator dropped the request"),
-    }
-}
-
-/// `wave.status`: `{wave_id}` — wave record, tasks, and a summary
-/// (counts per status + merge gate). Pure storage read.
-pub(in crate::query_api) async fn wave_status(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let wave = match s.get_wave(wave_id).await {
-        Ok(Some(w)) => w,
-        Ok(None) => return ApiResponse::err(format!("wave '{wave_id}' not found")),
-        Err(e) => return ApiResponse::err(e.to_string()),
-    };
-    let tasks = match s.list_wave_tasks(wave_id).await {
-        Ok(t) => t,
-        Err(e) => return ApiResponse::err(e.to_string()),
-    };
-    ApiResponse::ok(snapshot_json(&wave, &tasks))
-}
-
-/// `wave.cancel`: `{wave_id}` — the orchestrator cancels every non-terminal
-/// task (running workers get the §4.2 cancel DM) and marks the wave
-/// `cancelled`.
-pub(in crate::query_api) async fn wave_cancel(_s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let Some(handle) = orchestrator_handle() else {
-        return ApiResponse::err(
-            "wave cancellation requires a running hub-server with storage \
-             (the wave orchestrator is not active)",
-        );
-    };
-    let (tx, rx) = oneshot::channel();
-    if handle
-        .send(OrchCommand::Cancel {
-            wave_id: wave_id.to_string(),
-            reply: tx,
-        })
-        .await
-        .is_err()
-    {
-        return ApiResponse::err("wave orchestrator is unavailable");
-    }
-    match rx.await {
-        Ok(Ok(data)) => ApiResponse::ok(data),
-        Ok(Err(e)) => ApiResponse::err(e),
-        Err(_) => ApiResponse::err("wave orchestrator dropped the request"),
     }
 }
 
@@ -172,6 +120,29 @@ pub(in crate::query_api) async fn wave_create_task(s: &dyn Storage, p: &Value) -
         Ok(t) => t,
         Err(e) => return ApiResponse::err(format!("bad task record: {e}")),
     };
+    if let Err(e) = validate_id("task_id", &task.task_id) {
+        return ApiResponse::err(format!("{e:#}"));
+    }
+    match s.get_wave(&task.wave_id).await {
+        Ok(Some(w)) if w.status == "running" || is_wave_terminal(&w.status) => {
+            return ApiResponse::err(format!(
+                "wave '{}' is '{}' — tasks can only be added to a pending wave",
+                task.wave_id, w.status
+            ))
+        }
+        Ok(_) => {}
+        Err(e) => return ApiResponse::err(e.to_string()),
+    }
+    match s.get_wave_task(&task.wave_id, &task.task_id).await {
+        Ok(Some(t)) if is_task_terminal(&t.status) || t.status == "running" => {
+            return ApiResponse::err(format!(
+                "task '{}' already exists and is '{}'",
+                task.task_id, t.status
+            ))
+        }
+        Ok(_) => {}
+        Err(e) => return ApiResponse::err(e.to_string()),
+    }
     match s.create_wave_task(task).await {
         Ok(()) => ApiResponse::ok(json!({"created": true})),
         Err(e) => ApiResponse::err(e.to_string()),
@@ -187,6 +158,27 @@ pub(in crate::query_api) async fn wave_update_status(s: &dyn Storage, p: &Value)
         Some(s) => s,
         None => return ApiResponse::err("missing status"),
     };
+    let current = match s.get_wave(wave_id).await {
+        Ok(Some(w)) => w.status,
+        Ok(None) => return ApiResponse::err(format!("wave '{wave_id}' not found")),
+        Err(e) => return ApiResponse::err(e.to_string()),
+    };
+    if current == status {
+        return ApiResponse::ok(json!({"updated": false, "status": current}));
+    }
+    if is_wave_terminal(&current) {
+        return ApiResponse::err(format!(
+            "wave '{wave_id}' is already {current} (terminal states are final)"
+        ));
+    }
+    if current == "running" {
+        return ApiResponse::err(format!(
+            "wave '{wave_id}' is running — the orchestrator owns its status; use wave.cancel"
+        ));
+    }
+    if status == "running" {
+        return ApiResponse::err("use wave.spawn to start a wave");
+    }
     match s.update_wave_status(wave_id, status).await {
         Ok(()) => ApiResponse::ok(json!({"updated": true})),
         Err(e) => ApiResponse::err(e.to_string()),
@@ -243,11 +235,52 @@ pub(in crate::query_api) async fn wave_update_task_status(
         .get("result")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+
+    let task = match s.get_wave_task(&wave_id, &task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return ApiResponse::err(format!("task '{task_id}' not found in wave '{wave_id}'"))
+        }
+        Err(e) => return ApiResponse::err(e.to_string()),
+    };
+    if task.status == status {
+        return ApiResponse::ok(json!({"updated": false, "status": status}));
+    }
+    if is_task_terminal(&task.status) {
+        return ApiResponse::err(format!(
+            "task '{task_id}' is already {} (terminal states are final)",
+            task.status
+        ));
+    }
+    let wave_status = match s.get_wave(&wave_id).await {
+        Ok(Some(w)) => w.status,
+        Ok(None) => return ApiResponse::err(format!("wave '{wave_id}' not found")),
+        Err(e) => return ApiResponse::err(e.to_string()),
+    };
+    if is_wave_terminal(&wave_status) {
+        return ApiResponse::err(format!("wave '{wave_id}' is already {wave_status}"));
+    }
+    if wave_status == "running" {
+        // A running wave's tasks move only through the orchestrator's state
+        // machine (dependents dispatch, fail-fast, cancel DMs). Without an
+        // orchestrator in this process (embedded use), fall through to storage.
+        let forwarded = ask_orchestrator(|reply| OrchCommand::UpdateTask {
+            wave_id: wave_id.clone(),
+            task_id: task_id.clone(),
+            status: status.clone(),
+            result: result.clone(),
+            reply,
+        })
+        .await;
+        if let Some(resp) = forwarded {
+            return resp;
+        }
+    }
     match s
         .update_wave_task_status(&wave_id, &task_id, &status, result.as_deref())
         .await
     {
-        Ok(()) => ApiResponse::ok(json!({"updated": true})),
+        Ok(()) => ApiResponse::ok(json!({"updated": true, "status": status})),
         Err(e) => ApiResponse::err(e.to_string()),
     }
 }

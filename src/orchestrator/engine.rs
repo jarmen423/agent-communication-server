@@ -8,13 +8,13 @@
 //! and [`super::resume`].
 
 use anyhow::{Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::client::HubClient;
 use crate::events::event_payload;
@@ -22,6 +22,13 @@ use crate::protocol::{subjects, Envelope, MessageKind};
 use crate::storage::{Storage, WaveTaskRecord};
 
 use super::api::{install_handle, OrchCommand, OrchestratorHandle};
+
+/// How long resume waits for the router to route the readiness probe.
+const ROUTER_READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// Re-send interval of the readiness probe.
+const ROUTER_PROBE_INTERVAL: Duration = Duration::from_millis(250);
+/// Channel of the readiness probe DM (routed to our own inbox).
+const ROUTER_PROBE_CHANNEL: &str = "orchestrator.ready";
 use super::state::{OrchestratorConfig, WaveRt, ORCHESTRATOR_IDENTITY};
 
 pub struct WaveOrchestrator {
@@ -85,6 +92,8 @@ impl WaveOrchestrator {
             .await
             .context("orchestrator: subscribe hub.presence.* failed")?;
 
+        // Resume re-dispatches through the router; wait until it routes.
+        self.wait_for_router().await;
         if let Err(e) = self.resume().await {
             warn!(error = %e, "wave resume failed; starting with an empty slate");
         }
@@ -105,6 +114,49 @@ impl WaveOrchestrator {
                 _ = sweep.tick() => self.sweep().await,
             }
         }
+    }
+
+    /// Block until the control-plane router routes our DMs (it starts after
+    /// the orchestrator in hub-server and subscribes to `hub.pub.*.>` only
+    /// once its storage warm-up is done). A `session_start` re-sent before
+    /// that would be dropped by NATS. We DM ourselves a probe until it comes
+    /// back on our inbox; after [`ROUTER_READY_TIMEOUT`] we resume anyway.
+    async fn wait_for_router(&self) {
+        let identity = self.client.identity().to_string();
+        let mut inbox = match self.client.subscribe_inbox().await {
+            Ok(rx) => rx,
+            Err(e) => {
+                warn!(error = %e, "router probe: inbox subscribe failed; resuming without it");
+                return;
+            }
+        };
+        let deadline = Instant::now() + ROUTER_READY_TIMEOUT;
+        for attempt in 1u32.. {
+            let probe = Envelope::new(
+                &identity,
+                ROUTER_PROBE_CHANNEL,
+                MessageKind::Control,
+                json!({"action": "router_probe"}),
+            )
+            .to(&identity);
+            if let Err(e) = self.client.send(&probe).await {
+                debug!(error = %e, attempt, "router probe publish failed");
+            }
+            let wait_until = (Instant::now() + ROUTER_PROBE_INTERVAL).min(deadline);
+            while let Ok(Some(env)) = tokio::time::timeout_at(wait_until, inbox.recv()).await {
+                if env.meta.id == probe.meta.id {
+                    info!(attempt, "router is routing; resuming waves");
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+        warn!(
+            "router readiness not confirmed within {}s; resuming anyway",
+            ROUTER_READY_TIMEOUT.as_secs()
+        );
     }
 
     pub(super) async fn persist_task(&self, task: &WaveTaskRecord) {

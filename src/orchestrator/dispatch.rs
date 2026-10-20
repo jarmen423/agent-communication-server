@@ -1,19 +1,18 @@
-//! Dependency dispatch, wave finalization, fail-fast teardown, and the
-//! `session_start` / cancel DMs sent to workers.
+//! Dependency dispatch, task release (cancel / `session_close`), wave
+//! finalization and fail-fast teardown.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde_json::json;
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use crate::client::HubClient;
-use crate::protocol::{subjects, Envelope, MessageKind};
-use crate::storage::WaveTaskRecord;
-use crate::wave::evaluate_merge_gate;
+use crate::storage::{SessionRecord, WaveTaskRecord};
+use crate::wave::{evaluate_merge_gate, wave_task_session_id};
 
 use super::engine::WaveOrchestrator;
-use super::state::is_terminal;
+use super::messages;
+use super::state::{is_terminal, DISPATCH_IDS_KEY};
 
 impl WaveOrchestrator {
     /// DM `session_start` to every pending task whose deps are all done.
@@ -31,9 +30,9 @@ impl WaveOrchestrator {
         };
         for task in ready {
             let task_id = task.task_id.clone();
-            if let Err(e) = send_session_start(&self.client, wave_id, &task).await {
+            if let Err(e) = self.send_dispatch(wave_id, &task).await {
                 warn!(error = %e, %wave_id, %task_id, "task dispatch failed");
-                self.fail_task(wave_id, &task_id, format!("dispatch failed: {e:#}"))
+                self.fail_task(wave_id, &task_id, format!("dispatch failed: {e:#}"), false)
                     .await;
                 return; // the wave is dead; stop dispatching
             }
@@ -46,7 +45,6 @@ impl WaveOrchestrator {
                 };
                 t.status = "running".to_string();
                 t.started_at = Some(Utc::now());
-                rt.dispatched.insert(task_id.clone(), Instant::now());
                 t.clone()
             };
             self.persist_task(&row).await;
@@ -57,6 +55,119 @@ impl WaveOrchestrator {
                 json!({"task_id": task_id, "worker": row.worker}),
             )
             .await;
+        }
+    }
+
+    /// Send (or re-send) `session_start` for `task` and remember its
+    /// envelope id as the task's cancel id (C2), in memory and in
+    /// `wave.metadata.dispatch_ids`. The task's session record is created
+    /// first, so the worker can `session.set_backend_ctx` on it.
+    pub(super) async fn send_dispatch(
+        &mut self,
+        wave_id: &str,
+        task: &WaveTaskRecord,
+    ) -> Result<()> {
+        self.ensure_task_session(wave_id, task).await;
+        let env = messages::session_start(self.client.identity(), wave_id, task);
+        self.client
+            .send(&env)
+            .await
+            .with_context(|| format!("session_start for task '{}'", task.task_id))?;
+        let ids = {
+            let Some(rt) = self.waves.get_mut(wave_id) else {
+                return Ok(());
+            };
+            rt.dispatched.insert(task.task_id.clone(), Instant::now());
+            rt.dispatch_ids
+                .insert(task.task_id.clone(), env.meta.id.clone());
+            json!(rt.dispatch_ids)
+        };
+        if let Err(e) = self
+            .storage
+            .set_wave_metadata_key(wave_id, DISPATCH_IDS_KEY, ids)
+            .await
+        {
+            warn!(error = %e, %wave_id, "failed to persist dispatch ids");
+        }
+        Ok(())
+    }
+
+    /// Wave tasks run in session `<wave_id>--<task_id>` (C4). Give it a
+    /// session record so `session.get` / `session.set_backend_ctx` work for
+    /// wave tasks. Its `orchestrator` is the orchestrator's own identity —
+    /// the sender of every `session_start` / `session_close` / cancel DM —
+    /// because workers take a resumed session's owner from that field and
+    /// accept session messages only from it. The wave's owner is kept in
+    /// `metadata.wave_owner`. An existing record is kept as is (it may hold
+    /// `backend_ctx`).
+    async fn ensure_task_session(&self, wave_id: &str, task: &WaveTaskRecord) {
+        let session_id = wave_task_session_id(wave_id, &task.task_id);
+        match self.storage.get_session(&session_id).await {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(e) => {
+                warn!(error = %e, %session_id, "failed to look up wave task session");
+                return;
+            }
+        }
+        let owner = self
+            .waves
+            .get(wave_id)
+            .map(|rt| rt.owner.clone())
+            .unwrap_or_default();
+        let now = Utc::now();
+        let record = SessionRecord {
+            session_id: session_id.clone(),
+            orchestrator: self.client.identity().to_string(),
+            worker: task.worker.clone(),
+            status: "active".to_string(),
+            cwd: None,
+            model: None,
+            provider: None,
+            created_at: now,
+            updated_at: now,
+            closed_at: None,
+            metadata: json!({
+                "kind": "wave_task",
+                "wave_id": wave_id,
+                "task_id": task.task_id,
+                "wave_owner": owner,
+            }),
+            backend_ctx: None,
+        };
+        if let Err(e) = self.storage.create_session(record).await {
+            warn!(error = %e, %session_id, "failed to create wave task session");
+        }
+    }
+
+    /// A dispatched task reached a terminal state: optionally DM the §4.2
+    /// cancel (the worker may still be running it), then `session_close`,
+    /// and close the session record.
+    pub(super) async fn release_task(&self, wave_id: &str, task: &WaveTaskRecord, cancel: bool) {
+        let identity = self.client.identity();
+        if cancel {
+            let dispatch_id = self
+                .waves
+                .get(wave_id)
+                .and_then(|rt| rt.dispatch_ids.get(&task.task_id))
+                .cloned()
+                .unwrap_or_else(|| task.task_id.clone());
+            let env = messages::cancel(identity, wave_id, task, &dispatch_id);
+            if let Err(e) = self.client.send(&env).await {
+                warn!(error = %e, %wave_id, task_id = %task.task_id, "cancel DM failed");
+            }
+        }
+        let env = messages::session_close(identity, wave_id, task);
+        if let Err(e) = self.client.send(&env).await {
+            warn!(error = %e, %wave_id, task_id = %task.task_id, "session_close DM failed");
+        }
+        let session_id = wave_task_session_id(wave_id, &task.task_id);
+        if let Err(e) = self
+            .storage
+            .update_session_status(&session_id, "closed")
+            .await
+        {
+            debug!(error = %e, %session_id, "failed to close wave task session");
         }
     }
 
@@ -92,11 +203,12 @@ impl WaveOrchestrator {
         self.publish_wave_event(wave_id, &format!("wave_{status}"), data)
             .await;
         self.waves.remove(wave_id);
+        self.prune_liveness();
     }
 
-    /// Fail-fast teardown: cancel every non-terminal task (DM §4.2 cancels
-    /// to running tasks' workers), set the wave's final status, drop it.
-    /// Also used for `wave.cancel` and wave timeout.
+    /// Fail-fast teardown: cancel every non-terminal task (running tasks'
+    /// workers get the §4.2 cancel DM and `session_close`), set the wave's
+    /// final status, drop it. Also used for `wave.cancel` and wave timeout.
     pub(super) async fn shutdown_wave(&mut self, wave_id: &str, status: &str, reason: &str) {
         let mut rows = Vec::new();
         let mut dm_targets: Vec<WaveTaskRecord> = Vec::new();
@@ -135,62 +247,8 @@ impl WaveOrchestrator {
             self.persist_task(row).await;
         }
         for task in &dm_targets {
-            send_cancel_dm(&self.client, wave_id, task).await;
+            self.release_task(wave_id, task, true).await;
         }
         self.finalize_wave(wave_id, status, Some(reason)).await;
-    }
-}
-
-/// The `session_start` DM that tells a worker to run one wave task.
-pub(super) async fn send_session_start(
-    client: &HubClient,
-    wave_id: &str,
-    task: &WaveTaskRecord,
-) -> Result<()> {
-    let task_channel = subjects::wave_task_channel_name(wave_id, &task.task_id);
-    let mut payload = json!({
-        "action": "session_start",
-        "session_id": task.task_id,
-        "wave_id": wave_id,
-        "channel": task_channel,
-        "prompt": task.goal,
-        "write_scope": task.write_scope,
-    });
-    if let Some(ref cmd) = task.verify_cmd {
-        payload["verify_cmd"] = json!(cmd);
-    }
-    if let Some(ref path) = task.handoff_path {
-        payload["handoff_path"] = json!(path);
-    }
-    let env = Envelope::new(
-        client.identity(),
-        &task_channel,
-        MessageKind::Message,
-        payload,
-    )
-    .to(&task.worker);
-    client
-        .send(&env)
-        .await
-        .with_context(|| format!("session_start for task '{}'", task.task_id))
-}
-
-/// §4.2 cancel contract: DM `kind=control {"action":"cancel","task_id":…}`.
-pub(super) async fn send_cancel_dm(client: &HubClient, wave_id: &str, task: &WaveTaskRecord) {
-    let task_channel = subjects::wave_task_channel_name(wave_id, &task.task_id);
-    let payload = json!({
-        "action": "cancel",
-        "task_id": task.task_id,
-        "wave_id": wave_id,
-    });
-    let env = Envelope::new(
-        client.identity(),
-        &task_channel,
-        MessageKind::Control,
-        payload,
-    )
-    .to(&task.worker);
-    if let Err(e) = client.send(&env).await {
-        warn!(error = %e, %wave_id, task_id = %task.task_id, "cancel DM failed");
     }
 }

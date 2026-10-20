@@ -1,8 +1,9 @@
 //! Envelopes on `channel.wave.>`: worker events and terminal results that
-//! drive task transitions (only from the task's assigned worker).
+//! drive task transitions (only from the task's assigned worker, and only
+//! while the task is `running`).
 
 use tokio::time::Instant;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::events::{event_data, event_type, event_types};
 use crate::protocol::{Envelope, MessageKind};
@@ -17,13 +18,21 @@ impl WaveOrchestrator {
         let Some((wave_id, chan_task)) = parse_wave_channel(&env.meta.channel) else {
             return;
         };
-        if !self.waves.contains_key(&wave_id) {
-            return;
-        }
-        // Any envelope on a tracked wave's channels proves its sender alive.
-        self.last_seen.insert(env.meta.from.clone(), Instant::now());
         if env.meta.from == ORCHESTRATOR_IDENTITY {
             return; // our own progress publishes echo back on the wildcard
+        }
+        let Some(rt) = self.waves.get(&wave_id) else {
+            return;
+        };
+        // Proof of life only for a worker this wave is waiting on: anyone
+        // else posting on the wave's channels must not be able to keep a
+        // (different) worker's task alive or grow `last_seen`.
+        let is_worker = rt
+            .tasks
+            .values()
+            .any(|t| t.worker == env.meta.from && !is_terminal(&t.status));
+        if is_worker {
+            self.last_seen.insert(env.meta.from.clone(), Instant::now());
         }
 
         let task_id = chan_task
@@ -50,14 +59,16 @@ impl WaveOrchestrator {
                 None => return,
             }
         };
-        if is_terminal(&task_status) {
-            return;
-        }
         if env.meta.from != worker {
             warn!(
                 %wave_id, %task_id, sender = %env.meta.from, expected = %worker,
                 "ignoring wave task envelope from foreign sender"
             );
+            return;
+        }
+        if task_status != "running" {
+            // Not dispatched yet, or already terminal: nothing to change.
+            debug!(%wave_id, %task_id, status = %task_status, "ignoring envelope for a task that isn't running");
             return;
         }
 
@@ -67,17 +78,24 @@ impl WaveOrchestrator {
                     let result = json_text(event_data(&env).get("result"));
                     self.complete_task(&wave_id, &task_id, result).await;
                 }
+                // Workers mark a §4.2 cancellation with an `error` event
+                // carrying `cancelled: true`; that is not a task failure.
+                Some(event_types::ERROR)
+                    if event_data(&env).get("cancelled").and_then(|v| v.as_bool())
+                        == Some(true) =>
+                {
+                    self.cancel_task(&wave_id, &task_id, false).await;
+                }
                 Some(event_types::ERROR) => {
                     let err = json_text(event_data(&env).get("error"));
-                    self.fail_task(&wave_id, &task_id, non_empty_or(err, "task failed"))
+                    self.fail_task(&wave_id, &task_id, non_empty_or(err, "task failed"), false)
                         .await;
                 }
-                Some(event_types::MILESTONE) => {
+                Some(event_types::MILESTONE)
                     if event_data(&env).get("name").and_then(|v| v.as_str())
-                        == Some("verify_passed")
-                    {
-                        self.record_verify(&wave_id, &task_id, "passed").await;
-                    }
+                        == Some("verify_passed") =>
+                {
+                    self.record_verify(&wave_id, &task_id, "passed").await;
                 }
                 _ => {}
             },
@@ -89,10 +107,10 @@ impl WaveOrchestrator {
                 }
                 Some("error") => {
                     let err = json_text(env.payload.get("error"));
-                    self.fail_task(&wave_id, &task_id, non_empty_or(err, "task failed"))
+                    self.fail_task(&wave_id, &task_id, non_empty_or(err, "task failed"), false)
                         .await;
                 }
-                Some("cancelled") => self.worker_cancelled(&wave_id, &task_id).await,
+                Some("cancelled") => self.cancel_task(&wave_id, &task_id, false).await,
                 _ => {}
             },
             _ => {}

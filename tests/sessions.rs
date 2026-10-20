@@ -190,3 +190,59 @@ async fn test_session_channel_isolation() {
     listener_a.drain().await.unwrap();
     listener_b.drain().await.unwrap();
 }
+
+/// H2 item 10: `set_session_backend_ctx` writes only that field, so a status
+/// change made in between (by the orchestrator or the worker) survives.
+#[tokio::test]
+async fn backend_ctx_is_a_field_update() {
+    let storage = setup().await;
+    storage
+        .create_session(make_record("sess-ctx", "w1", "josh"))
+        .await
+        .unwrap();
+    storage
+        .update_session_status("sess-ctx", "closed")
+        .await
+        .unwrap();
+
+    let found = storage
+        .set_session_backend_ctx("sess-ctx", json!({"claude_session_id": "abc"}))
+        .await
+        .unwrap();
+    assert!(found);
+    let s = storage.get_session("sess-ctx").await.unwrap().unwrap();
+    assert_eq!(s.backend_ctx, Some(json!({"claude_session_id": "abc"})));
+    assert_eq!(
+        s.status, "closed",
+        "a backend_ctx write must not revert the status"
+    );
+    assert!(s.closed_at.is_some());
+
+    // Unknown session: reported, not created.
+    let found = storage
+        .set_session_backend_ctx("no-such-session", json!({"x": 1}))
+        .await
+        .unwrap();
+    assert!(!found);
+    assert!(storage
+        .get_session("no-such-session")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// The API op reports a missing session instead of creating one.
+#[tokio::test]
+async fn set_backend_ctx_api_rejects_unknown_session() {
+    let storage: std::sync::Arc<dyn Storage> = std::sync::Arc::new(setup().await);
+    let body = serde_json::to_vec(&json!({
+        "op": "session.set_backend_ctx",
+        "params": {"session_id": "ghost", "backend_ctx": {"a": 1}},
+    }))
+    .unwrap();
+    let resp =
+        nats_hub::query_api::handle_request(&storage, "hub.api.session.set_backend_ctx", &body)
+            .await;
+    assert!(!resp.ok);
+    assert!(resp.error.unwrap().contains("not found"));
+}

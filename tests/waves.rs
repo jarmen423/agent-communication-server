@@ -186,3 +186,108 @@ fn test_evaluate_merge_gate() {
     }];
     assert_eq!(evaluate_merge_gate(&failed), "failed");
 }
+
+// ── H2 hardening: storage + API state rules (no NATS) ─────────────────
+
+#[tokio::test]
+async fn wave_metadata_key_is_a_field_update() {
+    let storage = setup().await;
+    let mut wave = make_wave("w-meta", "g");
+    wave.metadata = json!({"timeout_secs": 60});
+    storage.create_wave(wave).await.unwrap();
+    storage
+        .update_wave_status("w-meta", "running")
+        .await
+        .unwrap();
+
+    let found = storage
+        .set_wave_metadata_key("w-meta", "dispatch_ids", json!({"t1": "env-1"}))
+        .await
+        .unwrap();
+    assert!(found);
+    let w = storage.get_wave("w-meta").await.unwrap().unwrap();
+    assert_eq!(w.status, "running", "metadata write must not touch status");
+    assert_eq!(w.metadata["timeout_secs"], 60);
+    assert_eq!(w.metadata["dispatch_ids"]["t1"], "env-1");
+
+    assert!(!storage
+        .set_wave_metadata_key("no-such-wave", "dispatch_ids", json!({}))
+        .await
+        .unwrap());
+    assert!(storage
+        .set_wave_metadata_key("w-meta", "bad key; DELETE waves", json!(1))
+        .await
+        .is_err());
+}
+
+async fn api(
+    s: &std::sync::Arc<dyn Storage>,
+    op: &str,
+    params: serde_json::Value,
+) -> nats_hub::query_api::ApiResponse {
+    let body = serde_json::to_vec(&json!({"op": op, "params": params})).unwrap();
+    nats_hub::query_api::handle_request(s, &format!("hub.api.{op}"), &body).await
+}
+
+#[tokio::test]
+async fn terminal_states_are_final_via_api() {
+    let s: std::sync::Arc<dyn Storage> = std::sync::Arc::new(setup().await);
+    let r = api(
+        &s,
+        "wave.create",
+        json!({
+            "wave": {"wave_id": "w-final", "goal": "g", "status": "pending",
+                     "orchestrator": "o", "created_at": Utc::now().to_rfc3339()},
+            "tasks": [{"task_id": "t1", "worker": "w1", "goal": "g"}],
+        }),
+    )
+    .await;
+    assert!(r.ok, "{:?}", r.error);
+
+    // A done task can't be flipped to anything else; re-setting done is a no-op.
+    let set = |status: &str| json!({"wave_id": "w-final", "task_id": "t1", "status": status});
+    assert!(api(&s, "wave.update_task_status", set("done")).await.ok);
+    assert!(api(&s, "wave.update_task_status", set("done")).await.ok);
+    let r = api(&s, "wave.update_task_status", set("pending")).await;
+    assert!(!r.ok && r.error.unwrap().contains("final"));
+
+    // A completed wave can't be cancelled or re-statused or re-created.
+    s.update_wave_status("w-final", "completed").await.unwrap();
+    let r = api(
+        &s,
+        "wave.update_status",
+        json!({"wave_id": "w-final", "status": "cancelled"}),
+    )
+    .await;
+    assert!(!r.ok && r.error.unwrap().contains("final"));
+    let r = api(
+        &s,
+        "wave.create",
+        json!({"wave": {"wave_id": "w-final", "goal": "g", "status": "pending",
+                        "orchestrator": "o", "created_at": Utc::now().to_rfc3339()}}),
+    )
+    .await;
+    assert!(!r.ok, "re-creating a completed wave must fail");
+    assert_eq!(
+        s.get_wave("w-final").await.unwrap().unwrap().status,
+        "completed"
+    );
+}
+
+#[tokio::test]
+async fn wave_create_rejects_ids_that_are_not_one_token() {
+    let s: std::sync::Arc<dyn Storage> = std::sync::Arc::new(setup().await);
+    for (wave_id, task_id) in [("w.1", "t1"), ("w--1", "t1"), ("w1", "t.1"), ("w1", "a--b")] {
+        let r = api(
+            &s,
+            "wave.create",
+            json!({
+                "wave": {"wave_id": wave_id, "goal": "g", "status": "pending",
+                         "orchestrator": "o", "created_at": Utc::now().to_rfc3339()},
+                "tasks": [{"task_id": task_id, "worker": "w1", "goal": "g"}],
+            }),
+        )
+        .await;
+        assert!(!r.ok, "{wave_id}/{task_id} should be rejected");
+    }
+}

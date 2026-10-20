@@ -1,7 +1,8 @@
 //! Worker liveness: heartbeats, registry seeding, and the TTL sweep.
 
+use std::collections::HashSet;
 use tokio::time::Instant;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::protocol::{subjects, Envelope};
 use crate::storage::AgentFilter;
@@ -12,16 +13,45 @@ use super::state::instant_from_datetime;
 impl WaveOrchestrator {
     /// Record a heartbeat. On the bound `hub.presence.<identity>` subject the
     /// identity comes from the subject (pinned to the credential by NATS
-    /// permissions); only the legacy subject falls back to the payload.
+    /// permissions); only the legacy subject falls back to the payload, and
+    /// not at all under `--require-bound-identity` (anyone could name any
+    /// identity there). Only workers of live waves are tracked.
     pub(super) fn on_presence(&mut self, subject: &str, env: &Envelope) {
         let bound = subject
             .strip_prefix(subjects::PRESENCE)
             .and_then(|rest| rest.strip_prefix('.'))
             .filter(|id| !id.is_empty());
+        if bound.is_none() && self.config.require_bound_identity {
+            debug!("ignoring legacy hub.presence heartbeat (bound identity required)");
+            return;
+        }
         let ident = bound.or_else(|| env.payload.get("identity").and_then(|v| v.as_str()));
         if let Some(ident) = ident {
-            self.last_seen.insert(ident.to_string(), Instant::now());
+            if self.referenced_workers().contains(ident) {
+                self.last_seen.insert(ident.to_string(), Instant::now());
+            }
         }
+    }
+
+    /// Workers of non-terminal tasks in tracked waves.
+    pub(super) fn referenced_workers(&self) -> HashSet<&str> {
+        self.waves
+            .values()
+            .flat_map(|rt| rt.tasks.values())
+            .filter(|t| !super::state::is_terminal(&t.status))
+            .map(|t| t.worker.as_str())
+            .collect()
+    }
+
+    /// Forget liveness for identities no live wave is waiting on, so
+    /// `last_seen` stays bounded.
+    pub(super) fn prune_liveness(&mut self) {
+        let keep: HashSet<String> = self
+            .referenced_workers()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        self.last_seen.retain(|id, _| keep.contains(id));
     }
 
     /// Seed `last_seen` from the persisted agent registry so a restart
@@ -53,6 +83,7 @@ impl WaveOrchestrator {
     pub(super) async fn sweep(&mut self) {
         let now = Instant::now();
         let ttl = self.config.liveness_ttl;
+        self.prune_liveness();
         let wave_ids: Vec<String> = self.waves.keys().cloned().collect();
         for wave_id in wave_ids {
             let (expired, dead) = {
@@ -92,6 +123,7 @@ impl WaveOrchestrator {
                         "worker '{worker}' silent for >{}s (liveness TTL)",
                         ttl.as_secs()
                     ),
+                    true,
                 )
                 .await;
             }
