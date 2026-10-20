@@ -171,7 +171,7 @@ def test_mcp_wave_tools_drive_orchestrator(monkeypatch):
                 break
             env = None
         assert env is not None, "no session_start DM for ta"
-        assert env["payload"]["session_id"] == "ta"
+        assert env["payload"]["session_id"] == f"{wave_id}--ta"
         assert env["payload"]["wave_id"] == wave_id
         assert env["payload"]["verify_cmd"] == "true"
 

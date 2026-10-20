@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `wave.create` | the new wave's `orchestrator` is the caller **and** no wave with that id exists for another orchestrator |
 //! | `wave.create_task`, `wave.spawn`, `wave.cancel`, `wave.update_status` | the caller orchestrates `wave_id` |
-//! | `wave.update_task_status` | the caller orchestrates the wave **or** is the task's worker |
+//! | `wave.update_task_status` | the caller orchestrates the wave, **or** is the task's worker and the wave is `running` (the orchestrator then applies it through its state machine) |
 //! | `session.create` | the new session's `orchestrator` is the caller **and** no session with that id exists for another orchestrator |
 //! | `session.update_status`, `session.set_backend_ctx` | the caller is the session's orchestrator or worker |
 //!
@@ -69,12 +69,13 @@ impl ApiAuthz {
             "wave.update_task_status" => match (param("wave_id"), param("task_id")) {
                 (Some(wave_id), Some(task_id)) => {
                     orchestrates(storage, caller, wave_id).await
-                        || storage
-                            .get_wave_task(wave_id, task_id)
-                            .await
-                            .ok()
-                            .flatten()
-                            .is_some_and(|t| t.worker == caller)
+                        || (wave_running(storage, wave_id).await
+                            && storage
+                                .get_wave_task(wave_id, task_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .is_some_and(|t| t.worker == caller))
                 }
                 _ => false,
             },
@@ -113,6 +114,17 @@ fn owner_or_new<T>(
         Ok(Some(rec)) => owner(&rec) == caller,
         Err(_) => false,
     }
+}
+
+/// A worker may only report on a spawned wave: before `wave.spawn` (or after
+/// it ends) a direct storage write would bypass dependency ordering.
+async fn wave_running(storage: &dyn Storage, wave_id: &str) -> bool {
+    storage
+        .get_wave(wave_id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|w| w.status == "running")
 }
 
 async fn orchestrates(storage: &dyn Storage, caller: &str, wave_id: &str) -> bool {

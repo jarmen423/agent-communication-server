@@ -65,16 +65,16 @@ async fn wave_writes_are_owner_scoped() {
         assert!(!forbidden(&call(&s, "alice", op, p).await), "{op}");
     }
 
-    // Task status: the task's worker or the wave owner, nobody else.
+    // Task status: the wave owner, or the task's worker once the wave is
+    // running; nobody else. On this unspawned wave the worker is refused, so
+    // it can't mark its task done ahead of dependency ordering.
     let p = json!({"wave_id": "w-a", "task_id": "t1", "status": "done"});
     assert!(forbidden(
         &call(&s, "mallory", "wave.update_task_status", p.clone()).await
     ));
-    assert!(
-        call(&s, "w1", "wave.update_task_status", p.clone())
-            .await
-            .ok
-    );
+    assert!(forbidden(
+        &call(&s, "w1", "wave.update_task_status", p.clone()).await
+    ));
     assert!(call(&s, "alice", "wave.update_task_status", p).await.ok);
 
     // wave.status is a read: owner/participant sees it, outsiders get "not found".
@@ -205,4 +205,41 @@ async fn storage_create_refuses_to_change_the_orchestrator() {
     s.create_session(sess).await.unwrap();
     let got = s.get_session("s-x").await.unwrap().unwrap();
     assert_eq!(got.backend_ctx, Some(json!({"k": "v"})));
+}
+
+/// Wave-task sessions belong to the hub's orchestrator (workers accept
+/// session messages only from it), but the wave's owner must still be able to
+/// read them; outsiders get "not found".
+#[tokio::test]
+async fn wave_owner_reads_wave_task_session() {
+    let s = storage().await;
+    let now = chrono::Utc::now();
+    s.create_session(SessionRecord {
+        session_id: "w-a--t1".into(),
+        orchestrator: "hub-orchestrator".into(),
+        worker: "w1".into(),
+        status: "active".into(),
+        cwd: None,
+        model: None,
+        provider: None,
+        created_at: now,
+        updated_at: now,
+        closed_at: None,
+        metadata: json!({"kind": "wave_task", "wave_id": "w-a", "task_id": "t1",
+                         "wave_owner": "alice"}),
+        backend_ctx: None,
+    })
+    .await
+    .unwrap();
+
+    let p = json!({"session_id": "w-a--t1"});
+    let r = call(&s, "alice", "session.get", p.clone()).await;
+    assert!(r.ok, "{:?}", r.error);
+    assert!(!call(&s, "mallory", "session.get", p).await.ok);
+
+    let r = call(&s, "alice", "session.list", json!({})).await;
+    let listed = r.data.unwrap()["sessions"].as_array().unwrap().len();
+    assert_eq!(listed, 1);
+    let r = call(&s, "mallory", "session.list", json!({})).await;
+    assert!(r.data.unwrap()["sessions"].as_array().unwrap().is_empty());
 }

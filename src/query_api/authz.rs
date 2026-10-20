@@ -39,7 +39,8 @@
 //!   - `wave.get`, `wave.list_tasks`, `wave.get_task` — visible iff `C` is
 //!     the wave's `orchestrator` or a `worker` on one of its tasks.
 //!   - `wave.list` — filtered to waves where `C` is orchestrator or worker.
-//!   - `session.get` — visible iff `C` is `orchestrator` or `worker`.
+//!   - `session.get` — visible iff `C` is `orchestrator`, `worker`, or the
+//!     `metadata.wave_owner` of a wave-task session.
 //!   - `session.list` — same filter.
 //!   - `agent.*`, `stats.*`, `ping` — unscoped metadata/aggregates.
 //! - Admins bypass all read scoping.
@@ -255,12 +256,20 @@ impl ApiAuthz {
         }
     }
 
-    /// Session visibility: `caller` is its orchestrator or worker.
+    /// Session visibility: `caller` is its orchestrator or worker, or — for a
+    /// wave-task session, owned by the hub's orchestrator — the wave's owner
+    /// (`metadata.wave_owner`).
     async fn session_visible(&self, storage: &dyn Storage, caller: &str, session_id: &str) -> bool {
         storage
             .get_session(session_id)
             .await
-            .map(|s| s.is_some_and(|s| s.orchestrator == caller || s.worker == caller))
+            .map(|s| {
+                s.is_some_and(|s| {
+                    s.orchestrator == caller
+                        || s.worker == caller
+                        || s.metadata.get("wave_owner").and_then(Value::as_str) == Some(caller)
+                })
+            })
             .unwrap_or(false)
     }
 
@@ -382,7 +391,9 @@ impl ApiAuthz {
                         arr.retain(|s| {
                             identity.is_some()
                                 && (s.get("orchestrator").and_then(Value::as_str) == identity
-                                    || s.get("worker").and_then(Value::as_str) == identity)
+                                    || s.get("worker").and_then(Value::as_str) == identity
+                                    || s.pointer("/metadata/wave_owner").and_then(Value::as_str)
+                                        == identity)
                         });
                     }
                 }
