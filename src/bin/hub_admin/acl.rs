@@ -74,7 +74,10 @@ fn subscribe_allow(identity: &str, role: &str, channels: &[String]) -> Vec<Strin
     allow
 }
 
-/// Per-agent publish allowlist — every entry is bound to the identity.
+/// Per-agent publish allowlist — every entry is bound to the identity,
+/// except `hub.worker.>` (worker-supervisor requests: list/models/ensure/
+/// stop), which services and orchestrating roles (orchestrator, admin) may
+/// call; plain workers may not.
 fn publish_allow(identity: &str, role: &str) -> Vec<String> {
     let mut allow = vec![
         format!("hub.pub.{identity}.>"),
@@ -82,7 +85,7 @@ fn publish_allow(identity: &str, role: &str) -> Vec<String> {
         format!("hub.presence.{identity}"),
         format!("hub.api.{identity}.>"),
     ];
-    if role == "service" {
+    if role != "worker" {
         allow.push("hub.worker.>".into());
     }
     allow

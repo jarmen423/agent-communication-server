@@ -13,12 +13,13 @@
 //! beats allow), so task/session/wave channels are visible to every agent
 //! and broadcast channels are granted per-agent with `--channel`.
 //!
-//! Roles (`service` changes the ACLs; the others are documentation markers —
-//! real API-admin privilege lives in `hub-server --api-admin`):
+//! Roles (real API-admin privilege lives in `hub-server --api-admin`):
 //!   worker        an execution agent (echo-worker, claude-worker, …)
-//!   orchestrator  delegates tasks / owns sessions & waves
+//!   orchestrator  delegates tasks / owns sessions & waves; may also send
+//!                 worker-supervisor requests (`hub.worker.>`)
 //!   admin         an orchestrator the operator also lists via --api-admin
-//!   service       hub-side helper that answers requests (worker supervisor)
+//!   service       hub-side helper that answers requests (worker supervisor):
+//!                 `hub.worker.>`, presence/register feeds, allow_responses
 //!
 //! Reserved identities (`hub-server`, `hub-orchestrator`, `visualizer`) and
 //! identities that collide with a query-API op namespace are refused.

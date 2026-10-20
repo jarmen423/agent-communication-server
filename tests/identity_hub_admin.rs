@@ -65,6 +65,11 @@ fn rendered_permissions_use_per_identity_reply_inboxes() {
         !alice.contains("allow_responses"),
         "workers answer no requests: {alice}"
     );
+    assert!(
+        !alice.contains("hub.worker"),
+        "workers can't drive the supervisor: {alice}"
+    );
+    assert!(user_block(&conf, "boss").contains("\"hub.worker.>\""));
     let sup = user_block(&conf, "sup");
     assert!(
         sup.contains("\"_INBOX.sup.>\"") && sup.contains("allow_responses: true"),
