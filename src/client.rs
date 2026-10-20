@@ -12,8 +12,14 @@ use tracing::debug;
 use crate::connect_opts::{connect_with_hub_opts, HubConnectOptions};
 use crate::protocol::{subjects, Envelope, MessageKind};
 
+mod catchup;
+mod dedupe;
+mod durable;
 mod reply;
 mod tagged;
+pub use catchup::{task_channel_for, ChannelCatchUp, CATCH_UP_BATCH};
+pub use dedupe::{SeenIds, DEFAULT_SEEN_CAPACITY};
+pub use durable::InboxMode;
 pub use reply::{
     is_task_result, looks_like_task_result, task_channel, task_result_payload, TaskOutcome,
 };
@@ -184,13 +190,6 @@ impl HubClient {
         let id = env.meta.id.clone();
         self.send(&env).await?;
         Ok(id)
-    }
-
-    /// Subscribe to this agent's inbox (DM channel).
-    /// Returns a stream of envelopes addressed directly to this identity.
-    pub async fn subscribe_inbox(&self) -> Result<tokio::sync::mpsc::UnboundedReceiver<Envelope>> {
-        let subject = crate::protocol::subjects::inbox(&self.identity);
-        self.subscribe_subject(&subject).await
     }
 
     // ── Subscription API ─────────────────────────────────────────────

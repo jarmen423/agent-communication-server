@@ -276,6 +276,33 @@ Identities may not collide with API op namespaces (`wave`, `session`,
 refuses to mint them, and the API's subject parser would otherwise read
 `hub.api.wave.get` as legacy op `wave.get`.
 
+### Durable delivery (`hub-server --durable`)
+
+JetStream keeps DMs, task/session/wave channels and in-flight sends on disk
+(see [`DELIVERY.md`](DELIVERY.md)). Durable mode keeps the same inbox
+privacy:
+
+- **Agents can't create JetStream objects.** hub-server creates each
+  identity's `inbox-<id>` pull consumer when the agent asks on
+  `hub.delivery.<id>.inbox` (a bound subject). The agent may only look up,
+  pull from and ack **its own** consumer. A creatable consumer would be a
+  bypass, because nats-server doesn't check a push consumer's
+  `deliver_subject` against the creator's permissions.
+- **Stored DMs can't be read by sequence.** Agents get no
+  `STREAM.MSG.GET`, `DIRECT.GET` or `STREAM.INFO` on `HUB_INBOX`.
+- **Replays are dropped.** JetStream doesn't permission-check API reply
+  subjects either, so an agent could aim a `DIRECT.GET` reply at another
+  identity's ingress subject. The durable router drops ingress messages
+  that carry JetStream delivery headers or the router's own message id, or
+  that arrive on a non-ingress subject.
+- **Task/session/wave channels are readable by sequence**
+  (`DIRECT.GET.HUB_TASKS`). This is the same visibility `channel.task.>`
+  already gives every agent (see residual risks below), now extended over
+  the 24 h retention.
+
+`tests/delivery_permissions.rs` and `scripts/dogfood_durable.sh` prove this
+on a `hub-admin render-config --durable` config.
+
 ### Honest threat model — what is and isn't proved
 
 | Deployment mode | Who can claim `meta.from = "alice"`? | Can alice read bob's inbox or replies? | `hub.api` visibility |
@@ -313,6 +340,10 @@ wave cancel, with every process on its own credential). The prod config in
 - **The WS bridge acts as one identity** (`--ws-identity`) for everyone who
   holds the bridge token; browser users are not individually authenticated.
 - **A leaked credential is a full identity takeover** until it is revoked.
+  With `--durable` it also gets the DMs that are still stored for that
+  identity (up to the inbox retention, 7 d by default).
+- **Stored data is plaintext on the nats-server host** (`jetstream.store_dir`)
+  in durable mode. Protect the host and its backups like the SurrealDB file.
 
 Inbox and reply privacy, `from`/`channel` integrity and ownership of
 waves/sessions are the guarantees; workload-channel confidentiality is not.

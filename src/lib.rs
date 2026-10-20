@@ -65,6 +65,7 @@
 
 pub mod client;
 pub mod connect_opts;
+pub mod delivery;
 pub mod events;
 pub mod orchestrator;
 pub mod protocol;

@@ -28,6 +28,11 @@
 //!   hub-admin add-agent <id> [--role R] [--nkey] [--channel CH]...
 //!   hub-admin render-config --agents FILE [--out PATH] [--port N]
 //!                           [--ws-port N] [--tls-cert P --tls-key P --tls-ca P]
+//!                           [--durable [--js-store-dir D] [--js-max-file 10G]]
+//!
+//! Durable delivery: every agent may also attach to and read its own
+//! JetStream inbox consumer and `DIRECT.GET` the tasks stream — never create
+//! consumers or read another identity's stored DMs (docs/DELIVERY.md).
 //!
 //! The agents file is one agent per line:
 //!   <id> <role> <secret> [ws-only] [extra subscribe channels...]
@@ -41,7 +46,27 @@ use clap::{Args, Parser, Subcommand};
 
 #[path = "hub_admin/acl.rs"]
 mod acl;
-use acl::{check_channel, check_identity, check_secret, hub_server_entry, user_entry, ROLES};
+use acl::{
+    check_channel, check_identity, check_secret, hub_server_entry, user_entry, JsNames, ROLES,
+};
+
+/// Stream names used in the durable-delivery grants (match hub-server's
+/// `--delivery-config`).
+#[derive(Args, Clone)]
+struct JsArgs {
+    /// Inbox stream name (hub-server `inbox.name`).
+    #[arg(long, default_value = nats_hub::delivery::config::DEFAULT_INBOX_STREAM)]
+    inbox_stream: String,
+    /// Tasks stream name (hub-server `tasks.name`).
+    #[arg(long, default_value = nats_hub::delivery::config::DEFAULT_TASKS_STREAM)]
+    tasks_stream: String,
+}
+
+impl JsArgs {
+    fn names(&self) -> Result<JsNames> {
+        JsNames::new(&self.inbox_stream, &self.tasks_stream)
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "hub-admin", about = "Per-agent NATS credentials for nats-hub")]
@@ -76,6 +101,8 @@ struct AddAgentArgs {
     /// (allowed_connection_types: ["WEBSOCKET"]).
     #[arg(long)]
     ws_only: bool,
+    #[command(flatten)]
+    js: JsArgs,
 }
 
 #[derive(Args)]
@@ -103,6 +130,25 @@ struct RenderConfigArgs {
     /// (default: a fresh random one is embedded in the config).
     #[arg(long)]
     hub_password: Option<String>,
+    /// Enable JetStream for `hub-server --durable` (adds a `jetstream {}`
+    /// block; see docs/DELIVERY.md).
+    #[arg(long)]
+    durable: bool,
+    /// JetStream store directory (with --durable).
+    #[arg(
+        long,
+        default_value = "/var/lib/nats-hub/jetstream",
+        requires = "durable"
+    )]
+    js_store_dir: String,
+    /// JetStream file-storage cap, e.g. `10G` (with --durable).
+    #[arg(long, default_value = "10G", requires = "durable")]
+    js_max_file: String,
+    /// JetStream memory-storage cap, e.g. `256M` (with --durable).
+    #[arg(long, default_value = "256M", requires = "durable")]
+    js_max_mem: String,
+    #[command(flatten)]
+    js: JsArgs,
 }
 
 fn gen_password() -> String {
@@ -144,7 +190,14 @@ fn cmd_add_agent(a: AddAgentArgs) -> Result<()> {
     println!("{note}");
     println!(
         "{}",
-        user_entry(&a.identity, &a.role, &secret, &channels, a.ws_only)
+        user_entry(
+            &a.identity,
+            &a.role,
+            &secret,
+            &channels,
+            a.ws_only,
+            &a.js.names()?
+        )
     );
     if a.role == "admin" {
         println!(
@@ -224,6 +277,10 @@ fn cmd_render_config(a: RenderConfigArgs) -> Result<()> {
     };
     let hub_pw = a.hub_password.clone().unwrap_or_else(gen_password);
     check_secret(&hub_pw).context("--hub-password")?;
+    let js = a.js.names()?;
+    for v in [&a.js_store_dir, &a.js_max_file, &a.js_max_mem] {
+        check_secret(v).context("--js-* value")?; // no quotes/newlines
+    }
 
     let mut out = String::new();
     out.push_str(&format!(
@@ -233,6 +290,13 @@ fn cmd_render_config(a: RenderConfigArgs) -> Result<()> {
          server_name: nats-hub\nport: {}\n\n",
         a.port
     ));
+    if a.durable {
+        out.push_str(&format!(
+            "# durable delivery (hub-server --durable; docs/DELIVERY.md)\n\
+             jetstream {{\n  store_dir: \"{}\"\n  max_file_store: {}\n  max_memory_store: {}\n}}\n\n",
+            a.js_store_dir, a.js_max_file, a.js_max_mem
+        ));
+    }
     if a.ws_port != 0 {
         out.push_str("websocket {\n");
         out.push_str(&format!("  port: {}\n", a.ws_port));
@@ -261,6 +325,7 @@ fn cmd_render_config(a: RenderConfigArgs) -> Result<()> {
             &agent.secret,
             &agent.channels,
             agent.ws_only,
+            &js,
         ));
         out.push('\n');
     }

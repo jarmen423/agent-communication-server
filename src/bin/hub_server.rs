@@ -1,6 +1,6 @@
 //! hub-server — runs the control plane router.
 //!
-//! Usage: hub-server [--nats-url URL] [--db-path PATH]
+//! Usage: hub-server [--nats-url URL] [--db-path PATH] [--durable [--delivery-config PATH]]
 //!
 //! Start the NATS server first:  nats-server -c config/nats-server.conf
 //! Then:                        cargo run --bin hub-server
@@ -81,6 +81,18 @@ struct Args {
     /// (contract §4.1). Default off during the migration window.
     #[arg(long)]
     require_bound_identity: bool,
+
+    /// Durable delivery over JetStream: sends survive a router restart,
+    /// DMs wait for offline agents, task channels are kept for resume, and
+    /// several hub-servers share one routing consumer. Needs a nats-server
+    /// with JetStream enabled. Off = plain core NATS (see docs/DELIVERY.md).
+    #[arg(long)]
+    durable: bool,
+
+    /// JSON file with stream names/limits for --durable (any subset of the
+    /// fields in docs/DELIVERY.md). Falls back to env NATS_HUB_DELIVERY_CONFIG.
+    #[arg(long, value_name = "PATH", requires = "durable")]
+    delivery_config: Option<std::path::PathBuf>,
 
     /// Identity allowed to call query-API write ops (wave.*/session.*
     /// mutations). Repeatable; env `NATS_HUB_API_ADMINS` (comma-separated)
@@ -260,10 +272,30 @@ async fn main() -> Result<()> {
     let cp = ControlPlane::connect(&args.nats_url)
         .await
         .context("failed to connect to NATS")?;
-    let cp = cp
+    let mut cp = cp
         .with_metrics(metrics)
         .with_ws_events(ws_tx)
         .with_require_bound_identity(args.require_bound_identity);
+    if args.durable {
+        let path = args.delivery_config.clone().or_else(|| {
+            std::env::var_os("NATS_HUB_DELIVERY_CONFIG")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+        });
+        let cfg = match &path {
+            Some(p) => nats_hub::delivery::DeliveryConfig::from_file(p)?,
+            None => nats_hub::delivery::DeliveryConfig::default(),
+        };
+        info_log(&format!(
+            "durable delivery: streams {}/{}/{} (config: {})",
+            cfg.ingress.name,
+            cfg.inbox.name,
+            cfg.tasks.name,
+            path.as_ref()
+                .map_or("defaults".to_string(), |p| p.display().to_string())
+        ));
+        cp = cp.with_durable(cfg);
+    }
 
     #[cfg(feature = "storage-surreal")]
     {

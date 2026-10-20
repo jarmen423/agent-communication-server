@@ -7,6 +7,7 @@
 #   mcp_server/skills/   — agent workflow guide               → */skills/
 #   nats_connect.py      — repo-root connect helper, vendored into mcp_server/
 #                          and each plugin so installs stay self-contained
+#   hub_delivery.py      — repo-root durable-delivery helper, vendored the same way
 #
 # Usage:
 #   scripts/dev/sync_plugins.sh           copy canonical → plugin dirs
@@ -65,6 +66,7 @@ mirror_dir() {  # mirror_dir <src_dir> <dst_dir>
 
 # 1. Vendor nats_connect.py into the canonical dir (so it is self-contained).
 sync_file "nats_connect.py" "$CANON_DIR/nats_connect.py"
+sync_file "hub_delivery.py" "$CANON_DIR/hub_delivery.py"
 
 # 2. Mirror canonical sources into each plugin.
 for p in "${PLUGINS[@]}"; do

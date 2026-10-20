@@ -28,6 +28,7 @@ from typing import Any, Protocol, runtime_checkable
 from nats.aio.client import Client as NATSClient  # noqa: F401  (re-exported)
 from nats.aio.msg import Msg
 
+import hub_delivery
 from nats_connect import connect_nats, validate_identity
 from worker_backends import session_resume
 from worker_backends.envelope import (  # noqa: F401  (re-exported: tests, bridges)
@@ -373,8 +374,11 @@ async def run_worker(cfg: WorkerConfig) -> None:
         reply = await nc.request(f"hub.api.{cfg.identity}.{op}", req, timeout=5)
         return json.loads(reply.data)
 
-    await nc.subscribe(inbox_subject, cb=inbox.on_message)
-    print(f"[{log}] subscribed to {inbox_subject} (oneshot + sessions)")
+    # Durable JetStream inbox on a `--durable` hub (DMs that arrived while
+    # this worker was down are delivered first), else a core subscription.
+    inbox_sub = await hub_delivery.subscribe_inbox(nc, cfg.identity, inbox.on_message)
+    mode = "durable" if inbox_sub.durable else "live"
+    print(f"[{log}] subscribed to {inbox_subject} ({mode}; oneshot + sessions)")
 
     if cfg.broadcast_channel:
         await nc.subscribe(f"channel.{cfg.broadcast_channel}", cb=inbox.on_message)
@@ -435,4 +439,5 @@ async def run_worker(cfg: WorkerConfig) -> None:
             heartbeat_task.cancel()
         dispatcher.cancel()  # cancels the running turn too (kills CLI groups)
         await asyncio.gather(dispatcher, return_exceptions=True)
+        await inbox_sub.unsubscribe()
         await nc.close()
