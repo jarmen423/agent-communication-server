@@ -27,7 +27,17 @@ use tracing::debug;
 /// 4. `token`
 ///
 /// `require_tls` is orthogonal and always applied.
-#[derive(Clone, Debug, Default)]
+///
+/// # Reply inbox (contract C1)
+///
+/// Every connection uses the request-reply inbox prefix `_INBOX.<id>`
+/// instead of the shared `_INBOX`, so generated NATS permissions can let each
+/// user subscribe `_INBOX.<id>.>` only (no agent can read another's replies).
+/// `<id>` is chosen by [`HubConnectOptions::inbox_prefix`]: the NATS `user`
+/// when it is a valid identity (credentials are minted per identity, so the
+/// user *is* the permission key), else `inbox_identity`, else the default
+/// `_INBOX`.
+#[derive(Clone, Default)]
 pub struct HubConnectOptions {
     /// Static auth token (`--token` on nats-server). Lowest auth precedence.
     pub token: Option<String>,
@@ -43,6 +53,27 @@ pub struct HubConnectOptions {
     /// Force TLS (`async_nats::ConnectOptions::require_tls`). Required for
     /// `wss://` / TLS-only deployments. Default `false`.
     pub require_tls: bool,
+    /// Identity whose reply inbox `_INBOX.<identity>` this connection uses
+    /// when `user` is not itself a valid identity (nkey/creds/token auth).
+    /// [`crate::HubClient`] sets it to the client identity; `from_env`
+    /// fills it from `NATS_HUB_IDENTITY`.
+    pub inbox_identity: Option<String>,
+}
+
+impl std::fmt::Debug for HubConnectOptions {
+    // Manual impl: never print secrets (token, password, nkey seed) into logs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact = |o: &Option<String>| o.as_ref().map(|_| "<redacted>");
+        f.debug_struct("HubConnectOptions")
+            .field("token", &redact(&self.token))
+            .field("user", &self.user)
+            .field("password", &redact(&self.password))
+            .field("credentials_file", &self.credentials_file)
+            .field("nkey", &redact(&self.nkey))
+            .field("require_tls", &self.require_tls)
+            .field("inbox_identity", &self.inbox_identity)
+            .finish()
+    }
 }
 
 impl HubConnectOptions {
@@ -86,6 +117,25 @@ impl HubConnectOptions {
         self
     }
 
+    /// Convenience builder: set the identity used for the reply inbox prefix.
+    #[must_use]
+    pub fn with_inbox_identity(mut self, identity: impl Into<String>) -> Self {
+        self.inbox_identity = Some(identity.into());
+        self
+    }
+
+    /// Request-reply inbox prefix for this connection (contract C1):
+    /// `_INBOX.<user>` when `user` is a valid identity, else
+    /// `_INBOX.<inbox_identity>` when that is valid, else `None` (the
+    /// async-nats default `_INBOX`).
+    pub fn inbox_prefix(&self) -> Option<String> {
+        [self.user.as_deref(), self.inbox_identity.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|id| crate::protocol::valid_identity(id))
+            .map(crate::protocol::subjects::reply_inbox_prefix)
+    }
+
     /// Returns true when any auth field is set (not a plain anonymous connect).
     pub fn has_auth(&self) -> bool {
         self.token.is_some()
@@ -105,6 +155,7 @@ impl HubConnectOptions {
     /// | `NATS_CREDENTIALS_FILE` | `credentials_file` (as-is; no tilde expand) |
     /// | `NATS_NKEY` | `nkey` |
     /// | `NATS_REQUIRE_TLS=1|true|yes` | `require_tls` |
+    /// | `NATS_HUB_IDENTITY` | `inbox_identity` (when a valid identity) |
     pub fn from_env() -> Self {
         let mut o = Self::default();
 
@@ -139,6 +190,11 @@ impl HubConnectOptions {
                 o.require_tls = true;
             }
         }
+        if let Ok(v) = std::env::var("NATS_HUB_IDENTITY") {
+            if crate::protocol::valid_identity(&v) {
+                o.inbox_identity = Some(v);
+            }
+        }
         o
     }
 }
@@ -146,6 +202,7 @@ impl HubConnectOptions {
 /// Open an `async_nats::Client` using [`HubConnectOptions`].
 ///
 /// Auth precedence: credentials_file > nkey > user+password > token.
+/// The reply inbox prefix follows [`HubConnectOptions::inbox_prefix`].
 pub async fn connect_with_hub_opts(
     url: &str,
     opts: &HubConnectOptions,
@@ -168,8 +225,12 @@ pub async fn connect_with_hub_opts(
     if opts.require_tls {
         co = co.require_tls(true);
     }
+    let inbox_prefix = opts.inbox_prefix();
+    if let Some(prefix) = &inbox_prefix {
+        co = co.custom_inbox_prefix(prefix);
+    }
 
-    debug!(%url, has_auth = opts.has_auth(), require_tls = opts.require_tls, "async_nats connect_with_options");
+    debug!(%url, has_auth = opts.has_auth(), require_tls = opts.require_tls, ?inbox_prefix, "async_nats connect_with_options");
     async_nats::connect_with_options(url, co)
         .await
         .with_context(|| format!("failed to connect to NATS at {url}"))

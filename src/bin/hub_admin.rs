@@ -5,17 +5,23 @@
 //! bound to its own identity — `hub.pub.<id>.>`, `hub.register.<id>`,
 //! `hub.presence.<id>`, `hub.api.<id>.>` — so it can only ever send *as*
 //! itself. Inboxes are private: `channel.inbox.<id>` is the only inbox a
-//! user may subscribe. NATS ACLs cannot express "all channels except
-//! inboxes" (deny beats allow), so task/session/wave channels are visible
-//! to every agent and broadcast channels are granted per-agent with
-//! `--channel`.
+//! user may subscribe, and request-reply uses the per-identity prefix
+//! `_INBOX.<id>` (contract C1) — a user may subscribe `_INBOX.<id>.>` only
+//! and has no publish right on `_INBOX` at all. Users that answer requests
+//! (role `service`, and the hub-server user) get `allow_responses: true`
+//! instead. NATS ACLs cannot express "all channels except inboxes" (deny
+//! beats allow), so task/session/wave channels are visible to every agent
+//! and broadcast channels are granted per-agent with `--channel`.
 //!
-//! Roles (a documentation marker — ACLs are the same for every agent;
+//! Roles (`service` changes the ACLs; the others are documentation markers —
 //! real API-admin privilege lives in `hub-server --api-admin`):
 //!   worker        an execution agent (echo-worker, claude-worker, …)
 //!   orchestrator  delegates tasks / owns sessions & waves
 //!   admin         an orchestrator the operator also lists via --api-admin
-//!   service       hub-side helper (worker supervisor, ws bridge)
+//!   service       hub-side helper that answers requests (worker supervisor)
+//!
+//! Reserved identities (`hub-server`, `hub-orchestrator`, `visualizer`) and
+//! identities that collide with a query-API op namespace are refused.
 //!
 //! Usage:
 //!   hub-admin add-agent <id> [--role R] [--nkey] [--channel CH]...
@@ -32,8 +38,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-use nats_hub::protocol::{require_valid_identity, valid_identity};
-use nats_hub::query_api::authz::OP_NAMESPACES;
+#[path = "hub_admin/acl.rs"]
+mod acl;
+use acl::{check_channel, check_identity, check_secret, hub_server_entry, user_entry, ROLES};
 
 #[derive(Parser)]
 #[command(name = "hub-admin", about = "Per-agent NATS credentials for nats-hub")]
@@ -97,98 +104,6 @@ struct RenderConfigArgs {
     hub_password: Option<String>,
 }
 
-/// Per-agent subscribe allowlist. `channels` are extra broadcast channels.
-fn subscribe_allow(identity: &str, role: &str, channels: &[String]) -> Vec<String> {
-    let mut allow = vec![
-        format!("channel.inbox.{identity}"),
-        "channel.task.>".into(),
-        "channel.session.>".into(),
-        "channel.wave.>".into(),
-        "_INBOX.>".into(),
-    ];
-    if role == "service" {
-        allow.extend([
-            "hub.presence.*".into(),
-            "hub.register.*".into(),
-            "hub.worker.>".into(),
-        ]);
-    }
-    for ch in channels {
-        // accept both `chat` and `channel.chat`
-        allow.push(format!(
-            "channel.{}",
-            ch.strip_prefix("channel.").unwrap_or(ch)
-        ));
-    }
-    allow
-}
-
-/// Per-agent publish allowlist — every entry is bound to the identity.
-fn publish_allow(identity: &str, role: &str) -> Vec<String> {
-    let mut allow = vec![
-        format!("hub.pub.{identity}.>"),
-        format!("hub.register.{identity}"),
-        format!("hub.presence.{identity}"),
-        format!("hub.api.{identity}.>"),
-        "_INBOX.>".into(), // request-reply (api calls, RPC responders)
-    ];
-    if role == "service" {
-        allow.push("hub.worker.>".into());
-    }
-    allow
-}
-
-fn quoted_list(items: &[String]) -> String {
-    items
-        .iter()
-        .map(|s| format!("\"{s}\""))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// One rendered `users[]` entry.
-fn user_entry(
-    identity: &str,
-    role: &str,
-    secret: &str,
-    channels: &[String],
-    ws_only: bool,
-) -> String {
-    let cred = if let Some(pubkey) = secret.strip_prefix("nkey:") {
-        format!("nkey: {pubkey}")
-    } else {
-        let pw = secret.strip_prefix("pw:").unwrap_or(secret);
-        format!("password: \"{pw}\"")
-    };
-    let conn_type = if ws_only {
-        "\n      allowed_connection_types: [\"WEBSOCKET\"],"
-    } else {
-        ""
-    };
-    format!(
-        r#"    # role: {role}
-    {{ user: "{identity}", {cred},{conn_type}
-      permissions: {{
-        publish: {{ allow: [{}] }},
-        subscribe: {{ allow: [{}] }},
-      }} }},"#,
-        quoted_list(&publish_allow(identity, role)),
-        quoted_list(&subscribe_allow(identity, role, channels)),
-    )
-}
-
-/// The hub-server's own service user (router + query API + ws bridge).
-fn hub_server_entry(password: &str) -> String {
-    format!(
-        r#"    # role: hub-server (router, query API, ws bridge)
-    {{ user: "hub-server", password: "{password}",
-      permissions: {{
-        publish: {{ allow: ["channel.>", "_INBOX.>", "hub.>"] }},
-        subscribe: {{ allow: ["hub.>", "_INBOX.>"] }},
-      }} }},"#
-    )
-}
-
 fn gen_password() -> String {
     // 64 lowercase-hex chars (128 bits twice over) — no extra deps.
     format!(
@@ -199,22 +114,15 @@ fn gen_password() -> String {
 }
 
 fn cmd_add_agent(a: AddAgentArgs) -> Result<()> {
-    require_valid_identity(&a.identity)?;
-    if OP_NAMESPACES.contains(&a.identity.as_str()) {
-        bail!(
-            "identity '{}' collides with a query-API op namespace — bound API subjects \
-             for it would be parsed as legacy ops; pick another name",
-            a.identity
-        );
-    }
-    if !["worker", "orchestrator", "admin", "service"].contains(&a.role.as_str()) {
+    check_identity(&a.identity)?;
+    if !ROLES.contains(&a.role.as_str()) {
         bail!("--role must be worker|orchestrator|admin|service");
     }
-    for ch in &a.channels {
-        if ch.starts_with("inbox.") || ch.starts_with("channel.inbox.") {
-            bail!("--channel {ch:?} is an inbox — inboxes are per-identity and automatic");
-        }
-    }
+    let channels = a
+        .channels
+        .iter()
+        .map(|ch| check_channel(ch))
+        .collect::<Result<Vec<_>>>()?;
 
     let (secret, note) = if a.nkey {
         let kp = nkeys::KeyPair::new_user();
@@ -235,7 +143,7 @@ fn cmd_add_agent(a: AddAgentArgs) -> Result<()> {
     println!("{note}");
     println!(
         "{}",
-        user_entry(&a.identity, &a.role, &secret, &a.channels, a.ws_only)
+        user_entry(&a.identity, &a.role, &secret, &channels, a.ws_only)
     );
     if a.role == "admin" {
         println!(
@@ -255,7 +163,7 @@ struct AgentRow {
 }
 
 fn parse_agents_file(text: &str) -> Result<Vec<AgentRow>> {
-    let mut rows = Vec::new();
+    let mut rows: Vec<AgentRow> = Vec::new();
     for (n, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -269,18 +177,16 @@ fn parse_agents_file(text: &str) -> Result<Vec<AgentRow>> {
                 n + 1
             );
         };
-        if !valid_identity(id) {
-            bail!("agents file line {}: invalid identity {id:?}", n + 1);
+        let line_no = n + 1;
+        check_identity(id).with_context(|| format!("agents file line {line_no}"))?;
+        if rows.iter().any(|r| r.identity == id) {
+            bail!("agents file line {line_no}: duplicate identity {id:?}");
         }
-        if OP_NAMESPACES.contains(&id) {
-            bail!(
-                "agents file line {}: identity {id:?} collides with an API op namespace",
-                n + 1
-            );
+        if !ROLES.contains(&role) {
+            bail!("agents file line {line_no}: unknown role {role:?}");
         }
-        if !["worker", "orchestrator", "admin", "service"].contains(&role) {
-            bail!("agents file line {}: unknown role {role:?}", n + 1);
-        }
+        check_secret(secret.strip_prefix("pw:").unwrap_or(secret))
+            .with_context(|| format!("agents file line {line_no}"))?;
         // Optional flag token `ws-only` restricts the credential to the
         // WebSocket listener; every other trailing token is an extra
         // subscribe channel.
@@ -290,7 +196,9 @@ fn parse_agents_file(text: &str) -> Result<Vec<AgentRow>> {
             if tok == "ws-only" {
                 ws_only = true;
             } else {
-                channels.push(tok.to_string());
+                channels.push(
+                    check_channel(tok).with_context(|| format!("agents file line {line_no}"))?,
+                );
             }
         }
         rows.push(AgentRow {
@@ -314,6 +222,7 @@ fn cmd_render_config(a: RenderConfigArgs) -> Result<()> {
         _ => bail!("--tls-cert and --tls-key must be given together (--tls-ca optional)"),
     };
     let hub_pw = a.hub_password.clone().unwrap_or_else(gen_password);
+    check_secret(&hub_pw).context("--hub-password")?;
 
     let mut out = String::new();
     out.push_str(&format!(

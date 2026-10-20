@@ -128,8 +128,10 @@ async def connect(user, pw):
     errs = []
     async def on_err(e):
         errs.append(e)
+    # Reply inbox _INBOX.<user> (contract C1): the only inbox subtree the
+    # generated permissions let this user subscribe.
     nc = await nats.connect(URL, user=user, password=pw, allow_reconnect=False,
-                            error_cb=on_err)
+                            error_cb=on_err, inbox_prefix=f"_INBOX.{user}")
     return nc, errs
 
 def env(frm, to, channel, text):

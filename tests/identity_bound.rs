@@ -550,3 +550,79 @@ async fn bound_register_and_api_round_trip() {
     assert!(found, "bound registration never visible via api");
     let _ = client.drain().await;
 }
+
+// ── Per-identity reply inbox (hardening H1, contract C1) ───────────
+
+#[test]
+fn reply_inbox_prefix_precedence() {
+    use nats_hub::HubConnectOptions;
+    assert_eq!(subjects::reply_inbox_prefix("bob"), "_INBOX.bob");
+    let o = HubConnectOptions::default();
+    assert_eq!(o.inbox_prefix(), None, "no identity → async-nats default");
+    let o = HubConnectOptions::default().with_inbox_identity("w1");
+    assert_eq!(o.inbox_prefix().as_deref(), Some("_INBOX.w1"));
+    // the NATS user is the permission key: it wins over the client identity
+    let o = HubConnectOptions::default()
+        .with_user_password("alice", "pw")
+        .with_inbox_identity("w1");
+    assert_eq!(o.inbox_prefix().as_deref(), Some("_INBOX.alice"));
+    // …unless it isn't a valid identity token
+    let o = HubConnectOptions::default()
+        .with_user_password("alice@example.com", "pw")
+        .with_inbox_identity("w1");
+    assert_eq!(o.inbox_prefix().as_deref(), Some("_INBOX.w1"));
+    let o = HubConnectOptions::default().with_inbox_identity("bad.id");
+    assert_eq!(o.inbox_prefix(), None);
+    // secrets never reach Debug output (it is logged at connect)
+    let dbg = format!(
+        "{:?}",
+        HubConnectOptions::default()
+            .with_user_password("u", "s3cret")
+            .with_token("t0ken")
+    );
+    assert!(!dbg.contains("s3cret") && !dbg.contains("t0ken"), "{dbg}");
+}
+
+/// HubClient (and the shared connect helper) request-reply lands under
+/// `_INBOX.<identity>.`.
+#[tokio::test]
+async fn request_reply_uses_the_per_identity_inbox() {
+    let Some(url) = stack_url() else { return };
+    let me = unique("rr");
+    let subject = format!("test.{}", unique("rr"));
+
+    let responder = async_nats::connect(&url).await.unwrap();
+    let mut sub = responder.subscribe(subject.clone()).await.unwrap();
+    responder.flush().await.unwrap();
+    let echo = tokio::spawn(async move {
+        for _ in 0..2 {
+            let msg = sub.next().await.unwrap();
+            let reply = msg.reply.clone().unwrap();
+            let body = json!({"ok": true, "data": {"reply": reply.to_string()}});
+            responder
+                .publish(reply, body.to_string().into())
+                .await
+                .unwrap();
+            responder.flush().await.unwrap();
+        }
+    });
+
+    let client = HubClient::connect(&url, &me).await.unwrap();
+    let v = client
+        .request_json(&subject, json!({}), Duration::from_secs(5))
+        .await
+        .unwrap();
+    let reply = v["data"]["reply"].as_str().unwrap();
+    assert!(reply.starts_with(&format!("_INBOX.{me}.")), "{reply}");
+
+    // The connect helper behind ApiClient / ControlPlane applies it too.
+    let opts = nats_hub::HubConnectOptions::default().with_inbox_identity(me.as_str());
+    let raw = nats_hub::connect_opts::connect_with_hub_opts(&url, &opts)
+        .await
+        .unwrap();
+    let resp = raw.request(subject.clone(), "{}".into()).await.unwrap();
+    let v: Value = serde_json::from_slice(&resp.payload).unwrap();
+    let reply = v["data"]["reply"].as_str().unwrap();
+    assert!(reply.starts_with(&format!("_INBOX.{me}.")), "{reply}");
+    echo.await.unwrap();
+}

@@ -86,6 +86,9 @@ async def get_nc() -> NATSClient:
             _nc = await nats_connect.connect_nats(
                 NATS_URL,
                 name=identity(),
+                # Reply inbox `_INBOX.<identity>` (contract C1): the only
+                # inbox subtree this identity may subscribe on a bound hub.
+                identity=identity(),
                 # A dead bus must fail the tool call in seconds — the nats
                 # client otherwise retries the initial connect for ~2min.
                 connect_timeout=float(

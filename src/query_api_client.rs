@@ -48,7 +48,8 @@ impl ApiClient {
     ) -> Result<Self> {
         let identity = identity.into();
         crate::protocol::require_valid_identity(&identity)?;
-        let opts = crate::HubConnectOptions::from_env();
+        // Reply inbox `_INBOX.<identity>` (contract C1).
+        let opts = crate::HubConnectOptions::from_env().with_inbox_identity(identity.as_str());
         let nats = crate::connect_opts::connect_with_hub_opts(nats_url, &opts).await?;
         Ok(Self {
             nats,
