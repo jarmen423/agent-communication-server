@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "mcp_server"))
 import hub_buffers  # noqa: E402
 import hub_connection as conn  # noqa: E402
 import hub_handlers  # noqa: E402
+import hub_sessions  # noqa: E402
 import nats_hub_mcp  # noqa: E402
 
 
@@ -116,7 +117,7 @@ def test_start_session_reports_session_create_failure(monkeypatch):
 
         monkeypatch.setattr(conn, "publish", publish)
         monkeypatch.setattr(conn, "api_request", api)
-        r = await hub_handlers._start_session(
+        r = await hub_sessions._start_session(
             {"worker": "w", "prompt": "hi"})
         assert not r["ok"] and "session.create" in r["error"]
 

@@ -4,7 +4,10 @@ Split out of ``hub_buffers`` (which owns the long-lived subscriptions).
 Result matching follows the shared reply contract (refocus.md §6): the
 terminal result on a task channel is the first ``kind == "message"`` envelope
 correlated to the task envelope id (``meta.reply_to`` or ``payload.task_id``);
-``status``/``event`` envelopes are progress, never the result.
+``status``/``event`` envelopes are progress, never the result. A result
+counts only when ``meta.from`` is the worker the task was delegated to
+(HARDENING.md C5; best effort on a permissive hub, where ``meta.from`` is
+self-asserted, real on a ``--require-bound-identity`` hub).
 """
 
 from __future__ import annotations
@@ -31,13 +34,32 @@ CHANNEL_BUFFER_MAX = 200
 SUB_READY_DELAY = 0.05  # let NATS register interest before publishing
 
 
-def is_task_result(env: dict, task_id: str) -> bool:
-    """Reply contract §6.5 — first kind=message correlated to the task id."""
+def is_task_result(env: dict, task_id: str, worker: str | None = None) -> bool:
+    """Reply contract §6.5 — first kind=message correlated to the task id,
+    and (C5) sent by ``worker`` when given."""
     meta = env.get("meta", {})
     if meta.get("kind") != "message":
         return False
+    if worker is not None and meta.get("from") != worker:
+        return False
     payload = env.get("payload", {})
     return meta.get("reply_to") == task_id or payload.get("task_id") == task_id
+
+
+def summarize_env(it: dict) -> dict:
+    """A buffered item (``{seq, env}``) as a flat dict for tool output."""
+    env = it["env"]
+    return {
+        "seq": it["seq"],
+        "id": env.get("meta", {}).get("id"),
+        "from": env.get("meta", {}).get("from"),
+        "to": env.get("meta", {}).get("to"),
+        "channel": env.get("meta", {}).get("channel"),
+        "kind": env.get("meta", {}).get("kind"),
+        "timestamp": env.get("meta", {}).get("timestamp"),
+        "reply_to": env.get("meta", {}).get("reply_to"),
+        "payload": env.get("payload"),
+    }
 
 
 class RingBuffer:
@@ -104,7 +126,7 @@ class TaskTracker:
         self.other_messages = RingBuffer(100)
         self.last_status: str | None = None
         self.result: dict | None = None
-        self.state = "running"  # running | done | error | cancelled
+        self.state = "running"  # running | done | error | cancelled | evicted
         self.done = asyncio.Event()
         self.created_at = time.time()
         self.cancel_requested_at: float | None = None  # set by cancel_task
@@ -128,7 +150,7 @@ class TaskTracker:
             await self.events.put(env)
         elif kind == "event":
             await self.events.put(env)
-        elif is_task_result(env, self.task_id) and self.result is None:
+        elif is_task_result(env, self.task_id, self.worker) and self.result is None:
             self.result = env
             payload = env.get("payload", {})
             status = payload.get("status")
@@ -136,7 +158,19 @@ class TaskTracker:
             self.state = status if status in ("error", "cancelled") else "done"
             self.done.set()
         else:
+            if is_task_result(env, self.task_id):  # right task, wrong sender
+                print(f"[nats-hub] ignoring result for {self.task_id} from "
+                      f"{env.get('meta', {}).get('from')!r} (delegated to "
+                      f"{self.worker!r})", file=sys.stderr)
             await self.other_messages.put(env)
+
+    def evict(self) -> None:
+        """Dropped from tracking while running: release waiters instead of
+        letting them time out (the worker may still finish; see history)."""
+        if not self.done.is_set():
+            self.state = "evicted"
+            self.last_status = "evicted: too many tracked tasks"
+            self.done.set()
 
     def snapshot(self, events_tail: int = 10) -> dict:
         snap: dict[str, Any] = {

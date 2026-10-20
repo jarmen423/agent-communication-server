@@ -149,6 +149,27 @@ def test_task_tracker_error_result():
     asyncio.run(run())
 
 
+def test_task_tracker_ignores_result_from_another_sender():
+    """C5: only the worker the task was delegated to can finish it."""
+    async def run():
+        tr = hub_buffers.TaskTracker("t1", "task.t1", "echo-1")
+        await tr.feed(_env("t1", reply_to="t1", sender="mallory",
+                           payload={"task_id": "t1", "status": "done", "result": "forged"}))
+        assert tr.state == "running" and not tr.done.is_set()
+        assert tr.other_messages.last_seq == 1
+        await tr.feed(_env("t1", reply_to="t1",
+                           payload={"task_id": "t1", "status": "done", "result": "real"}))
+        assert tr.state == "done" and tr.result["payload"]["result"] == "real"
+    asyncio.run(run())
+
+
+def test_is_task_result_sender_check():
+    env = _env("t1", reply_to="t1", sender="w")
+    assert hub_buffers.is_task_result(env, "t1", "w")
+    assert not hub_buffers.is_task_result(env, "t1", "other")
+    assert hub_buffers.is_task_result(env, "t1")  # no worker → correlation only
+
+
 # ── Bounded tracking / reconnect / hermes timeouts ───────────────
 
 
@@ -178,6 +199,15 @@ def test_tracked_tasks_capped_evicting_finished_first(monkeypatch):
         await h._track(newest)
         assert set(h.tasks) == {"t0", "t2", "t3"}
         assert trackers[1].sub is None  # evicted tracker released its sub
+        # Over cap with no finished tracker left: the oldest running one is
+        # evicted and its waiters are released ("evicted"), not left hanging.
+        waiter = asyncio.ensure_future(h.wait_for_task("t0", timeout=30))
+        await asyncio.sleep(0)
+        extra = hub_buffers.TaskTracker("t4", "task.t4", "w")
+        extra.created_at = 4
+        await h._track(extra)
+        snap = await asyncio.wait_for(waiter, timeout=2)
+        assert snap["state"] == "evicted" and "t0" not in h.tasks
 
     asyncio.run(run())
 
@@ -196,8 +226,8 @@ def test_task_tracker_close_unsubscribes_once():
 def test_reset_after_reconnect_fails_running_tasks():
     async def run():
         h = hub_buffers.HubState()
-        running = hub_buffers.TaskTracker("r", "task.r", "w")
-        finished = hub_buffers.TaskTracker("f", "task.f", "w")
+        running = hub_buffers.TaskTracker("r", "task.r", "echo-1")
+        finished = hub_buffers.TaskTracker("f", "task.f", "echo-1")
         await finished.feed(_env("f", payload={"task_id": "f", "status": "done"}))
         h.tasks = {"r": running, "f": finished}
         h.sessions = {"s": object()}

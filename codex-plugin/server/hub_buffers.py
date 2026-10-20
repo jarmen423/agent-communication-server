@@ -36,6 +36,27 @@ from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
 )
 
 MAX_SESSION_BUFFERS = 50  # open channel.session.<id> subscriptions
+MAX_SESSION_TURNS = 200  # session turn ids remembered for cancel_task
+
+
+class SessionTurn:
+    """One turn sent to a session (start_session / send_to_session): enough
+    to cancel it (§4.2) and to find its result on the session channel."""
+
+    def __init__(self, turn_id: str, session_id: str, worker: str, channel: str) -> None:
+        self.turn_id, self.session_id = turn_id, session_id
+        self.worker, self.channel = worker, channel
+
+    def snapshot(self, result: dict | None, cancel_requested: bool) -> dict:
+        payload = (result or {}).get("payload") or {}
+        status = payload.get("status")
+        state = (status if status in ("error", "cancelled") else "done") if result else "running"
+        snap = {"task_id": self.turn_id, "session_id": self.session_id,
+                "task_channel": self.channel, "worker": self.worker, "state": state,
+                "cancel_requested": cancel_requested}
+        if result is not None:
+            snap["result"] = payload
+        return snap
 
 
 class HubState:
@@ -45,6 +66,8 @@ class HubState:
         self.inbox = ChannelBuffer("channel.inbox.placeholder", INBOX_BUFFER_MAX)
         self.tasks: dict[str, TaskTracker] = {}
         self.sessions: dict[str, ChannelBuffer] = {}
+        self.session_turns: dict[str, SessionTurn] = {}  # turn id → turn
+        self.session_workers: dict[str, str] = {}  # session id → worker
         self._started = False
         self._generation = 0
         self._lock = asyncio.Lock()
@@ -104,6 +127,7 @@ class HubState:
             victims += running[: overflow - len(victims)]
         for t in victims:
             self.tasks.pop(t.task_id, None)
+            t.evict()  # waiters return "evicted" instead of timing out
             await t.close()
 
     async def drop_session(self, session_id: str) -> None:
@@ -169,27 +193,20 @@ class HubState:
         """Cancel contract (refocus-iteration-2.md §4.2): DM the worker
         ``kind=control {"action": "cancel", "task_id": <id>}`` and wait up to
         ``timeout`` for its terminal result (``status: "cancelled"``, or
-        done/error if it finished first). Unknown task → None.
+        done/error if it finished first). ``task_id`` may also be a session
+        turn id returned by start_session / send_to_session. Unknown → None.
 
         Returns ``{snapshot, cancel_sent, timed_out}``. A worker that doesn't
         implement cancel simply never answers, so the tracker stays running
         (we never fake a terminal state the worker didn't report)."""
         tracker = self.tasks.get(task_id)
         if tracker is None:
-            return None
+            turn = self.session_turns.get(task_id)
+            return None if turn is None else await self._cancel_turn(turn, timeout)
         if tracker.done.is_set():
             return {"snapshot": tracker.snapshot(), "cancel_sent": False,
                     "timed_out": False}
-        await self.ensure_started()
-        env = conn.envelope(
-            tracker.task_channel,
-            {"action": "cancel", "task_id": task_id},
-            kind="control",
-            to=tracker.worker,
-        )
-        if tracker.cancel_requested_at is None:
-            tracker.cancel_requested_at = time.time()
-        await conn.publish(tracker.task_channel, env)
+        await self.send_cancel(tracker)
         try:
             await asyncio.wait_for(tracker.done.wait(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -197,6 +214,57 @@ class HubState:
                     "timed_out": True}
         return {"snapshot": tracker.snapshot(), "cancel_sent": True,
                 "timed_out": False}
+
+    async def send_cancel(self, tracker: TaskTracker) -> None:
+        """DM the §4.2 cancel for a tracked task (no wait)."""
+        await self.ensure_started()
+        await self._publish_cancel(tracker.worker, tracker.task_channel, tracker.task_id)
+        if tracker.cancel_requested_at is None:
+            tracker.cancel_requested_at = time.time()
+
+    async def _publish_cancel(self, worker: str, channel: str, task_id: str) -> None:
+        env = conn.envelope(channel, {"action": "cancel", "task_id": task_id},
+                            kind="control", to=worker)
+        await conn.publish(channel, env)
+
+    # ── Session turns (cancel_task on a send_to_session message id) ──
+
+    def track_turn(self, turn: SessionTurn) -> None:
+        self.session_turns[turn.turn_id] = turn
+        while len(self.session_turns) > MAX_SESSION_TURNS:
+            self.session_turns.pop(next(iter(self.session_turns)))
+
+    async def session_worker(self, session_id: str) -> str | None:
+        """The worker of a session: remembered from start_session, else the
+        session record (session.get)."""
+        worker = self.session_workers.get(session_id)
+        if worker:
+            return worker
+        try:
+            resp = await conn.api_request("session.get", {"session_id": session_id})
+        except Exception:  # noqa: BLE001 - hub down: the turn just isn't cancellable
+            return None
+        record = (resp.get("data") or {}).get("session") if resp.get("ok") else None
+        worker = record.get("worker") if isinstance(record, dict) else None
+        if isinstance(worker, str) and worker:
+            self.session_workers[session_id] = worker
+            return worker
+        return None
+
+    async def _cancel_turn(self, turn: SessionTurn, timeout: float) -> dict:
+        buf = (await self.session_buffer(turn.session_id)).buf
+
+        def match(env: dict) -> bool:
+            return is_task_result(env, turn.turn_id, turn.worker)
+
+        done = await buf.wait_for(match, timeout=0)
+        if done is not None:
+            return {"snapshot": turn.snapshot(done["env"], False), "cancel_sent": False,
+                    "timed_out": False}
+        await self._publish_cancel(turn.worker, turn.channel, turn.turn_id)
+        done = await buf.wait_for(match, timeout=timeout)
+        return {"snapshot": turn.snapshot(done["env"] if done else None, True),
+                "cancel_sent": True, "timed_out": done is None}
 
     async def forget_task(self, task_id: str) -> None:
         """Drop an internal tracker (check_providers pings) and release its
