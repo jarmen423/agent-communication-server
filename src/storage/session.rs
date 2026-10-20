@@ -138,6 +138,30 @@ pub async fn update_session_status(db: &Db, session_id: &str, status: &str) -> R
     Ok(())
 }
 
+/// Set only `backend_ctx` (+ `updated_at`) — a field update, not a
+/// read-modify-write of the whole record, so a concurrent status change is
+/// never overwritten. `false` when the session doesn't exist.
+pub async fn set_backend_ctx(
+    db: &Db,
+    session_id: &str,
+    backend_ctx: serde_json::Value,
+) -> Result<bool> {
+    debug!(%session_id, "setting session backend_ctx");
+    let updated: Vec<serde_json::Value> = db
+        .query(
+            "UPDATE type::thing('sessions', $id) SET backend_ctx = $ctx, updated_at = $now \
+             RETURN session_id",
+        )
+        .bind(("id", session_id.to_string()))
+        .bind(("ctx", backend_ctx))
+        .bind(("now", db_now()))
+        .await?
+        .check()
+        .with_context(|| format!("failed to set backend_ctx on session '{session_id}'"))?
+        .take(0)?;
+    Ok(!updated.is_empty())
+}
+
 /// Get a single session by ID.
 pub async fn get_session(db: &Db, session_id: &str) -> Result<Option<SessionRecord>> {
     debug!(%session_id, "getting session");

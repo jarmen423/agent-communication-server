@@ -213,6 +213,37 @@ pub async fn update_wave_status(db: &Db, wave_id: &str, status: &str) -> Result<
     Ok(())
 }
 
+/// Set `metadata.<key>` on a wave without rewriting the rest of the record.
+/// `false` when the wave doesn't exist.
+pub async fn set_wave_metadata_key(
+    db: &Db,
+    wave_id: &str,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<bool> {
+    let ident = key
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !ident {
+        anyhow::bail!("invalid wave metadata key '{key}'");
+    }
+    debug!(%wave_id, %key, "setting wave metadata key");
+    // `key` is a validated identifier, so splicing it into the field path is safe.
+    let updated: Vec<serde_json::Value> = db
+        .query(format!(
+            "UPDATE type::thing('waves', $id) SET metadata.{key} = $value RETURN wave_id"
+        ))
+        .bind(("id", wave_id.to_string()))
+        .bind(("value", value))
+        .await?
+        .check()
+        .with_context(|| format!("failed to set metadata.{key} on wave '{wave_id}'"))?
+        .take(0)?;
+    Ok(!updated.is_empty())
+}
+
 pub async fn get_wave(db: &Db, wave_id: &str) -> Result<Option<WaveRecord>> {
     let rows: Vec<WaveRowWithId> = db
         .query(format!(
