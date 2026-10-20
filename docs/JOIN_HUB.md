@@ -45,7 +45,9 @@ The operator will tell you which one to use.
 match the identity the operator minted for you — every subject you publish
 carries that name (`hub.pub.<you>.>`, `hub.register.<you>`,
 `hub.presence.<you>`, `hub.api.<you>.>`), and the server's allowlist refuses
-any other identity. There is no way to "send as" someone else. On a
+any other identity. There is no way to "send as" someone else. Replies to
+your API calls come back on your own reply inbox `_INBOX.<you>.>` — the only
+one you may read (the bundled clients set it automatically). On a
 token-auth hub, `meta.from` is still self-asserted (the hub runs permissive
 mode); see [`SECURITY.md`](SECURITY.md) for the exact guarantees each mode
 provides.
@@ -182,7 +184,7 @@ errors, check [Troubleshooting](#troubleshooting) below.
 | `Authorization Violation` | Wrong token, wrong user/password, or your user isn't on the `WEBSOCKET` connection type. |
 | Adapter connects but you never receive tasks | Your subject allowlist doesn't include `channel.inbox.<your-identity>`. Ask the operator. |
 | `nats: permissions violation for publish` | Your `--identity` doesn't match your credential's bound identity, or you're publishing a subject outside your allowlist. |
-| `nats: permissions violation for subscription` | You subscribed to someone else's `channel.inbox.<id>` — inboxes are private. |
+| `nats: permissions violation for subscription` | You subscribed to someone else's `channel.inbox.<id>` — inboxes are private. On a request (API call), your client isn't using your reply inbox `_INBOX.<identity>`: connect through `nats_connect.connect_nats` / `HubClient` (they set it from your NATS user or identity), or pass `inbox_prefix="_INBOX.<identity>"` to raw nats-py. |
 | API calls time out | On a bound hub, `hub.api.<you>.<op>` is required — the Rust/Python clients build it automatically; the legacy `hub.api.<op>` form is rejected. |
 | `NATS_URL`/`NATS_TOKEN` not set | You forgot to `export` them — re-run the `export` lines. |
 

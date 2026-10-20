@@ -109,15 +109,24 @@ pub fn session_to_row(record: &SessionRecord) -> SessionRow {
 }
 
 /// Create a session in the DB.
+///
+/// Like `create_wave`, this refuses (atomically) to change the orchestrator
+/// of an existing session, so a create can't take over someone else's
+/// session.
 pub async fn create_session(db: &Db, session: SessionRecord) -> Result<()> {
     debug!(session_id = %session.session_id, "storing session record");
     let row = session_to_row(&session);
-    let _: Option<SessionRow> = db
-        .upsert(("sessions", &session.session_id))
-        .content(row)
+    let resp = db
+        .query(crate::storage::wave::owner_guarded_upsert(
+            "sessions", "session",
+        ))
+        .bind(("id", session.session_id.clone()))
+        .bind(("orch", session.orchestrator.clone()))
+        .bind(("row", row))
         .await
         .context("failed to create session")?;
-    Ok(())
+    crate::storage::wave::check_guarded(resp)
+        .with_context(|| format!("failed to create session '{}'", session.session_id))
 }
 
 /// Update a session's status. Sets `closed_at` when status is "closed".

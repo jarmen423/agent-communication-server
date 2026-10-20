@@ -121,6 +121,18 @@ pub fn require_valid_identity(identity: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Identities the hub uses for its own components. `hub-admin` refuses to
+/// mint agent credentials for them, so no agent can pose as the router
+/// (`hub-server`, also the NATS service user), the wave orchestrator
+/// (`hub-orchestrator`) or the legacy visualizer bridge (`visualizer`).
+pub const RESERVED_IDENTITIES: &[&str] = &["hub-server", "hub-orchestrator", "visualizer"];
+
+/// True when `identity` is reserved for a hub component
+/// ([`RESERVED_IDENTITIES`]).
+pub fn reserved_identity(identity: &str) -> bool {
+    RESERVED_IDENTITIES.contains(&identity)
+}
+
 /// Subject conventions used through nats-hub.
 ///
 /// Clients publish on *bound* subjects that embed their identity
@@ -149,6 +161,17 @@ pub mod subjects {
 
     /// Presence / heartbeat subject.
     pub const PRESENCE: &str = "hub.presence";
+
+    /// Default NATS request-reply inbox prefix.
+    pub const INBOX_ROOT: &str = "_INBOX";
+
+    /// Per-identity request-reply inbox prefix `_INBOX.<identity>`
+    /// (contract C1). Clients connect with this prefix so their replies land
+    /// under `_INBOX.<identity>.>`, the only inbox subtree the generated
+    /// NATS permissions let that identity subscribe.
+    pub fn reply_inbox_prefix(identity: &str) -> String {
+        format!("{INBOX_ROOT}.{identity}")
+    }
 
     /// Build a legacy send subject: `hub.send.<channel>`.
     pub fn send(channel: &str) -> String {

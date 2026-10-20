@@ -179,6 +179,14 @@ async fn main() -> Result<()> {
             .clone()
             .or_else(|| std::env::var("HUB_WS_IDENTITY").ok())
             .unwrap_or_else(|| "human".to_string());
+        // The bridge connects and publishes as this identity, so it must be
+        // a valid one; fail at startup rather than in the retry loop.
+        nats_hub::protocol::require_valid_identity(&identity).context("--ws-identity")?;
+        // `visualizer` is the bridge's own reserved name; the router and
+        // orchestrator identities must never be reachable from a browser.
+        if identity != "visualizer" && nats_hub::protocol::reserved_identity(&identity) {
+            anyhow::bail!("--ws-identity '{identity}' is reserved for a hub component");
+        }
 
         // A tokenless bridge may only bind loopback.
         nats_hub::ws_bridge::check_ws_bind(ws_addr, token.as_deref(), args.ws_insecure)?;

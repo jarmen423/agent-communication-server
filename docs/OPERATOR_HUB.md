@@ -167,6 +167,15 @@ hub-admin render-config --agents agents.txt \
 back to hub-server via `NATS_USER=hub-server NATS_PASSWORD=...` (an
 `EnvironmentFile` on the systemd unit is the usual place).
 
+Request-reply is per identity: each user may subscribe only its own reply
+inbox `_INBOX.<id>.>` and none may publish to `_INBOX` at all. Processes that
+**answer** requests need a responder role: run the worker supervisor as a
+`--role service` user (it gets `allow_responses: true`); the generated
+`hub-server` user already has it. Only `orchestrator`/`admin`/`service` roles
+may send worker-supervisor requests (`hub.worker.*`). `hub-admin` refuses the
+reserved identities `hub-server`, `hub-orchestrator` and `visualizer`,
+duplicate identities, and `--channel`s with wildcards or inbox overlap.
+
 **Run hub-server in bound mode** so the hub layer enforces what the ACLs
 claim (see SECURITY.md § threat model):
 
@@ -261,6 +270,7 @@ follow the pointer in the right column.
 | 9 | AuthN rejects anonymous | connect with no credentials → `Authorization Violation` | §4 authN block |
 | 10 | Identity is bound | as user `alice`, publish `hub.pub.bob.x` → permission denied; send forged `meta.from` → arrives rewritten | `scripts/dogfood_identity.sh` |
 | 10b | Inbox is private | user `alice` subscribe `channel.inbox.bob` → permission denied | `scripts/dogfood_identity.sh` |
+| 10c | Replies are private | user `alice` subscribe `_INBOX.bob.>` or `_INBOX.>` → permission denied; the supervisor still answers `hub.worker.list` | `scripts/dogfood_prod_config.sh` (whole generated config, end to end) |
 | 11 | Round-trip from a remote agent | run the `JOIN_HUB.md` "Verifying your connection" snippet | [`JOIN_HUB.md`](JOIN_HUB.md) |
 | 12 | Logs are writing | `ls -lh /var/log/nats-hub/` shows growing file | perms on log dir, §2 |
 | 13 | Backups scheduled | see [Backup](#backup) below | — |
@@ -286,7 +296,9 @@ To **revoke**, delete their `users[]` entry and reload.
 
 Identity names must be single NATS tokens (`[A-Za-z0-9_-]+`) and may not be
 `wave`, `session`, `agent`, `history`, `thread`, `envelope`, `stats`, or
-`ping` — those collide with API op namespaces; `hub-admin` refuses them.
+`ping` — those collide with API op namespaces — nor the reserved hub
+component names `hub-server`, `hub-orchestrator`, `visualizer`; `hub-admin`
+refuses them all.
 
 ## Backup
 

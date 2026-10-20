@@ -76,24 +76,48 @@ websocket {
 #
 # allowed_connection_types:["WEBSOCKET"] keeps an agent credential off the
 # loopback TCP listener; the hub-server service user has no such restriction.
+#
+# Request-reply (contract C1): every client uses the reply inbox prefix
+# _INBOX.<identity>, so each user may subscribe ONLY _INBOX.<its-id>.> and
+# has no publish right on _INBOX at all. Users that answer requests (the
+# hub-server user, and role=service users such as the worker supervisor)
+# get `allow_responses: true` instead.
 authorization {
     users: [
-        # role: hub-server (router, query API, ws bridge) — keep TCP-local.
+        # role: hub-server (router, query API, wave orchestrator, ws bridge)
+        # — keep TCP-local. Every in-process client connects as this user,
+        # so they all share the reply prefix _INBOX.hub-server. channel.> is
+        # needed by the wave orchestrator (channel.wave.>); the router already
+        # sees every envelope on hub.pub.*.>, so it adds no visibility.
         { user: "hub-server", password: "REPLACE_WITH_LONG_RANDOM_PASSWORD",
           permissions: {
-            publish:   { allow: ["channel.>", "_INBOX.>", "hub.>"] },
-            subscribe: { allow: ["hub.>", "_INBOX.>"] },
+            publish:   { allow: ["channel.>", "hub.>"] },
+            subscribe: { allow: ["hub.>", "channel.>", "_INBOX.hub-server.>"] },
+            allow_responses: true,
           } },
         # role: worker — one entry per agent identity.
         { user: "echo-1", password: "REPLACE_WITH_PER_AGENT_PASSWORD",
           allowed_connection_types: ["WEBSOCKET"]
           permissions: {
             publish:   { allow: ["hub.pub.echo-1.>", "hub.register.echo-1",
-                                 "hub.presence.echo-1", "hub.api.echo-1.>",
-                                 "_INBOX.>"] },
+                                 "hub.presence.echo-1", "hub.api.echo-1.>"] },
             subscribe: { allow: ["channel.inbox.echo-1", "channel.task.>",
                                  "channel.session.>", "channel.wave.>",
-                                 "_INBOX.>"] },
+                                 "_INBOX.echo-1.>"] },
+          } },
+        # role: service — answers hub.worker.* requests (worker supervisor).
+        { user: "worker-supervisor", password: "REPLACE_WITH_PER_AGENT_PASSWORD",
+          permissions: {
+            publish:   { allow: ["hub.pub.worker-supervisor.>",
+                                 "hub.register.worker-supervisor",
+                                 "hub.presence.worker-supervisor",
+                                 "hub.api.worker-supervisor.>", "hub.worker.>"] },
+            subscribe: { allow: ["channel.inbox.worker-supervisor",
+                                 "channel.task.>", "channel.session.>",
+                                 "channel.wave.>", "_INBOX.worker-supervisor.>",
+                                 "hub.presence.*", "hub.register.*",
+                                 "hub.worker.>"] },
+            allow_responses: true,
           } },
     ]
 }

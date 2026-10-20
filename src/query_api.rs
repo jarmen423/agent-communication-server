@@ -23,11 +23,12 @@ use crate::storage::Storage;
 
 pub mod authz;
 mod handlers;
+mod scoped_reads;
 #[cfg(feature = "storage-surreal")]
 mod stats;
 mod write_authz;
 
-pub use authz::{ApiAuthz, Caller};
+pub use authz::{ApiAuthz, Caller, Scope};
 use handlers::*;
 
 /// NATS subject prefix for query API.
@@ -50,7 +51,7 @@ pub fn subject_bound(identity: &str, operation: &str) -> String {
 }
 
 /// Generic request envelope from CLI tools.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ApiRequest {
     /// Operation name (matches the subject suffix).
     pub op: String,
@@ -142,7 +143,7 @@ pub async fn start_api_listener_with_authz(
     authz: ApiAuthz,
 ) -> Result<()> {
     // Same env auth path as ControlPlane / HubClient (NATS_TOKEN, TLS, …).
-    let opts = crate::HubConnectOptions::from_env();
+    let opts = crate::router::hub_server_connect_opts();
     let client = crate::connect_opts::connect_with_hub_opts(nats_url, &opts).await?;
     let mut sub = client.subscribe(format!("{API_PREFIX}.>")).await?;
 
@@ -185,9 +186,10 @@ pub async fn handle_request(
 /// Dispatch one API request with caller identity + authorization.
 ///
 /// The subject carries the caller: `hub.api.<identity>.<op>` binds the
-/// caller to `<identity>` (reads are scoped, writes need admin), while
-/// `hub.api.<op>` is the privileged legacy form allowed only when
-/// `authz.require_bound` is off.
+/// caller to `<identity>` (reads are scoped, writes are owner-scoped),
+/// while `hub.api.<op>` is the legacy form: rejected under
+/// `authz.require_bound`, privileged on a permissive hub, and an anonymous
+/// non-admin ([`Scope::Anonymous`]) once `--api-admin` is set.
 pub async fn handle_request_authorized(
     storage: &Arc<dyn Storage>,
     subject: &str,
@@ -213,23 +215,38 @@ pub async fn handle_request_authorized(
 
     // Writes are gated *before* dispatch — post-filtering cannot undo a
     // mutation the handler already applied. Non-admins may only mutate
-    // waves/sessions they own (see `write_authz`).
-    if authz.enforcing() {
-        if let Caller::Bound(identity) = &caller {
-            if ApiAuthz::is_write_op(op)
-                && !authz
+    // waves/sessions they own (see `write_authz`); an anonymous legacy
+    // caller on an enforcing hub may not write at all.
+    let scope = authz.scope(&caller);
+    if ApiAuthz::is_write_op(op) {
+        match scope {
+            Scope::Full => {}
+            Scope::Identity(identity) => {
+                if !authz
                     .write_allowed(storage.as_ref(), identity, op, &req.params)
                     .await
-            {
+                {
+                    return ApiResponse::err(format!(
+                        "forbidden: '{op}' — non-admin callers may only modify waves/sessions \
+                         they own (admins: --api-admin)"
+                    ));
+                }
+            }
+            Scope::Anonymous => {
                 return ApiResponse::err(format!(
-                    "forbidden: '{op}' — non-admin callers may only modify waves/sessions \
-                     they own (admins: --api-admin)"
+                    "forbidden: '{op}' — legacy hub.api.<op> callers own nothing on a hub \
+                     with --api-admin; call hub.api.<identity>.{op} instead"
                 ));
             }
         }
     }
 
-    let resp = dispatch(storage, &req, op).await;
+    let resp = if scope != Scope::Full && scoped_reads::is_scoped_list(op) {
+        // Over-fetch so invisible rows don't shorten the caller's page.
+        scoped_reads::fetch_visible(storage, &req, op, scope).await
+    } else {
+        dispatch(storage, &req, op).await
+    };
     authz
         .authorize(storage, &caller, op, &req.params, resp)
         .await
