@@ -164,8 +164,7 @@ permissions: {
             "hub.register.echo-1"    # can only register itself
             "hub.presence.echo-1"    # heartbeats
             "hub.api.echo-1.>"       # query API as itself
-            "_INBOX.>"               # request-reply plumbing
-        ]
+        ]                            # (no _INBOX publish right at all)
     }
     subscribe: {
         allow: [
@@ -173,14 +172,42 @@ permissions: {
             "channel.task.>"         # task conversation channels
             "channel.session.>"      # multi-turn sessions
             "channel.wave.>"         # wave coordination channels
-            "_INBOX.>"               # replies to its API calls
+            "_INBOX.echo-1.>"        # replies to ITS OWN requests only
         ]
     }
 }
 ```
 
 Broadcast channels (`channel.chat` etc.) are granted per agent with
-`hub-admin add-agent <id> --channel chat`.
+`hub-admin add-agent <id> --channel chat`. `hub-admin` refuses channels with
+`*`, `>`, empty tokens or characters outside `[A-Za-z0-9_-]`, and anything
+overlapping the inboxes (`inbox`, `inbox.<id>`).
+
+**Request-reply inboxes are per identity.** Every client (Rust `HubClient`,
+`ApiClient`, the router; Python `nats_connect.connect_nats`, so every worker,
+bridge and the MCP server) uses the reply prefix `_INBOX.<id>` instead of the
+shared `_INBOX`: `<id>` is the NATS user when it is a valid identity, else
+the client identity. A user may subscribe only `_INBOX.<its-id>.>`, so no
+agent can read another agent's API or RPC replies, and no agent can publish
+into any `_INBOX` subject (it can't forge a reply). Users that **answer**
+requests get `allow_responses: true` instead of an `_INBOX` publish right —
+it lets them reply only to requests they actually received:
+
+| Role (`hub-admin --role`) | Extra rights |
+|---|---|
+| `worker` | none |
+| `orchestrator`, `admin` | publish `hub.worker.>` (worker-supervisor requests) |
+| `service` (worker supervisor) | publish + subscribe `hub.worker.>`, subscribe `hub.presence.*` / `hub.register.*`, `allow_responses` |
+| `hub-server` (generated) | publish `channel.>`, `hub.>`; subscribe `hub.>`, `channel.>`, `_INBOX.hub-server.>`; `allow_responses` |
+
+The **hub-server user** is shared by the router, query API, wave orchestrator
+(identity `hub-orchestrator`) and WS bridge. It must be trusted: it routes
+every envelope (`hub.pub.*.>` already shows it all traffic, so the
+`channel.>` subscribe the orchestrator needs for `channel.wave.>` adds no
+visibility) and can publish on any delivery subject. The identities
+`hub-server`, `hub-orchestrator` and `visualizer` are **reserved**:
+`hub-admin` won't mint agent credentials for them, and `hub-server` refuses a
+`--ws-identity` of `hub-server`/`hub-orchestrator`.
 
 **What the NATS ACL alone cannot express:** "all channels except inboxes"
 (a `deny` always beats the broad `channel.>` allow). So task, session, and
@@ -189,37 +216,58 @@ each `channel.inbox.<id>` is private by construction.
 
 ### What the hub enforces on top of NATS ACLs
 
-The router and query API add a second enforcement layer, active whenever
-`hub-server` runs with `--require-bound-identity` or `--api-admin`:
+The router enforces the following in every mode:
 
-- **`meta.from` is overwritten.** On a bound `hub.pub.<id>.>` subject the
-  router rewrites the envelope's `meta.from` to `<id>` before routing — a
-  forged `from` field cannot survive the bus. Same for the identity inside
+- **`meta.from` and `meta.channel` are overwritten.** On a bound
+  `hub.pub.<id>.<channel>` subject the router rewrites `meta.from` to `<id>`
+  and `meta.channel` to `<channel>` before routing and storage — a forged
+  field cannot survive the bus. Same for the identity inside
   `hub.register.<id>` / `hub.presence.<id>` payloads.
+- **Recipients are validated.** An envelope whose `meta.to` is not a valid
+  identity is dropped (logged). A send on channel `inbox.<id>` without
+  `meta.to` is treated as the DM to `<id>` it is (so it is stored and scoped
+  as private, not public). Legacy register/presence payload identities are
+  validated too.
+
+The router and query API add the rest when `hub-server` runs with
+`--require-bound-identity` or `--api-admin`:
+
 - **Legacy subjects are dropped** under `--require-bound-identity`
   (`hub.send.>`, bare `hub.register`/`hub.presence`, `hub.api.<op>`).
-  Without the flag they still work (permissive mode) and are counted in
+  Without the flag they still work and are counted in
   `natshub_unbound_sends_total` — the metric tells you when it's safe to
   flip the flag.
+- **A legacy `hub.api.<op>` caller owns nothing once `--api-admin` is set**
+  (even without `--require-bound-identity`): it can't write, sees only
+  broadcast envelopes and unscoped metadata (`agent.*`, `stats.*`, `ping`),
+  and gets no waves, sessions or pending inboxes. Only a hub with neither
+  flag treats legacy callers as privileged.
 - **`hub.api.<id>.<op>` scopes reads to the caller.** DM envelopes are
   visible only to their sender and recipient (`history.query`,
   `thread.get`, `envelope.get`, `thread.pending`); broadcast envelopes are
   public; wave and session records are visible to their orchestrator and
   workers. `envelope.get` on an invisible record returns "envelope not
-  found" — existence is not leaked.
+  found" — existence is not leaked. `history.query`/`thread.get` over-fetch
+  before filtering, so a page is not short just because rows the caller
+  can't see filled the `LIMIT`.
 - **Write ops are owner-scoped; admins can do anything.** A non-admin may
   mutate only what it owns. Admins are listed via `--api-admin <id>`
   (repeatable) or `NATS_HUB_API_ADMINS`; they bypass write checks and read
   scoping.
-  - `wave.create`: the new wave's `orchestrator` must be the caller.
+  - `wave.create`: the new wave's `orchestrator` must be the caller, and an
+    existing wave with that id must already be the caller's.
   - `wave.create_task` / `spawn` / `cancel` / `update_status`: the caller must
     orchestrate the wave.
   - `wave.update_task_status`: the wave's orchestrator, or the task's worker.
-  - `session.create`: the new session's `orchestrator` must be the caller.
+  - `session.create`: the new session's `orchestrator` must be the caller, and
+    an existing session with that id must already be the caller's.
   - `session.update_status` / `set_backend_ctx`: the session's orchestrator or
     worker.
   - Any other write op is admin-only. Implemented in
-    `src/query_api/write_authz.rs`.
+    `src/query_api/write_authz.rs`. Storage backs the create rule up: a
+    wave/session create never changes an existing record's orchestrator
+    (checked in the same transaction as the write — not even an admin can
+    re-own a record through `create`).
 - **Bound subjects still work in permissive mode.** Clients always publish
   bound subjects; enforcement is what changes.
 
@@ -230,23 +278,44 @@ refuses to mint them, and the API's subject parser would otherwise read
 
 ### Honest threat model — what is and isn't proved
 
-| Deployment mode | Who can claim `meta.from = "alice"`? | Can alice read bob's inbox? | `hub.api` visibility |
+| Deployment mode | Who can claim `meta.from = "alice"`? | Can alice read bob's inbox or replies? | `hub.api` visibility |
 |---|---|---|---|
-| Anonymous / shared token, permissive (default) | **Anyone** — `from` is self-asserted on legacy subjects; bound subjects get overwritten but nothing pins identity to a credential | **Anyone** — default ACLs allow `channel.inbox.>` | Unscoped legacy callers; bound callers scoped only if `--api-admin`/`--require-bound` set |
-| Per-agent users + `--require-bound-identity` (+ `--api-admin`) | **Only alice's credential** — publish ACL allows `hub.pub.alice.>` only, legacy subjects dropped, `meta.from` overwritten | **No** — ACL allows only `channel.inbox.bob` for bob's credential | Scoped to caller; writes limited to waves/sessions the caller owns (admins: `--api-admin`) |
+| Anonymous / shared token, permissive (default) | **Anyone** — `from` is self-asserted on legacy subjects; bound subjects get overwritten but nothing pins identity to a credential | **Anyone** — no ACLs, so `channel.inbox.>` and `_INBOX.>` are open | Unscoped; bound callers scoped only if `--api-admin`/`--require-bound` set |
+| Per-agent users (`hub-admin`) + `--require-bound-identity` (+ `--api-admin`) | **Only alice's credential** — publish ACL allows `hub.pub.alice.>` only, legacy subjects dropped, `meta.from` overwritten | **No** — bob's credential alone may subscribe `channel.inbox.bob` and `_INBOX.bob.>` | Scoped to caller; writes limited to waves/sessions the caller owns (admins: `--api-admin`) |
 
 So the claim holds only when **both** halves are true: per-agent
 credentials (NATS layer) *and* `hub-server --require-bound-identity` (hub
-layer). `scripts/dogfood_identity.sh` proves each guarantee live against a
-running hub; the prod config in `config/nats-server.prod.conf.example` is
-the reference deployment.
+layer). In permissive mode the sender checks workers and delegators make
+(accept a cancel only from the task's sender, a result only from the
+delegated worker) compare a self-asserted `meta.from`, so they are best
+effort; in bound mode they are real. Two scripts prove the guarantees live:
+`scripts/dogfood_identity.sh` (bound subjects, API scoping) and
+`scripts/dogfood_prod_config.sh` (the full generated config: inbox and
+reply isolation, forged `from`, supervisor responses, a wave run and a
+wave cancel, with every process on its own credential). The prod config in
+`config/nats-server.prod.conf.example` is the reference deployment.
 
-**Residual risk even in the strict mode:** task/session/wave channel names
-are public to all agents (a worker can eavesdrop on a task channel it
-wasn't assigned to — ACLs can't express per-task scoping), and a leaked
-credential is still a full identity takeover until revoked. Inbox privacy
-and `from` integrity are the guarantees; workload-channel confidentiality
-is not one of them.
+**Residual risks, even in the strict mode** — these are *not* guarantees:
+
+- **Workload channels are team-public.** `channel.task.>`,
+  `channel.session.>` and `channel.wave.>` are readable by every agent: any
+  agent can read the prompts, progress and results of tasks, sessions and
+  waves it isn't part of. NATS ACLs can't scope them per task.
+- **Any agent can post on any channel as itself**, including someone
+  else's task/session/wave channel (`hub.pub.<self>.task.<uuid>` is allowed).
+  `meta.from` stays truthful, so receivers that check the sender (the wave
+  orchestrator, workers, delegators) ignore it; consumers that don't check
+  can be confused. Any agent can also DM any other agent.
+- **Broadcasts are public history.** Every caller sees every broadcast
+  envelope through `history.query`, and `agent.*`/`stats.*` are unscoped.
+- **The hub-server credential is all-powerful** (it routes and stores
+  everything), and so is any process holding it — keep it TCP-local.
+- **The WS bridge acts as one identity** (`--ws-identity`) for everyone who
+  holds the bridge token; browser users are not individually authenticated.
+- **A leaked credential is a full identity takeover** until it is revoked.
+
+Inbox and reply privacy, `from`/`channel` integrity and ownership of
+waves/sessions are the guarantees; workload-channel confidentiality is not.
 
 ---
 
@@ -335,7 +404,8 @@ reachable by anything but localhost.
 | Auth: per-agent (required for binding) | `authorization { users: [...] }` via `hub-admin render-config` |
 | Identity binding | `hub-server --require-bound-identity` + per-agent users |
 | API write ops | Owner-scoped by default; full access via `hub-server --api-admin <id>` (repeatable) or `NATS_HUB_API_ADMINS` |
-| Per-agent authZ | identity-bound allowlists — `hub.pub.<id>.>`, `channel.inbox.<id>` — mint via `hub-admin add-agent` |
+| Per-agent authZ | identity-bound allowlists — `hub.pub.<id>.>`, `channel.inbox.<id>`, `_INBOX.<id>.>` — mint via `hub-admin add-agent` |
+| Responders (supervisor) | `hub-admin --role service` → `allow_responses: true` (no `_INBOX` publish) |
 | TLS on WS | `websocket { cert_file, key_file }` |
 | Visualizer bridge | `--ws-token` (or `HUB_WS_TOKEN`) + Origin allowlist; loopback-only without a token |
 | Capacity ceilings | `max_connections`, `max_payload` |
