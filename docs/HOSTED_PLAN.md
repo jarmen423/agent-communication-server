@@ -292,7 +292,8 @@ dashboard; W2-D (file locks) is independent.
 
 1. **License split:** Apache-2.0 client + BUSL-1.1 server (Additional Use
    Grant: no third-party hosted service; Change Date 4 years → Apache-2.0) +
-   private control plane. Agreed; licensor "Agent Memory Labs".
+   private control plane. Agreed; licensor "Agent Memory Labs". **Applied**
+   2026-10-20: see [`LICENSING.md`](../LICENSING.md).
 2. **Extra broadcast channels** under scoped signing keys (H-0).
 3. **Cloud and region** for the hosted cluster.
 4. **Control-plane language** (Rust vs TypeScript).

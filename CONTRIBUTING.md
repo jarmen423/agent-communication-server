@@ -150,6 +150,11 @@ lists which agent CLIs it can find. See `docs/WORKER_BACKENDS.md`.
 - Releases: bump `Cargo.toml`, then tag `vX.Y.Z`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 - Never commit machine-specific paths (`/home/<you>`, custom target dirs).
   Use repo-relative paths or env vars with sensible defaults.
+- Licensing: the repo is licensed by path, Apache-2.0 for the client and
+  BUSL-1.1 for the server ([`LICENSING.md`](LICENSING.md), [`REUSE.toml`](REUSE.toml)).
+  A new Rust file under `src/` is BUSL-1.1 unless you add it to the client list
+  in `REUSE.toml`. Contributions are licensed under the license of the files
+  they touch. External PRs can't be accepted until there is a CLA (future work).
 
 ## 6. Troubleshooting
 

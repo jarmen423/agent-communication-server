@@ -6,7 +6,8 @@
 #
 #   package.sh binaries <version> <target> <bin-dir> <out-dir>
 #       Tar every `hub-*` executable in <bin-dir> (a cargo `release/` dir)
-#       plus README.md and any LICENSE* into
+#       plus README.md and the license files (LICENSE, NOTICE, LICENSING.md,
+#       LICENSES/) into
 #       <out-dir>/nats-hub-<version>-<target>.tar.gz
 #
 #   package.sh remote-bundle <version> <out-dir>
@@ -50,12 +51,17 @@ make_tarball() {  # make_tarball <staging-parent> <dir-name> <out-file>
   (cd "$parent" && tar -czf "$out" "$name")
 }
 
+# The repo is licensed by path (LICENSING.md), so every asset ships the
+# pointer LICENSE, NOTICE, the plain-language LICENSING.md and the full texts
+# in LICENSES/.
 copy_license_files() {  # copy_license_files <dest-dir>
   local f
-  for f in "$REPO_ROOT"/LICENSE*; do
-    [[ -f "$f" ]] && cp "$f" "$1/"
+  for f in LICENSE NOTICE LICENSING.md; do
+    [[ -f "$REPO_ROOT/$f" ]] || die "missing $f"
+    cp "$REPO_ROOT/$f" "$1/"
   done
-  return 0
+  [[ -d "$REPO_ROOT/LICENSES" ]] || die "missing LICENSES/"
+  cp -R "$REPO_ROOT/LICENSES" "$1/LICENSES"
 }
 
 cmd_binaries() {

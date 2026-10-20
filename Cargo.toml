@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 description = "NATS-based communication layer with control plane routing for agent + human messaging"
-license = "BSL-1.1"
+# Licensed by path (see LICENSING.md / REUSE.toml): the client side is Apache-2.0,
+# the server side BUSL-1.1. This crate holds both until the H-1 client/server
+# crate split, after which each crate declares one license.
+license = "Apache-2.0 AND BUSL-1.1"
 repository = "https://github.com/jarmen423/agent-communication-server"
 readme = "README.md"
 authors = ["Agent Memory Labs <josh@agentmemorylabs.com>"]
