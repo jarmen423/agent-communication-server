@@ -55,7 +55,7 @@ async fn recv_until(rx: &mut Rx, secs: u64, pred: impl Fn(&Envelope) -> bool) ->
 /// `hub.register` (it subscribes to its inbox before registering).
 async fn spawn_worker(url: &str, identity: &str, mut cmd: Command) -> Child {
     let probe = HubClient::connect(url, uniq("probe")).await.unwrap();
-    let mut reg = probe.subscribe_subject("hub.register").await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
     let child = cmd
         .current_dir(repo_root())
         .stdin(Stdio::null())
@@ -135,7 +135,7 @@ fn assert_contract(seen: &[Envelope], worker: &str, expect_result: &str) {
     }
     let results: Vec<_> = from_worker
         .iter()
-        .filter(|e| is_task_result(e, task_id))
+        .filter(|e| is_task_result(e, task_id, worker))
         .collect();
     assert_eq!(results.len(), 1, "exactly one terminal result");
     assert_eq!(
@@ -221,7 +221,7 @@ async fn run_task(url: &str, worker: &str, prompt: &str, secs: u64) -> (String, 
     .to(worker);
     let id = task.meta.id.clone();
     me.send(&task).await.unwrap();
-    let result = recv_until(&mut rx, secs, |e| is_task_result(e, &id)).await;
+    let result = recv_until(&mut rx, secs, |e| is_task_result(e, &id, worker)).await;
     let _ = me.drain().await;
     (id, result)
 }
@@ -305,7 +305,7 @@ async fn e2e_rust_worker_reannounces_registration() {
 
     // spawn_rust_worker consumed the first registration; expect another.
     let probe = HubClient::connect(&url, uniq("probe")).await.unwrap();
-    let mut reg = probe.subscribe_subject("hub.register").await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
     recv_until(&mut reg, 3, |e| e.payload["identity"] == worker.as_str()).await;
     let _ = probe.drain().await;
 }

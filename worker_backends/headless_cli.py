@@ -3,6 +3,8 @@
 Hardening guarantees (see tests/python/test_worker_headless.py):
   - every turn has a timeout (default 900s); on timeout the child's whole
     process group is killed and reaped before the error is raised;
+  - cancelling the turn's task (hub cancel, refocus-iteration-2.md §4.2)
+    kills and reaps the process group the same way;
   - a non-zero exit is always an error, with a stderr tail in the message;
   - stderr is drained concurrently (bounded), stdout is streamed line by line;
   - positional prompts can be preceded by ``--`` so a prompt that starts
@@ -23,10 +25,12 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from worker_backends.proc import ProcResult, ProcTimeout, run_streaming
+from worker_backends.progress import current_progress_handler
 
 DEFAULT_TIMEOUT_SEC = 900.0
+_SAFE_SESSION_DIR = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
 
-# progress handler installed by worker_events: async (kind, data) -> None
+# per-turn progress handler (worker_backends.progress): async (kind, data) -> None
 ProgressHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
@@ -86,7 +90,8 @@ class HeadlessCliBackend:
         self.repo = Path(spec.repo).resolve()
         self._progress_handler: ProgressHandler | None = None
 
-    # worker_events attaches a streaming handler per turn when present.
+    # Fallback handler for direct callers/tests. The runtime passes a per-turn
+    # handler through worker_backends.progress instead (no cross-talk).
     def set_progress_handler(self, handler: ProgressHandler | None) -> None:
         self._progress_handler = handler
 
@@ -96,6 +101,10 @@ class HeadlessCliBackend:
     def _cwd(self, ctx: dict[str, Any]) -> Path:
         sid = ctx.get("_session_id")
         if sid and self.spec.session_cwd_subdir:
+            # Session ids are opaque and come off the bus (e.g. the wave id
+            # `<wave_id>--<task_id>`): only one safe path component may be used.
+            if not isinstance(sid, str) or not _SAFE_SESSION_DIR.fullmatch(sid):
+                raise ValueError(f"session id {sid!r} is not a safe directory name")
             p = self.repo / self.spec.session_cwd_subdir / sid
             p.mkdir(parents=True, exist_ok=True)
             return p
@@ -224,7 +233,7 @@ class HeadlessCliBackend:
                 f"{' ...' if len(cmd) > 8 else ''} cwd={cwd}",
                 flush=True,
             )
-            handler = self._progress_handler
+            handler = current_progress_handler(self._progress_handler)
 
             async def emit(kind: str, data: dict[str, Any]) -> None:
                 if handler is None:

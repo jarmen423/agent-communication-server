@@ -122,6 +122,27 @@ pub trait Storage: Send + Sync {
     /// List sessions matching a filter.
     async fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<SessionRecord>>;
 
+    /// Set only the session's `backend_ctx` (and `updated_at`), leaving the
+    /// rest of the record alone. Returns `false` when the session doesn't
+    /// exist.
+    ///
+    /// The default implementation is a read-modify-write of the whole
+    /// record; backends should override it with a single-field update so a
+    /// concurrent status change isn't lost.
+    async fn set_session_backend_ctx(
+        &self,
+        session_id: &str,
+        backend_ctx: serde_json::Value,
+    ) -> Result<bool> {
+        let Some(mut session) = self.get_session(session_id).await? else {
+            return Ok(false);
+        };
+        session.backend_ctx = Some(backend_ctx);
+        session.updated_at = chrono::Utc::now();
+        self.create_session(session).await?;
+        Ok(true)
+    }
+
     // ── Waves ────────────────────────────────────────────────
 
     /// Create a new wave record.
@@ -135,6 +156,29 @@ pub trait Storage: Send + Sync {
 
     /// List waves, optionally filtered by status.
     async fn list_waves(&self, status: Option<&str>) -> Result<Vec<WaveRecord>>;
+
+    /// Set one top-level key of a wave's `metadata` object, leaving the rest
+    /// of the record alone. `key` must be a plain identifier
+    /// (`[A-Za-z_][A-Za-z0-9_]*`). Returns `false` when the wave doesn't exist.
+    ///
+    /// The default implementation is a read-modify-write of the whole
+    /// record; backends should override it with a single-field update.
+    async fn set_wave_metadata_key(
+        &self,
+        wave_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<bool> {
+        let Some(mut wave) = self.get_wave(wave_id).await? else {
+            return Ok(false);
+        };
+        if !wave.metadata.is_object() {
+            wave.metadata = serde_json::json!({});
+        }
+        wave.metadata[key] = value;
+        self.create_wave(wave).await?;
+        Ok(true)
+    }
 
     /// Create a wave task record.
     async fn create_wave_task(&self, task: WaveTaskRecord) -> Result<()>;

@@ -14,7 +14,24 @@ no SurrealDB, no full Hermes venv).
 | `README.md` | This file. |
 | (repo root) `requirements-remote.txt` | Minimal pip requirements (just `nats-py`). |
 
-## Two ways to install on a laptop
+## Ways to install on a laptop
+
+### Option 0 — from a GitHub release (no clone, checksum-verified)
+
+Each release ships `nats-hub-remote-<tag>.tar.gz`: the files in `FILES.txt` plus
+this `install.sh`. `--from-release` downloads it over HTTPS, checks it against
+the release's `SHA256SUMS`, and installs from it. A mismatch aborts the install.
+
+```bash
+curl -fsSL -o install.sh \
+  https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/packaging/remote/install.sh
+bash install.sh --from-release latest            # or a tag; → ~/nats-hub-remote
+```
+
+When `install.sh` runs outside a checkout and without `--from-release`, it uses
+the latest release anyway. `--release-base-url https://…|file://…` points it at
+a mirror or a local directory holding `SHA256SUMS` + the bundle. `--no-pip`
+skips the `pip install`.
 
 ### Option A — clone the repo (simplest if they have access)
 
@@ -57,11 +74,13 @@ it's been copied flat (next to the adapter) and works the same way.
 
 ## What `install.sh` does
 
-1. Verifies Python 3.10+.
-2. Creates `<target>/.venv` (default target: `~/nats-hub-remote`).
-3. Copies the files listed in `FILES.txt` into `<target>/`.
-4. Runs `pip install -r requirements-remote.txt` inside the venv.
-5. Prints the next-step command line (with `--nats-url wss://…` and a
+1. Picks the source: the verified release bundle (`--from-release`), else the
+   checkout or flat bundle it sits in, else the latest release.
+2. Verifies Python 3.10+.
+3. Creates `<target>/.venv` (default target: `~/nats-hub-remote`).
+4. Copies the files listed in `FILES.txt` into `<target>/`.
+5. Runs `pip install -r requirements-remote.txt` inside the venv (skip with `--no-pip`).
+6. Prints the next-step command line (with `--nats-url wss://…` and a
    placeholder for your token / creds file).
 
 Re-running it is safe: it refreshes the copied files and re-runs pip.
@@ -98,8 +117,10 @@ If `remote_agent_adapter.py`, `nats_connect.py`, `worker_runtime.py`,
 
 1. Re-run `bash packaging/remote/install.sh` from a fresh checkout — it
    will overwrite the older copies in the target dir and re-pip-install.
-2. If new files were added to the import closure, add them to both
-   `FILES.txt` and the `REMOTE_FILES=( ... )` array in `install.sh`.
+2. If new files were added to the import closure, add them to `FILES.txt`.
+   `install.sh` and the release bundle (`packaging/release/package.sh
+   remote-bundle`) both read it. The array in `install.sh` is only a fallback
+   for hand-copied layouts that lack `FILES.txt`.
 
 The fastest way to detect drift is to grep imports:
 

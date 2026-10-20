@@ -202,6 +202,7 @@ async fn create_session(
         updated_at: now,
         closed_at: None,
         metadata: serde_json::json!({}),
+        backend_ctx: None,
     };
     let _ = api
         .request("session.create", serde_json::to_value(&record)?)
@@ -277,6 +278,9 @@ async fn show_session(api: &ApiClient, session_id: &str) -> Result<()> {
             }
             if let Some(provider) = s.provider {
                 println!("provider:     {provider}");
+            }
+            if let Some(ctx) = s.backend_ctx {
+                println!("backend_ctx:  {ctx}");
             }
             println!(
                 "created_at:   {}",

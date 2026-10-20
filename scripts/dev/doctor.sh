@@ -61,12 +61,6 @@ else
 fi
 
 echo "optional:"
-if command -v node >/dev/null; then
-  if [[ -d node_modules/nats ]]; then ok node "$(node --version), node_modules installed"
-  else warn node "$(node --version) — JS workers need: make setup-js"; fi
-else
-  warn node "only needed for worker.js / hub_worker.js (Cline)"
-fi
 for cli in claude codex hermes cursor-agent kilo opencode grok; do
   if command -v "$cli" >/dev/null; then ok "$cli" "$(command -v "$cli")"
   else warn "$cli" "not installed (only needed for that worker type)"; fi

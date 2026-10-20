@@ -184,7 +184,7 @@ def test_claude_worker_round_trip_with_fake_cli(tmp_path):
             task = make_envelope("pytest", identity, task_channel, "message",
                                  {"prompt": "ping", "task_channel": task_channel})
             task_id = json.loads(task)["meta"]["id"]
-            await nc.publish(f"hub.send.{task_channel}", task)
+            await nc.publish(f"hub.pub.pytest.{task_channel}", task)
             progress: list[dict] = []
             deadline = asyncio.get_running_loop().time() + 30
             while True:

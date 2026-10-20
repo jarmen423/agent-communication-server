@@ -1,173 +1,19 @@
 //! Query API handlers for records (waves, sessions, agents, history,
-//! threads). Every handler goes through the `Storage` trait.
+//! threads). Every handler goes through the `Storage` trait. Wave and
+//! session handlers live in [`wave`] and [`session`].
 
 use serde_json::{json, Value};
 
 use super::{resolve_limit, ApiResponse};
-use crate::storage::{
-    AgentFilter, HistoryQuery, SessionFilter, SessionRecord, Storage, WaveRecord, WaveTaskRecord,
-    MAX_THREAD_DEPTH,
-};
+use crate::storage::{AgentFilter, HistoryQuery, Storage, MAX_THREAD_DEPTH};
 
-// ── Wave handlers ──────────────────────────────────────────────
+mod session;
+mod wave;
+mod wave_orch;
 
-pub(super) async fn wave_create(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave: WaveRecord = match serde_json::from_value(p.clone()) {
-        Ok(w) => w,
-        Err(e) => return ApiResponse::err(format!("bad wave record: {e}")),
-    };
-    match s.create_wave(wave).await {
-        Ok(()) => ApiResponse::ok(json!({"created": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_create_task(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let task: WaveTaskRecord = match serde_json::from_value(p.clone()) {
-        Ok(t) => t,
-        Err(e) => return ApiResponse::err(format!("bad task record: {e}")),
-    };
-    match s.create_wave_task(task).await {
-        Ok(()) => ApiResponse::ok(json!({"created": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_update_status(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let status = match p.get("status").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return ApiResponse::err("missing status"),
-    };
-    match s.update_wave_status(wave_id, status).await {
-        Ok(()) => ApiResponse::ok(json!({"updated": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_get(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    match s.get_wave(wave_id).await {
-        Ok(wave) => ApiResponse::ok(json!({"wave": wave})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_list(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let status = p.get("status").and_then(|v| v.as_str());
-    match s.list_waves(status).await {
-        Ok(waves) => ApiResponse::ok(json!({"waves": waves})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_list_tasks(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    match s.list_wave_tasks(wave_id).await {
-        Ok(tasks) => ApiResponse::ok(json!({"tasks": tasks})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_update_task_status(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let task_id = match p.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return ApiResponse::err("missing task_id"),
-    };
-    let status = match p.get("status").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return ApiResponse::err("missing status"),
-    };
-    let result = p
-        .get("result")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    match s
-        .update_wave_task_status(&wave_id, &task_id, &status, result.as_deref())
-        .await
-    {
-        Ok(()) => ApiResponse::ok(json!({"updated": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn wave_get_task(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let wave_id = match p.get("wave_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing wave_id"),
-    };
-    let task_id = match p.get("task_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing task_id"),
-    };
-    match s.get_wave_task(wave_id, task_id).await {
-        Ok(task) => ApiResponse::ok(json!({"task": task})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-// ── Session handlers ───────────────────────────────────────────
-
-pub(super) async fn session_create(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let session: SessionRecord = match serde_json::from_value(p.clone()) {
-        Ok(s) => s,
-        Err(e) => return ApiResponse::err(format!("bad session record: {e}")),
-    };
-    match s.create_session(session).await {
-        Ok(()) => ApiResponse::ok(json!({"created": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn session_update_status(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let session_id = match p.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing session_id"),
-    };
-    let status = match p.get("status").and_then(|v| v.as_str()) {
-        Some(s) => s,
-        None => return ApiResponse::err("missing status"),
-    };
-    match s.update_session_status(session_id, status).await {
-        Ok(()) => ApiResponse::ok(json!({"updated": true})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn session_get(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let session_id = match p.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return ApiResponse::err("missing session_id"),
-    };
-    match s.get_session(session_id).await {
-        Ok(session) => ApiResponse::ok(json!({"session": session})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
-
-pub(super) async fn session_list(s: &dyn Storage, p: &Value) -> ApiResponse {
-    let filter: SessionFilter = match serde_json::from_value(p.clone()) {
-        Ok(f) => f,
-        Err(e) => return ApiResponse::err(format!("bad filter: {e}")),
-    };
-    match s.list_sessions(&filter).await {
-        Ok(sessions) => ApiResponse::ok(json!({"sessions": sessions})),
-        Err(e) => ApiResponse::err(e.to_string()),
-    }
-}
+pub(super) use session::*;
+pub(super) use wave::*;
+pub(super) use wave_orch::{wave_cancel, wave_spawn, wave_status};
 
 // ── Agent handlers ─────────────────────────────────────────────
 

@@ -34,6 +34,8 @@ def identity() -> str:
 
     ``NATS_HUB_IDENTITY`` is required — fail loudly instead of silently
     impersonating ``mcp-server`` or whatever a caller passes as ``from``.
+    Must be a valid single NATS token (`[A-Za-z0-9_-]+`): it is embedded in
+    the bound subjects this client publishes on (contract §4.1).
     """
     ident = os.environ.get("NATS_HUB_IDENTITY", "").strip()
     if not ident:
@@ -41,7 +43,12 @@ def identity() -> str:
             "NATS_HUB_IDENTITY is not set. The MCP server stamps this env var "
             "as `meta.from` on every message; refusing to run without it."
         )
-    return ident
+    import nats_connect
+
+    try:
+        return nats_connect.validate_identity(ident)
+    except ValueError as e:
+        raise RuntimeError(str(e)) from e
 
 
 def check_from_arg(args: dict) -> str | None:
@@ -79,12 +86,17 @@ async def get_nc() -> NATSClient:
             _nc = await nats_connect.connect_nats(
                 NATS_URL,
                 name=identity(),
+                # Reply inbox `_INBOX.<identity>` (contract C1): the only
+                # inbox subtree this identity may subscribe on a bound hub.
+                identity=identity(),
                 # A dead bus must fail the tool call in seconds — the nats
                 # client otherwise retries the initial connect for ~2min.
                 connect_timeout=float(
                     os.environ.get("NATS_HUB_CONNECT_TIMEOUT", "5")),
-                max_reconnect_attempts=int(
-                    os.environ.get("NATS_HUB_CONNECT_RETRIES", "3")),
+                # nats-py treats <= 0 as "retry forever": clamp to >= 1 so
+                # NATS_HUB_CONNECT_RETRIES=0 can't turn fail-fast into a hang.
+                max_reconnect_attempts=max(1, int(
+                    os.environ.get("NATS_HUB_CONNECT_RETRIES", "3"))),
                 reconnect_time_wait=0.5,
             )
             # The fail-fast settings above are for the *initial* connect only.
@@ -125,18 +137,18 @@ def envelope(
 
 
 async def publish(channel: str, env: dict) -> None:
-    """Publish an envelope to ``hub.send.<channel>``."""
+    """Publish an envelope to ``hub.pub.<identity>.<channel>`` (bound)."""
     nc = await get_nc()
-    await nc.publish(f"hub.send.{channel}", json.dumps(env).encode())
+    await nc.publish(f"hub.pub.{identity()}.{channel}", json.dumps(env).encode())
     await nc.flush()
 
 
 async def api_request(op: str, params: dict) -> dict:
-    """Request-reply against the hub query API (``hub.api.<op>``)."""
+    """Request-reply against the hub query API (``hub.api.<identity>.<op>``)."""
     nc = await get_nc()
     req = json.dumps({"op": op, "params": params}).encode()
     try:
-        reply = await nc.request(f"hub.api.{op}", req, timeout=API_TIMEOUT)
+        reply = await nc.request(f"hub.api.{identity()}.{op}", req, timeout=API_TIMEOUT)
     except Exception as e:
         return {"ok": False, "error": f"query API '{op}' failed: {e}"}
     try:

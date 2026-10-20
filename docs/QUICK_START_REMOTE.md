@@ -6,18 +6,32 @@
 
 ## Install on a remote machine
 
-Need bash, reachability to the hub, and Rust/cargo or a prebuilt binary.
+You need bash, curl (or wget), and a network path to the hub. Rust is only
+needed as a fallback.
 
 ```bash
-bash scripts/install_remote.sh <HUB_HOST>                          # from clone
 curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh \
-  | bash -s -- <HUB_HOST>                                         # one-liner
-bash scripts/install_remote.sh <HUB_HOST> --bin /path/to/hub-delegate  # no cargo
+  | bash -s -- wss://hub.example.com:8080                            # one-liner
+bash scripts/install_remote.sh wss://hub.example.com:8080            # from a clone
+bash scripts/install_remote.sh <HUB> --from-release v0.2.0           # pin a release
+bash scripts/install_remote.sh <HUB> --bin /path/to/hub-delegate     # bring your own binary
+bash scripts/install_remote.sh <HUB> --from-source                   # cargo build
 ```
 
-Installs `~/.local/share/nats-hub/bin/hub-delegate` and wrapper
-`~/bin/hub-delegate-remote` (`--nats-url nats://HUB_HOST:4222` baked in).
-Add `~/bin` to `PATH` if needed.
+By default the installer downloads the latest release for your platform
+(linux x86_64/arm64, macOS arm64) over HTTPS and verifies it against
+`SHA256SUMS`. A mismatch aborts the install. If there is no release or no
+asset for your platform, it builds `hub-delegate` from source instead;
+`--release-only` turns that fallback off.
+
+It installs every `hub-*` CLI into `~/.local/share/nats-hub/bin/`, plus a
+wrapper `~/bin/hub-delegate-remote` with your hub URL baked in. Add `~/bin` to
+`PATH` if needed.
+
+**Hub URL:** pass the full URL your operator gave you (`wss://…` or `tls://…`).
+A bare host becomes `nats://HOST:4222`, which is **plaintext**. The installer
+warns about that unless the host is loopback. Use plaintext only on a trusted
+LAN or VPN.
 
 ## Delegate a task
 

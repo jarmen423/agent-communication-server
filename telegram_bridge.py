@@ -3,7 +3,8 @@
 
 Bridges a human on Telegram with agents on the nats-hub bus. Two directions:
 
-  Human → NATS:  Telegram message → envelope to inbox.<recipient-agent>
+  Human → NATS:  Telegram message → DM to <recipient-agent> (bound subject
+                 hub.pub.<identity>.inbox.<recipient>, meta.to = recipient)
   NATS   → Human: every envelope on inbox.<identity> → Telegram message
 
 Run:
@@ -40,11 +41,16 @@ except Exception:  # pragma: no cover - depends on environment
 import nats
 from nats.aio.msg import Msg
 
-from nats_connect import connect_nats
+from nats_connect import connect_nats, validate_identity
 
 
-def make_envelope(identity: str, channel: str, payload: dict) -> bytes:
-    """Build a NATS envelope (same wire format as the Rust side)."""
+def make_envelope(identity: str, channel: str, payload: dict,
+                  to: str | None = None) -> bytes:
+    """Build a NATS envelope (same wire format as the Rust side).
+
+    ``to`` set makes it a DM: the router delivers it to ``channel.inbox.<to>``
+    and storage records the recipient, so read scoping keeps it private.
+    """
     import uuid
     from datetime import datetime, timezone
 
@@ -52,12 +58,24 @@ def make_envelope(identity: str, channel: str, payload: dict) -> bytes:
         "id": str(uuid.uuid4()),
         "from": identity,
         "channel": channel,
-        "to": None,
+        "to": to,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "kind": "message",
         "reply_to": None,
     }
     return json.dumps({"meta": meta, "payload": payload}).encode()
+
+
+def dm_publish(identity: str, recipient: str, text: str) -> tuple[str, bytes]:
+    """Subject + body for a human → agent DM on the bound subject.
+
+    Publishes on ``hub.pub.<identity>.<channel>`` (contract §4.1) so the
+    router pins ``meta.from`` to the bridge's credentials, and sets
+    ``meta.to`` so the message is routed and stored as a DM.
+    """
+    channel = f"inbox.{recipient}"
+    env = make_envelope(identity, channel, {"message": text}, to=recipient)
+    return f"hub.pub.{identity}.{channel}", env
 
 
 def extract_text(payload: dict) -> str:
@@ -102,6 +120,8 @@ async def main() -> None:
         help="Disable cert verification. Refused unless NATS_ALLOW_INSECURE=1.",
     )
     args = parser.parse_args()
+    validate_identity(args.identity)
+    validate_identity(args.recipient)
 
     token = args.telegram_token
     dry_run = args.dry_run or not token or not _HAVE_TELEGRAM
@@ -123,6 +143,7 @@ async def main() -> None:
         nkeys_seed=args.nkeys_seed,
         tls_insecure=args.tls_insecure,
         name=args.identity,
+        identity=args.identity,
     )
     inbox = f"inbox.{args.identity}"
     inbox_subject = f"channel.{inbox}"
@@ -159,10 +180,9 @@ async def main() -> None:
         async def on_telegram(update: "Update", _ctx) -> None:
             if not update.message or not update.message.text:
                 return
-            channel = f"inbox.{args.recipient}"
-            env = make_envelope(args.identity, channel, {"message": update.message.text})
-            await nc.publish(f"hub.send.{channel}", env)
-            print(f"[{args.identity}] Telegram → {channel}: {update.message.text[:80]}")
+            subject, env = dm_publish(args.identity, args.recipient, update.message.text)
+            await nc.publish(subject, env)
+            print(f"[{args.identity}] Telegram → {args.recipient}: {update.message.text[:80]}")
 
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_telegram))
         print(f"[{args.identity}] polling Telegram for inbound messages…")

@@ -37,15 +37,26 @@ the hub host.
 On the remote machine (Python 3.10+ required):
 
 ```bash
-# Option A: from a clone of the repo
-git clone <nats-hub-repo-url> nats-hub && cd nats-hub
-bash packaging/remote/install.sh
+# Option A: from a GitHub release (no clone). The bundle is downloaded over
+# HTTPS and checked against the release's SHA256SUMS before anything is copied.
+curl -fsSL -o install.sh \
+  https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/packaging/remote/install.sh
+bash install.sh --from-release latest          # or a tag, e.g. --from-release v0.2.0
 # → installs into ~/nats-hub-remote
 
-# Option B: air-gapped — copy packaging/remote/ + files from FILES.txt
-# into a flat directory, then:
+# Option B: from a clone of the repo (uses the checkout's files)
+git clone https://github.com/jarmen423/agent-communication-server.git nats-hub && cd nats-hub
+bash packaging/remote/install.sh
+
+# Option C: air-gapped. Either copy the release's nats-hub-remote-<tag>.tar.gz
+# and SHA256SUMS into a directory and run
+#   bash install.sh --from-release <tag> --release-base-url file:///that/dir --no-pip
+# or copy packaging/remote/ + the files from FILES.txt into a flat directory, then:
 bash install.sh
 ```
+
+A checksum mismatch aborts the install. If the release can't be reached,
+`--from-release` falls back to the local checkout when there is one.
 
 Then activate and launch:
 
@@ -78,6 +89,7 @@ and watch it round-trip.
 | `worker_events.py` | Structured progress events. |
 | `worker_backends/__init__.py` | Backend package init. |
 | `worker_backends/headless_cli.py` | `HeadlessCliBackend` + spec dataclass. |
+| `worker_backends/proc.py` | Subprocess plumbing (process groups, timeouts) imported by `headless_cli.py`. |
 | `worker_backends/presets.py` | `kilo_spec()`, `opencode_spec()`, `hermes_spec()`, `agy_spec()`, `grok_spec()`. |
 | `worker_backends/sdk_agent.py` | In-process SDK backend (re-exported by `__init__.py`). |
 | `requirements-remote.txt` | One line: `nats-py>=2.6.0`. |
@@ -95,8 +107,8 @@ no third-party packages other than `nats-py`.
 - The ACP-over-HTTP backends (`acp_http.py`, `kilo_acp.py`,
   `hermes_acp.py`, `opencode_acp.py`, `grok_acp.py`). They need `httpx`
   and aren't imported by the adapter at module top level. If you start
-  using one, add the file to `FILES.txt`, the path to `install.sh`'s
-  `REMOTE_FILES` array, and `httpx>=0.27` to `requirements-remote.txt`.
+  using one, add the file to `FILES.txt` (which `install.sh` and the release
+  bundle both read) and `httpx>=0.27` to `requirements-remote.txt`.
 
 ---
 
@@ -239,20 +251,22 @@ Full model: [`SECURITY.md`](SECURITY.md).
 ## Updating a remote install
 
 When the adapter, runtime, or backends change upstream, re-run the
-installer from a current checkout:
+installer from a newer release or a current checkout:
 
 ```bash
+bash install.sh --from-release latest     # refreshes ~/nats-hub-remote
+# or
 cd nats-hub && git pull
-bash packaging/remote/install.sh          # refreshes ~/nats-hub-remote
+bash packaging/remote/install.sh
 ```
 
 `install.sh` overwrites the copied files and re-runs pip. Your venv and
 target dir are preserved; no credential is touched.
 
 If a new file joined the import closure (you'll see an `ImportError` on
-launch), add it to both [`packaging/remote/FILES.txt`](../packaging/remote/FILES.txt)
-and the `REMOTE_FILES=( ... )` array at the top of `install.sh`, then
-re-run.
+launch), add it to [`packaging/remote/FILES.txt`](../packaging/remote/FILES.txt)
+and re-run. `install.sh` reads that list; its built-in list is only a
+fallback for hand-copied layouts without `FILES.txt`.
 
 ---
 

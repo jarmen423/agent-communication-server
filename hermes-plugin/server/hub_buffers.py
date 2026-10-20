@@ -5,7 +5,6 @@ Owns every long-lived NATS subscription the server makes:
 - ``channel.inbox.<identity>`` — DMs to this orchestrator (ring buffer).
 - ``channel.task.<id>`` — per ``delegate_async``; progress + result tracking.
 - ``channel.session.<id>`` — lazily per ``session_replies`` call.
-- ``channel.wave.<id>(.>)`` — per ``spawn_wave``; task lifecycle tracking.
 
 Result matching follows the shared reply contract (refocus.md §6): the
 terminal result on a task channel is the first ``kind == "message"`` envelope
@@ -20,7 +19,6 @@ import json
 import sys
 import time
 import uuid
-from typing import Any
 
 import hub_connection as conn
 from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
@@ -35,8 +33,30 @@ from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
     RingBuffer,
     TaskTracker,
     ChannelBuffer,
-    WaveTracker,
 )
+
+MAX_SESSION_BUFFERS = 50  # open channel.session.<id> subscriptions
+MAX_SESSION_TURNS = 200  # session turn ids remembered for cancel_task
+
+
+class SessionTurn:
+    """One turn sent to a session (start_session / send_to_session): enough
+    to cancel it (§4.2) and to find its result on the session channel."""
+
+    def __init__(self, turn_id: str, session_id: str, worker: str, channel: str) -> None:
+        self.turn_id, self.session_id = turn_id, session_id
+        self.worker, self.channel = worker, channel
+
+    def snapshot(self, result: dict | None, cancel_requested: bool) -> dict:
+        payload = (result or {}).get("payload") or {}
+        status = payload.get("status")
+        state = (status if status in ("error", "cancelled") else "done") if result else "running"
+        snap = {"task_id": self.turn_id, "session_id": self.session_id,
+                "task_channel": self.channel, "worker": self.worker, "state": state,
+                "cancel_requested": cancel_requested}
+        if result is not None:
+            snap["result"] = payload
+        return snap
 
 
 class HubState:
@@ -46,7 +66,8 @@ class HubState:
         self.inbox = ChannelBuffer("channel.inbox.placeholder", INBOX_BUFFER_MAX)
         self.tasks: dict[str, TaskTracker] = {}
         self.sessions: dict[str, ChannelBuffer] = {}
-        self.waves: dict[str, WaveTracker] = {}
+        self.session_turns: dict[str, SessionTurn] = {}  # turn id → turn
+        self.session_workers: dict[str, str] = {}  # session id → worker
         self._started = False
         self._generation = 0
         self._lock = asyncio.Lock()
@@ -106,6 +127,7 @@ class HubState:
             victims += running[: overflow - len(victims)]
         for t in victims:
             self.tasks.pop(t.task_id, None)
+            t.evict()  # waiters return "evicted" instead of timing out
             await t.close()
 
     async def drop_session(self, session_id: str) -> None:
@@ -167,6 +189,94 @@ class HubState:
                     "last_status": tracker.last_status}
         return tracker.snapshot()
 
+    async def cancel_task(self, task_id: str, timeout: float) -> dict | None:
+        """Cancel contract (refocus-iteration-2.md §4.2): DM the worker
+        ``kind=control {"action": "cancel", "task_id": <id>}`` and wait up to
+        ``timeout`` for its terminal result (``status: "cancelled"``, or
+        done/error if it finished first). ``task_id`` may also be a session
+        turn id returned by start_session / send_to_session. Unknown → None.
+
+        Returns ``{snapshot, cancel_sent, timed_out}``. A worker that doesn't
+        implement cancel simply never answers, so the tracker stays running
+        (we never fake a terminal state the worker didn't report)."""
+        tracker = self.tasks.get(task_id)
+        if tracker is None:
+            turn = self.session_turns.get(task_id)
+            return None if turn is None else await self._cancel_turn(turn, timeout)
+        if tracker.done.is_set():
+            return {"snapshot": tracker.snapshot(), "cancel_sent": False,
+                    "timed_out": False}
+        await self.send_cancel(tracker)
+        try:
+            await asyncio.wait_for(tracker.done.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return {"snapshot": tracker.snapshot(), "cancel_sent": True,
+                    "timed_out": True}
+        return {"snapshot": tracker.snapshot(), "cancel_sent": True,
+                "timed_out": False}
+
+    async def send_cancel(self, tracker: TaskTracker) -> None:
+        """DM the §4.2 cancel for a tracked task (no wait)."""
+        await self.ensure_started()
+        await self._publish_cancel(tracker.worker, tracker.task_channel, tracker.task_id)
+        if tracker.cancel_requested_at is None:
+            tracker.cancel_requested_at = time.time()
+
+    async def _publish_cancel(self, worker: str, channel: str, task_id: str) -> None:
+        env = conn.envelope(channel, {"action": "cancel", "task_id": task_id},
+                            kind="control", to=worker)
+        await conn.publish(channel, env)
+
+    # ── Session turns (cancel_task on a send_to_session message id) ──
+
+    def track_turn(self, turn: SessionTurn) -> None:
+        self.session_turns[turn.turn_id] = turn
+        while len(self.session_turns) > MAX_SESSION_TURNS:
+            self.session_turns.pop(next(iter(self.session_turns)))
+
+    async def session_worker(self, session_id: str) -> str | None:
+        """The worker of a session: remembered from start_session, else the
+        session record (session.get)."""
+        worker = self.session_workers.get(session_id)
+        if worker:
+            return worker
+        try:
+            resp = await conn.api_request("session.get", {"session_id": session_id})
+        except Exception:  # noqa: BLE001 - hub down: the turn just isn't cancellable
+            return None
+        record = (resp.get("data") or {}).get("session") if resp.get("ok") else None
+        worker = record.get("worker") if isinstance(record, dict) else None
+        if isinstance(worker, str) and worker:
+            self.session_workers[session_id] = worker
+            return worker
+        return None
+
+    async def _cancel_turn(self, turn: SessionTurn, timeout: float) -> dict:
+        buf = (await self.session_buffer(turn.session_id)).buf
+
+        def match(env: dict) -> bool:
+            return is_task_result(env, turn.turn_id, turn.worker)
+
+        done = await buf.wait_for(match, timeout=0)
+        if done is not None:
+            return {"snapshot": turn.snapshot(done["env"], False), "cancel_sent": False,
+                    "timed_out": False}
+        await self._publish_cancel(turn.worker, turn.channel, turn.turn_id)
+        done = await buf.wait_for(match, timeout=timeout)
+        return {"snapshot": turn.snapshot(done["env"] if done else None, True),
+                "cancel_sent": True, "timed_out": done is None}
+
+    async def forget_task(self, task_id: str) -> None:
+        """Drop an internal tracker (check_providers pings) and release its
+        subscription after the usual grace period."""
+        tracker = self.tasks.pop(task_id, None)
+        if tracker is not None:
+            async def _release() -> None:
+                await asyncio.sleep(TASK_UNSUB_GRACE)
+                await tracker.close()
+
+            self.spawn_bg(_release())
+
     async def session_buffer(self, session_id: str) -> ChannelBuffer:
         await self.ensure_started()
         ch = self.sessions.get(session_id)
@@ -174,146 +284,12 @@ class HubState:
             ch = ChannelBuffer(f"channel.session.{session_id}")
             self.sessions[session_id] = ch
             await ch.start()
+            # Bounded: evict the least-recently-opened session buffers (a
+            # later session_replies call re-subscribes; history is in the DB).
+            while len(self.sessions) > MAX_SESSION_BUFFERS:
+                oldest = next(iter(self.sessions))
+                await self.drop_session(oldest)
         return ch
-
-    async def spawn_wave(self, wave_id: str, timeout: float = 3600) -> WaveTracker:
-        """Start the in-process spawn loop for a wave (see hub_wave.rs)."""
-        await self.ensure_started()
-        if wave_id in self.waves and self.waves[wave_id].state == "running":
-            return self.waves[wave_id]
-        resp = await conn.api_request("wave.list_tasks", {"wave_id": wave_id})
-        if not resp.get("ok"):
-            raise RuntimeError(resp.get("error", "wave.list_tasks failed"))
-        tasks = resp.get("data", {}).get("tasks") or []
-        if not tasks:
-            raise RuntimeError(f"no tasks found for wave {wave_id!r}")
-        tracker = WaveTracker(wave_id, tasks)
-        self.waves[wave_id] = tracker
-        tracker._bg = asyncio.create_task(self._run_wave(tracker, timeout))
-        return tracker
-
-    async def _run_wave(self, tracker: WaveTracker, timeout: float) -> None:
-        wave_id = tracker.wave_id
-        wave_prefix = f"wave.{wave_id}"
-        events = ChannelBuffer(f"channel.{wave_prefix}.>")
-        wave_ch = ChannelBuffer(f"channel.{wave_prefix}")
-        try:
-            await events.start()
-            await wave_ch.start()
-            await conn.api_request("wave.update_status",
-                                   {"wave_id": wave_id, "status": "running"})
-            deadline = time.monotonic() + timeout
-            while tracker.state == "running":
-                tmap = tracker.tasks
-                failed = [t["task_id"] for t in tmap.values()
-                          if t["status"] == "failed"]
-                if failed:
-                    # Mirror hub_wave.rs: abort on the first failed task —
-                    # dependents would otherwise sit pending until timeout.
-                    tracker.state = "failed"
-                    tracker.error = f"task(s) failed: {', '.join(failed)}"
-                    break
-                if all(t["status"] in ("done", "failed") for t in tmap.values()):
-                    any_failed = any(t["status"] == "failed" for t in tmap.values())
-                    tracker.state = "failed" if any_failed else "completed"
-                    break
-                if time.monotonic() >= deadline:
-                    tracker.state = "timeout"
-                    break
-                ready = [
-                    t for t in tmap.values()
-                    if t["status"] == "pending"
-                    and all(d in tracker.completed
-                            for d in (t.get("dependencies") or []))
-                ]
-                for task in ready:
-                    await self._start_wave_task(tracker, task)
-                    tmap[task["task_id"]]["status"] = "running"
-                    await conn.api_request("wave.update_task_status", {
-                        "wave_id": wave_id, "task_id": task["task_id"],
-                        "status": "running",
-                    })
-                env = await self._next_wave_envelope(tracker, events, wave_ch)
-                if env is not None:
-                    self._handle_wave_event(tracker, env)
-        except Exception as e:
-            tracker.state = "failed"
-            tracker.error = str(e)
-        finally:
-            await events.stop()
-            await wave_ch.stop()
-            final = {"completed": "completed", "failed": "failed",
-                     "timeout": "failed"}.get(tracker.state)
-            if final:
-                await conn.api_request(
-                    "wave.update_status",
-                    {"wave_id": wave_id, "status": final})
-            tracker.done.set()
-
-    async def _next_wave_envelope(
-        self, tracker: WaveTracker, events: ChannelBuffer, wave_ch: ChannelBuffer
-    ) -> dict | None:
-        """One envelope from the wave's channel buffers; ~1s tick when idle."""
-        seqs = tracker.__dict__.setdefault("_buf_seqs", {})
-        for ch in (events, wave_ch):
-            items = ch.buf.since(seqs.get(ch.subject, 0), limit=1)
-            if items:
-                seqs[ch.subject] = items[0]["seq"]
-                return items[0]["env"]
-        it = await events.buf.wait_for(
-            lambda _e: True, since=seqs.get(events.subject, 0), timeout=1.0)
-        if it is not None:
-            seqs[events.subject] = it["seq"]
-            return it["env"]
-        return None
-
-    async def _start_wave_task(self, tracker: WaveTracker, task: dict) -> None:
-        wave_id = tracker.wave_id
-        task_id = task["task_id"]
-        task_channel = f"wave.{wave_id}.task.{task_id}"
-        payload: dict[str, Any] = {
-            "action": "session_start", "session_id": task_id,
-            "wave_id": wave_id, "channel": task_channel,
-            "prompt": task["goal"], "write_scope": task.get("write_scope"),
-        }
-        if task.get("verify_cmd"):
-            payload["verify_cmd"] = task["verify_cmd"]
-        if task.get("handoff_path"):
-            payload["handoff_path"] = task["handoff_path"]
-        env = conn.envelope(task_channel, payload, kind="message",
-                            to=task["worker"])
-        await conn.publish(task_channel, env)
-
-    def _handle_wave_event(self, tracker: WaveTracker, env: dict) -> None:
-        if env.get("meta", {}).get("kind") != "event":
-            return
-        payload = env.get("payload", {})
-        etype = payload.get("event_type")
-        task_id = env["meta"].get("channel", "").rsplit(".task.", 1)[-1]
-        if task_id == env["meta"].get("channel"):
-            task_id = payload.get("data", {}).get("task_id") or payload.get("task_id")
-        task = tracker.tasks.get(task_id)
-        if task is None:
-            return
-        data = payload.get("data", {})
-        if etype == "completed":
-            self._finish_wave_task(tracker, task, "done",
-                                  data.get("result", ""))
-        elif etype == "error":
-            self._finish_wave_task(tracker, task, "failed",
-                                  data.get("error", "failed"))
-
-    def _finish_wave_task(
-        self, tracker: WaveTracker, task: dict, status: str, result: str
-    ) -> None:
-        task["status"] = status
-        task["result"] = result
-        if status == "done":
-            tracker.completed.add(task["task_id"])
-        self.spawn_bg(conn.api_request("wave.update_task_status", {
-            "wave_id": tracker.wave_id, "task_id": task["task_id"],
-            "status": status, "result": result,
-        }))
 
 
 _state: HubState | None = None

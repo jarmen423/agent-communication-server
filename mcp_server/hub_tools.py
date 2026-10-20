@@ -10,6 +10,8 @@ from mcp.types import Tool
 
 from hub_query_tools import QUERY_TOOLS
 
+MAX_WAIT_SECS = 3600  # cap for every blocking timeout argument
+
 TOOLS = [
     # ── Discovery ───────────────────────────────────────────────
     Tool(
@@ -28,10 +30,10 @@ TOOLS = [
                     "description": "Only return agents with ALL these capabilities",
                 },
                 "alive_within_secs": {
-                    "type": "integer",
+                    "type": "integer", "minimum": 1,
                     "description": "Only return agents seen within this many seconds",
                 },
-                "limit": {"type": "integer", "description": "Max number of results"},
+                "limit": {"type": "integer", "minimum": 1, "description": "Max number of results"},
             },
         },
     ),
@@ -47,28 +49,59 @@ TOOLS = [
         },
     ),
     Tool(
+        name="whoami",
+        description=(
+            "Show this MCP server's bound identity (stamped as meta.from on "
+            "every message, from NATS_HUB_IDENTITY or the plugin manifest "
+            "default), where it came from, and the NATS URL. No network."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+    ),
+    Tool(
         name="check_providers",
         description=(
-            "Provider/worker health check (TODO.md). Lists agents alive on the "
-            "bus within alive_within_secs (their registered capabilities and "
-            "metadata, including advertised models), and optionally probes "
-            "each named provider's live model list via the worker supervisor "
-            "(hub.worker.models request). Honest scope: verifies bus presence "
-            "and supervisor responses only — cannot verify provider auth or "
-            "that a CLI will actually run."
+            "Provider/worker health check: which workers are alive and usable "
+            "before you delegate. Lists agents with a heartbeat within "
+            "alive_within_secs, with capabilities and model/provider (plus "
+            "model_source). With ping=true, sends each worker (capability "
+            "'worker', or the ones named in `workers`) a tiny real task in "
+            "parallel and reports ok | slow | error | unresponsive with "
+            "latency; a timed-out ping is cancelled. Bounded by ping_timeout, "
+            "never hangs. Cannot check API credits/quota — see the returned "
+            "verifies / does_not_verify lists."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "providers": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Provider names to probe for live model lists (optional)",
-                },
                 "alive_within_secs": {
-                    "type": "integer",
-                    "description": "Liveness window (default 120)",
-                    "default": 120,
+                    "type": "integer", "minimum": 1, "default": 120,
+                    "description": "Liveness window in seconds (default 120)",
+                },
+                "capability": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Only agents with ALL these capabilities",
+                },
+                "ping": {
+                    "type": "boolean", "default": False,
+                    "description": "Send each worker a tiny task (costs one small request per LLM worker)",
+                },
+                "workers": {
+                    "type": "array", "items": {"type": "string"},
+                    "maxItems": 20,
+                    "description": "Ping exactly these identities (default: every alive agent with the 'worker' capability)",
+                },
+                "ping_timeout": {
+                    "type": "number", "exclusiveMinimum": 0, "maximum": 40,
+                    "default": 30,
+                    "description": "Seconds before a ping counts as unresponsive (default 30, max 40)",
+                },
+                "slow_after": {
+                    "type": "number", "exclusiveMinimum": 0, "default": 10,
+                    "description": "A ping answered after this many seconds is 'slow' (default 10)",
+                },
+                "providers": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Also ask the worker supervisor for these providers' live model lists",
                 },
             },
         },
@@ -132,9 +165,9 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Max items (default 50)", "default": 50},
+                "limit": {"type": "integer", "minimum": 1, "description": "Max items (default 50)", "default": 50},
                 "since_seq": {
-                    "type": "integer",
+                    "type": "integer", "minimum": 0,
                     "description": "Only items with seq > since_seq (0 = buffered tail)",
                     "default": 0,
                 },
@@ -153,13 +186,14 @@ TOOLS = [
             "type": "object",
             "required": ["timeout"],
             "properties": {
-                "timeout": {"type": "number", "description": "Seconds to wait"},
+                "timeout": {"type": "number", "minimum": 0, "maximum": MAX_WAIT_SECS,
+                            "description": f"Seconds to wait (max {MAX_WAIT_SECS})"},
                 "from": {
                     "type": "string",
                     "description": "Only match messages from this sender (filter, not identity)",
                 },
                 "since_seq": {
-                    "type": "integer",
+                    "type": "integer", "minimum": 0,
                     "description": (
                         "Skip inbox items at or below this seq. Default: "
                         "current tail — only new arrivals match."
@@ -191,7 +225,8 @@ TOOLS = [
         name="delegate_task",
         description=(
             "Delegate a task and block until the worker's terminal result "
-            "arrives (or timeout). Equivalent to delegate_async + wait_for_task. "
+            "arrives (or timeout, which also sends the worker a cancel). "
+            "Equivalent to delegate_async + wait_for_task. "
             "Ignores status/event progress envelopes; returns only the real "
             "result envelope (kind=message correlated to the task id)."
         ),
@@ -201,7 +236,10 @@ TOOLS = [
             "properties": {
                 "to": {"type": "string", "description": "Worker agent identity"},
                 "prompt": {"type": "string", "description": "Task/prompt to send"},
-                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 120},
+                "timeout": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT_SECS,
+                            "default": 120,
+                            "description": (f"Timeout in seconds (default 120, max {MAX_WAIT_SECS}); "
+                                            "on timeout the task is cancelled")},
             },
         },
     ),
@@ -209,7 +247,7 @@ TOOLS = [
         name="task_status",
         description=(
             "Snapshot of a task started via delegate_async/delegate_task: "
-            "{state (running|done|error), last_status, recent events, "
+            "{state (running|done|error|cancelled), last_status, recent events, "
             "result|error payload when finished}."
         ),
         inputSchema={
@@ -217,7 +255,7 @@ TOOLS = [
             "required": ["task_id"],
             "properties": {
                 "task_id": {"type": "string", "description": "task_id from delegate_async"},
-                "events_tail": {"type": "integer", "description": "Max recent events", "default": 10},
+                "events_tail": {"type": "integer", "minimum": 0, "description": "Max recent events", "default": 10},
             },
         },
     ),
@@ -233,7 +271,32 @@ TOOLS = [
             "required": ["task_id", "timeout"],
             "properties": {
                 "task_id": {"type": "string", "description": "task_id from delegate_async"},
-                "timeout": {"type": "number", "description": "Seconds to wait"},
+                "timeout": {"type": "number", "minimum": 0, "maximum": MAX_WAIT_SECS,
+                            "description": f"Seconds to wait (max {MAX_WAIT_SECS})"},
+            },
+        },
+    ),
+    Tool(
+        name="cancel_task",
+        description=(
+            "Cancel a task started via delegate_async/delegate_task, or a "
+            "session turn (the message_id from start_session/send_to_session). DMs the "
+            "worker a control {action: cancel, task_id}; the worker kills the "
+            "running backend and publishes a terminal result with status "
+            "'cancelled'. Waits up to timeout seconds and returns the terminal "
+            "task snapshot (state cancelled, or done/error if it finished "
+            "first). Errors if the worker doesn't confirm in time."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["task_id"],
+            "properties": {
+                "task_id": {"type": "string",
+                            "description": "task_id from delegate_async, or a session turn's message_id"},
+                "timeout": {
+                    "type": "number", "minimum": 0, "maximum": 120, "default": 10,
+                    "description": "Seconds to wait for the cancelled result (default 10)",
+                },
             },
         },
     ),
@@ -244,7 +307,8 @@ TOOLS = [
             "Start a stateful multi-turn session with a worker agent. Sends "
             "session_start to the worker's inbox and returns the session ID. "
             "Use send_to_session for follow-ups, session_replies to read what "
-            "the worker says back, and close_session when done."
+            "the worker says back, and close_session when done. Returns "
+            "message_id: the first turn's id, accepted by cancel_task."
         ),
         inputSchema={
             "type": "object",
@@ -255,13 +319,17 @@ TOOLS = [
                 "model": {"type": "string", "description": "Model to use (optional)"},
                 "provider": {"type": "string", "description": "Provider to use (optional)"},
                 "cwd": {"type": "string", "description": "Working directory (optional)"},
-                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30},
+                "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECS,
+                            "description": "Timeout in seconds", "default": 30},
             },
         },
     ),
     Tool(
         name="send_to_session",
-        description="Send a follow-up message on an existing session channel.",
+        description=(
+            "Send a follow-up message on an existing session channel. Returns "
+            "the turn's message_id (pass it to cancel_task to stop that turn)."
+        ),
         inputSchema={
             "type": "object",
             "required": ["session_id", "message"],
@@ -295,8 +363,8 @@ TOOLS = [
             "required": ["session_id"],
             "properties": {
                 "session_id": {"type": "string"},
-                "since_seq": {"type": "integer", "description": "Only items with seq > since_seq", "default": 0},
-                "limit": {"type": "integer", "description": "Max items (default 50)", "default": 50},
+                "since_seq": {"type": "integer", "minimum": 0, "description": "Only items with seq > since_seq", "default": 0},
+                "limit": {"type": "integer", "minimum": 1, "description": "Max items (default 50)", "default": 50},
             },
         },
     ),

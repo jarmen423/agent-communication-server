@@ -17,19 +17,51 @@ pub fn channel_from_send_subject(subject: &str) -> &str {
         .unwrap_or("unknown")
 }
 
-/// Where the router delivers an envelope that arrived on `send_subject`
-/// (`hub.send.<channel>`):
+/// Parse a bound send subject `hub.pub.<identity>.<channel>` into
+/// `(identity, channel)`. `None` when the subject is not under `hub.pub.`
+/// or has no channel token. The identity is the first token only —
+/// characters beyond `[A-Za-z0-9_-]` are rejected by the caller via
+/// [`crate::protocol::valid_identity`].
+pub fn bound_send_subject(subject: &str) -> Option<(&str, &str)> {
+    let rest = subject
+        .strip_prefix(subjects::PUB_PREFIX)
+        .and_then(|r| r.strip_prefix('.'))?;
+    let (identity, channel) = rest.split_once('.')?;
+    if channel.is_empty() {
+        return None;
+    }
+    Some((identity, channel))
+}
+
+/// Parse a bound register/presence subject `hub.<name>.<identity>` into the
+/// identity token. `None` when the tail is not exactly one token.
+pub fn bound_identity_subject<'a>(subject: &'a str, prefix: &str) -> Option<&'a str> {
+    let ident = subject
+        .strip_prefix(prefix)
+        .and_then(|r| r.strip_prefix('.'))?;
+    if ident.is_empty() || ident.contains('.') {
+        return None;
+    }
+    Some(ident)
+}
+
+/// Where the router delivers an envelope for a subject-derived `channel`:
 ///
 /// - `meta.to` set → `channel.inbox.<to>` (private DM; the channel is ignored)
 /// - `meta.to` unset → `channel.<channel>` (broadcast), where `<channel>`
 ///   comes from the *subject*, not from `meta.channel`
-///
-/// Pure function: no I/O, so the routing contract is unit-testable.
-pub fn route_subject(send_subject: &str, env: &Envelope) -> String {
+pub fn route_channel(channel: &str, env: &Envelope) -> String {
     match env.meta.to.as_deref() {
         Some(to) => subjects::inbox(to),
-        None => subjects::channel(channel_from_send_subject(send_subject)),
+        None => subjects::channel(channel),
     }
+}
+
+/// Where the router delivers an envelope that arrived on `send_subject`
+/// (`hub.send.<channel>`). Pure function: no I/O, so the routing contract
+/// is unit-testable.
+pub fn route_subject(send_subject: &str, env: &Envelope) -> String {
+    route_channel(channel_from_send_subject(send_subject), env)
 }
 
 /// Capability index: capability name → identities that registered it.

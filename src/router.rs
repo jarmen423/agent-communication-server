@@ -6,160 +6,54 @@
 //! track known agents, and mirrors envelopes + registrations to an optional
 //! `Storage` backend through a bounded, single-writer queue.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use tracing::{debug, error, info, warn};
 
-use crate::client::{AgentInfo, AgentRegistry};
-use crate::protocol::{subjects, Envelope};
+use crate::client::AgentInfo;
+use crate::protocol::subjects;
 use crate::storage::{AgentFilter, AgentRecord, Storage};
 use crate::MetricsCollector;
 
 mod mirror;
 mod routing;
+mod state;
 #[cfg(all(test, feature = "storage-surreal"))]
 mod tests;
 
 pub use mirror::DEFAULT_MIRROR_CAPACITY;
-pub use routing::{channel_from_send_subject, route_subject, RoutingTable};
+pub use routing::{
+    bound_identity_subject, bound_send_subject, channel_from_send_subject, route_channel,
+    route_subject, RoutingTable,
+};
 
-use mirror::{MirrorOp, StorageMirror};
+use mirror::StorageMirror;
+pub(crate) use state::RouterCore;
 
-/// Router state and per-message logic, independent of the NATS connection
-/// (so it can be exercised without a server).
-pub(crate) struct RouterCore {
-    routing: RoutingTable,
-    registry: AgentRegistry,
-    metrics: Option<Arc<MetricsCollector>>,
-    /// Optional WS bridge broadcast channel. When set, every routed envelope
-    /// is serialized to JSON and pushed to all connected visualizer clients.
-    ws_event_tx: Option<crate::ws_bridge::EventTx>,
-    /// Set once by `ControlPlane::run` when storage is attached.
-    mirror: OnceLock<StorageMirror>,
+/// Connect options for hub-server's own connections (router, query API):
+/// env auth, with the reply inbox defaulting to `_INBOX.hub-server`
+/// (contract C1) when neither `NATS_USER` nor `NATS_HUB_IDENTITY` names one.
+pub(crate) fn hub_server_connect_opts() -> crate::HubConnectOptions {
+    let mut opts = crate::HubConnectOptions::from_env();
+    if opts.inbox_identity.is_none() {
+        opts.inbox_identity = Some(HUB_SERVER_IDENTITY.to_string());
+    }
+    opts
 }
 
-impl RouterCore {
-    pub(crate) fn new() -> Self {
-        Self {
-            routing: RoutingTable::new(),
-            registry: AgentRegistry::new(),
-            metrics: None,
-            ws_event_tx: None,
-            mirror: OnceLock::new(),
-        }
-    }
-
-    fn enqueue(&self, op: MirrorOp) {
-        if let Some(mirror) = self.mirror.get() {
-            mirror.enqueue(op);
-        }
-    }
-
-    /// Decode an envelope from `hub.send.<channel>`, record metrics, push it
-    /// to the WS bridge and decide its destination. `None` = undecodable.
-    pub(crate) fn on_send(&self, subject: &str, payload: &[u8]) -> Option<(String, Envelope)> {
-        let env = match Envelope::from_json_bytes(payload) {
-            Ok(env) => env,
-            Err(e) => {
-                warn!(%subject, error = %e, "failed to decode envelope, dropping");
-                return None;
-            }
-        };
-
-        // Live metrics: non-blocking atomic increments.
-        if let Some(metrics) = &self.metrics {
-            metrics.record(&env);
-        }
-        // Push to WS bridge for visualizer (broadcast::send is non-blocking).
-        if let Some(tx) = &self.ws_event_tx {
-            if let Ok(json) = serde_json::to_string(&env) {
-                let _ = tx.send(json);
-            }
-        }
-
-        let dest = route_subject(subject, &env);
-        debug!(
-            id = %env.meta.id,
-            from = %env.meta.from,
-            to = ?env.meta.to,
-            kind = ?env.meta.kind,
-            %dest,
-            "routing envelope"
-        );
-        Some((dest, env))
-    }
-
-    /// Queue a routed envelope for the storage mirror (non-blocking).
-    pub(crate) fn mirror_envelope(&self, env: Envelope) {
-        self.enqueue(MirrorOp::Envelope(Box::new(env)));
-    }
-
-    /// `hub.register`: record identity + capabilities (replacing any
-    /// previous capabilities) and persist the registration.
-    pub(crate) async fn on_register(&self, payload: &[u8]) {
-        let env = match Envelope::from_json_bytes(payload) {
-            Ok(env) => env,
-            Err(e) => {
-                warn!(error = %e, "failed to decode registration envelope");
-                return;
-            }
-        };
-        let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) else {
-            return;
-        };
-        let caps: Vec<String> = env
-            .payload
-            .get("capabilities")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        info!(identity = %ident, ?caps, "agent registered");
-        self.registry
-            .register(ident.to_string(), caps.clone())
-            .await;
-        self.routing.set_capabilities(ident, &caps).await;
-
-        let now = chrono::Utc::now();
-        self.enqueue(MirrorOp::Register(AgentRecord {
-            identity: ident.to_string(),
-            capabilities: caps,
-            last_seen: now,
-            registered_at: now,
-            metadata: serde_json::json!({}),
-        }));
-    }
-
-    /// `hub.presence`: refresh liveness only. Capabilities are preserved
-    /// (an unknown agent is added with none until it registers).
-    pub(crate) async fn on_presence(&self, payload: &[u8]) {
-        let env = match Envelope::from_json_bytes(payload) {
-            Ok(env) => env,
-            Err(e) => {
-                warn!(error = %e, "failed to decode presence envelope");
-                return;
-            }
-        };
-        let Some(ident) = env.payload.get("identity").and_then(|v| v.as_str()) else {
-            return;
-        };
-        debug!(identity = %ident, "heartbeat received");
-        self.registry.touch(ident).await;
-        self.enqueue(MirrorOp::Touch(ident.to_string()));
-    }
-}
+/// Identity of hub-server's own NATS service user (reserved; see
+/// [`crate::protocol::RESERVED_IDENTITIES`]).
+pub const HUB_SERVER_IDENTITY: &str = "hub-server";
 
 /// The control plane worker. Runs an event loop that:
-/// 1. Subscribes to `hub.send.>` — all outgoing agent messages.
-/// 2. Routes each envelope with [`route_subject`].
-/// 3. Subscribes to `hub.register` — tracks agent registrations.
-/// 4. Subscribes to `hub.presence` — tracks heartbeats.
+/// 1. Subscribes to `hub.send.>` + `hub.pub.*.>` — all outgoing agent
+///    messages (legacy + bound subjects; contract §4.1).
+/// 2. Routes each envelope with [`route_subject`]; on bound subjects the
+///    `<identity>` token overwrites `meta.from` before delivery.
+/// 3. Subscribes to `hub.register` + `hub.register.*` — agent registrations.
+/// 4. Subscribes to `hub.presence` + `hub.presence.*` — heartbeats.
 /// 5. Mirrors envelopes + registrations to `Storage` via a bounded queue.
 pub struct ControlPlane {
     nats: async_nats::Client,
@@ -175,7 +69,7 @@ impl ControlPlane {
     /// `NATS_USER`/`NATS_PASSWORD`, `NATS_CREDENTIALS_FILE`, `NATS_REQUIRE_TLS`, …)
     /// so hub-server can join a token-gated or TLS hub without a custom flag surface.
     pub async fn connect(url: &str) -> Result<Self> {
-        let opts = crate::HubConnectOptions::from_env();
+        let opts = hub_server_connect_opts();
         let nats = crate::connect_opts::connect_with_hub_opts(url, &opts)
             .await
             .with_context(|| format!("control plane: connect to {url} failed"))?;
@@ -198,6 +92,15 @@ impl ControlPlane {
     /// Every routed envelope is serialized to JSON and pushed here.
     pub fn with_ws_events(mut self, tx: crate::ws_bridge::EventTx) -> Self {
         self.core.ws_event_tx = Some(tx);
+        self
+    }
+
+    /// When set, the router drops messages on legacy subjects (`hub.send.>`,
+    /// bare `hub.register`, bare `hub.presence`) — every sender must use the
+    /// bound subjects that pin `meta.from` to the connection identity
+    /// (contract §4.1). Default off during the migration window.
+    pub fn with_require_bound_identity(mut self, require: bool) -> Self {
+        self.core.require_bound = require;
         self
     }
 
@@ -277,36 +180,57 @@ impl ControlPlane {
             .subscribe(format!("{}.>", subjects::SEND_PREFIX))
             .await
             .context("control plane: subscribe to hub.send.> failed")?;
+        let mut bound_send_sub = self
+            .nats
+            .subscribe(format!("{}.*.>", subjects::PUB_PREFIX))
+            .await
+            .context("control plane: subscribe to hub.pub.*.> failed")?;
         let mut reg_sub = self
             .nats
             .subscribe(subjects::REGISTER)
             .await
             .context("control plane: subscribe to hub.register failed")?;
+        let mut bound_reg_sub = self
+            .nats
+            .subscribe(format!("{}.*", subjects::REGISTER))
+            .await
+            .context("control plane: subscribe to hub.register.* failed")?;
         let mut presence_sub = self
             .nats
             .subscribe(subjects::PRESENCE)
             .await
             .context("control plane: subscribe to hub.presence failed")?;
+        let mut bound_presence_sub = self
+            .nats
+            .subscribe(format!("{}.*", subjects::PRESENCE))
+            .await
+            .context("control plane: subscribe to hub.presence.* failed")?;
 
-        info!("control plane subscribed to hub.send.>, hub.register, hub.presence");
+        info!(
+            require_bound = self.core.require_bound,
+            "control plane subscribed to hub.send.>, hub.pub.*.>, hub.register(.*), hub.presence(.*)"
+        );
 
         loop {
             tokio::select! {
                 Some(msg) = send_sub.next() => self.handle_send(&msg).await,
-                Some(msg) = reg_sub.next() => self.core.on_register(&msg.payload).await,
-                Some(msg) = presence_sub.next() => self.core.on_presence(&msg.payload).await,
+                Some(msg) = bound_send_sub.next() => self.handle_send(&msg).await,
+                Some(msg) = reg_sub.next() => self.core.on_register(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = bound_reg_sub.next() => self.core.on_register(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = presence_sub.next() => self.core.on_presence(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = bound_presence_sub.next() => self.core.on_presence(msg.subject.as_str(), &msg.payload).await,
             }
         }
     }
 
-    /// Route one `hub.send.<channel>` message. No per-message `flush()`:
-    /// async-nats batches and flushes outgoing publishes on its own, so the
-    /// loop never waits on a network round-trip.
+    /// Route one `hub.send.<channel>` / `hub.pub.<id>.<channel>` message.
+    /// No per-message `flush()`: async-nats batches and flushes outgoing
+    /// publishes on its own, so the loop never waits on a network round-trip.
     async fn handle_send(&self, msg: &async_nats::Message) {
-        let Some((dest, env)) = self.core.on_send(msg.subject.as_str(), &msg.payload) else {
+        let Some((dest, env, bytes)) = self.core.on_send(msg.subject.as_str(), &msg.payload) else {
             return;
         };
-        if let Err(e) = self.nats.publish(dest.clone(), msg.payload.clone()).await {
+        if let Err(e) = self.nats.publish(dest.clone(), bytes.into()).await {
             error!(%dest, error = %e, "failed to route envelope");
         }
         self.core.mirror_envelope(env);

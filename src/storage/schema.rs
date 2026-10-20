@@ -93,6 +93,7 @@ const FIELDS_AND_INDEXES: &[&str] = &[
     "DEFINE FIELD OVERWRITE updated_at   ON TABLE sessions TYPE datetime",
     "DEFINE FIELD OVERWRITE closed_at    ON TABLE sessions TYPE option<datetime>",
     "DEFINE FIELD OVERWRITE metadata     ON TABLE sessions TYPE object",
+    "DEFINE FIELD OVERWRITE backend_ctx  ON TABLE sessions TYPE option<object>",
     "DEFINE INDEX IF NOT EXISTS idx_sessions_status ON TABLE sessions COLUMNS status",
     "DEFINE INDEX IF NOT EXISTS idx_sessions_worker ON TABLE sessions COLUMNS worker, status",
     // Waves
@@ -118,6 +119,7 @@ const FIELDS_AND_INDEXES: &[&str] = &[
     "DEFINE FIELD OVERWRITE started_at   ON TABLE wave_tasks TYPE option<datetime>",
     "DEFINE FIELD OVERWRITE completed_at ON TABLE wave_tasks TYPE option<datetime>",
     "DEFINE FIELD OVERWRITE result       ON TABLE wave_tasks TYPE option<string>",
+    "DEFINE FIELD OVERWRITE verify_result ON TABLE wave_tasks TYPE option<string>",
     "DEFINE INDEX IF NOT EXISTS idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status",
     // Schema bookkeeping
     "DEFINE FIELD OVERWRITE version ON TABLE schema_meta TYPE int",

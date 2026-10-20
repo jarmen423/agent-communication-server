@@ -56,8 +56,9 @@ pub struct WsBridgeConfig {
     /// Shared secret required as `?token=` on the WS upgrade URL.
     /// None = no token check (acceptable on loopback only).
     pub token: Option<String>,
-    /// Sender identity stamped on envelopes the bridge publishes
-    /// (was hard-coded "josh").
+    /// Identity the bridge connects and publishes as (`--ws-identity`).
+    /// Must be a valid identity (`[A-Za-z0-9_-]+`); [`serve_ws_bridge`]
+    /// refuses to start otherwise.
     pub identity: String,
 }
 
@@ -94,6 +95,7 @@ pub async fn serve_ws_bridge(
     event_tx: EventTx,
     config: WsBridgeConfig,
 ) -> Result<()> {
+    crate::protocol::require_valid_identity(&config.identity)?;
     let static_root = match &config.static_dir {
         Some(dir) => match dir.canonicalize() {
             Ok(canon) => Some(canon),
@@ -125,10 +127,14 @@ pub async fn serve_ws_bridge(
     // background with retries so the bridge can serve while NATS is down.
     if let Some(url) = config.nats_url.clone() {
         let st = state.clone();
+        let identity = state.identity.clone();
         tokio::spawn(async move {
             let mut backoff = Duration::from_millis(500);
             loop {
-                match HubClient::connect(&url, "visualizer").await {
+                // Connect as the configured `--ws-identity` so bound sends
+                // (`hub.pub.<identity>.>`) carry the identity the bridge
+                // stamps; the router rewrites `meta.from` from the subject.
+                match HubClient::connect(&url, identity.as_str()).await {
                     Ok(c) => {
                         *st.hub.write().await = Some(Arc::new(c));
                         info!("WS bridge connected shared HubClient for commands");

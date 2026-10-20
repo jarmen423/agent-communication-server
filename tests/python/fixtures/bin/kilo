@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Fake `kilo run` / `opencode run` (yargs-style) for tests. `opencode` is a
+symlink to this file; the binary name picks the label.
+
+  <bin> run [--auto] [--format json] [-m M] [--session S] [--] <message...>
+
+Like yargs, anything that starts with `-` before `--` is parsed as a flag, so
+an unknown one is an error: a prompt such as "--help" or "-m evil" only
+reaches the message when the worker puts `--` in front of it.
+
+Output: NDJSON events like `--format json` (step_start, text, step_finish).
+
+Env:
+  FAKE_CLI_ARGV_LOG  append this invocation's argv (JSON) to the file
+  FAKE_CLI_MODE      ok (default) | sleep (spawn a grandchild `sleep`, write
+                     its pid to FAKE_CLI_PIDFILE, then hang)
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+name = os.path.basename(sys.argv[0])
+argv = sys.argv[1:]
+if os.environ.get("FAKE_CLI_ARGV_LOG"):
+    with open(os.environ["FAKE_CLI_ARGV_LOG"], "a") as f:
+        f.write(json.dumps(argv) + "\n")
+
+if not argv or argv[0] != "run":
+    sys.stderr.write(f"fake {name}: expected `run`\n")
+    sys.exit(2)
+
+FLAGS = {"--auto": 0, "--format": 1, "-m": 1, "--model": 1, "--session": 1, "--continue": 0}
+opts: dict[str, str] = {}
+message: list[str] = []
+i = 1
+while i < len(argv):
+    arg = argv[i]
+    if arg == "--":
+        message.extend(argv[i + 1:])
+        break
+    if arg.startswith("-"):
+        if arg not in FLAGS:
+            sys.stderr.write(f"fake {name}: Unknown argument: {arg}\n")
+            sys.exit(1)
+        opts[arg] = argv[i + 1] if FLAGS[arg] else "1"
+        i += 1 + FLAGS[arg]
+        continue
+    message.append(arg)
+    i += 1
+
+if not message:
+    sys.stderr.write(f"fake {name}: message is required\n")
+    sys.exit(1)
+
+text = " ".join(message)
+session = opts.get("--session") or f"ses_fake_{name}"
+
+if os.environ.get("FAKE_CLI_MODE") == "sleep":
+    child = subprocess.Popen(["sleep", "300"])
+    with open(os.environ["FAKE_CLI_PIDFILE"], "w") as f:
+        f.write(f"{child.pid}\n")
+    time.sleep(300)
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+emit({"type": "step_start", "sessionID": session, "part": {"type": "step-start"}})
+emit({"type": "text", "sessionID": session,
+      "part": {"type": "text", "text": f"pong: {text}", "model": opts.get("-m")}})
+emit({"type": "step_finish", "sessionID": session, "part": {"type": "step-finish"}})

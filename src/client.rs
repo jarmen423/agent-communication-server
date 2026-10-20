@@ -13,6 +13,7 @@ use crate::connect_opts::{connect_with_hub_opts, HubConnectOptions};
 use crate::protocol::{subjects, Envelope, MessageKind};
 
 mod reply;
+mod tagged;
 pub use reply::{
     is_task_result, looks_like_task_result, task_channel, task_result_payload, TaskOutcome,
 };
@@ -31,9 +32,8 @@ pub struct HubClient {
 impl HubClient {
     /// Connect to a NATS server with a given identity (simple path).
     ///
-    /// Backwards-compatible with the original signature. If any of these
-    /// environment variables are set, they are picked up automatically and
-    /// routed through [`HubClient::connect_with_opts`]:
+    /// Backwards-compatible with the original signature. Auth/TLS come from
+    /// the environment ([`HubConnectOptions::from_env`]):
     ///
     /// | Env var                  | Maps to                            |
     /// |--------------------------|------------------------------------|
@@ -43,28 +43,21 @@ impl HubClient {
     /// | `NATS_CREDENTIALS_FILE`  | `HubConnectOptions::credentials_file` |
     /// | `NATS_REQUIRE_TLS=1`     | `HubConnectOptions::require_tls`   |
     ///
-    /// If none are set, this behaves exactly like the pre-0.2 `connect`
-    /// (anonymous `async_nats::connect(url)`).
+    /// If none are set the connect is anonymous. Either way the connection
+    /// uses the per-identity reply inbox `_INBOX.<id>` (contract C1; see
+    /// [`HubConnectOptions::inbox_prefix`]).
     pub async fn connect(url: &str, identity: impl Into<String>) -> Result<Self> {
-        let identity = identity.into();
-        let opts = HubConnectOptions::from_env();
-        if opts.has_auth() || opts.require_tls {
-            debug!(%url, %identity, ?opts, "connect: env-derived auth options present");
-            Self::connect_with_opts(url, identity, opts).await
-        } else {
-            debug!(%url, %identity, "connecting to NATS (anonymous)");
-            let nats = async_nats::connect(url)
-                .await
-                .with_context(|| format!("failed to connect to NATS at {url}"))?;
-            Ok(Self { nats, identity })
-        }
+        Self::connect_with_opts(url, identity, HubConnectOptions::from_env()).await
     }
 
     /// Connect to a NATS server with explicit auth + TLS options.
     ///
     /// Builds an `async_nats::ConnectOptions` from `opts` (auth precedence:
     /// `credentials_file` > `nkey` > `user`+`password` > `token`), applies
-    /// `require_tls`, then calls `async_nats::connect_with_options`.
+    /// `require_tls`, then calls `async_nats::connect_with_options`. The
+    /// client `identity` becomes `opts.inbox_identity`, so request-reply
+    /// uses `_INBOX.<identity>` unless the NATS `user` (a valid identity)
+    /// takes precedence.
     ///
     /// Use this when you want programmatic control over auth (CLIs with
     /// `--token`, `--user/--password`, `--creds`, `--nkey` flags, or embedders
@@ -73,9 +66,11 @@ impl HubClient {
     pub async fn connect_with_opts(
         url: &str,
         identity: impl Into<String>,
-        opts: HubConnectOptions,
+        mut opts: HubConnectOptions,
     ) -> Result<Self> {
         let identity = identity.into();
+        crate::protocol::require_valid_identity(&identity)?;
+        opts.inbox_identity = Some(identity.clone());
         debug!(%url, %identity, ?opts, "connecting to NATS with options");
 
         let nats = connect_with_hub_opts(url, &opts).await?;
@@ -89,11 +84,12 @@ impl HubClient {
 
     // ── Typed envelope API ──────────────────────────────────────────
 
-    /// Send an envelope on the bus (publishes to `hub.send.<channel>`).
+    /// Send an envelope on the bus (publishes to the bound subject
+    /// `hub.pub.<identity>.<channel>`; contract §4.1).
     /// Flushes after publish to ensure the message reaches the server
     /// before the caller disconnects (critical for short-lived CLI tools).
     pub async fn send(&self, env: &Envelope) -> Result<()> {
-        let subject = subjects::send(&env.meta.channel);
+        let subject = subjects::send_bound(&self.identity, &env.meta.channel);
         let bytes = env.to_json_bytes()?;
         debug!(%subject, id = %env.meta.id, "publishing envelope");
         self.nats
@@ -326,7 +322,9 @@ impl HubClient {
             payload,
         );
         let bytes = env.to_json_bytes()?;
-        self.nats.publish(subjects::REGISTER, bytes.into()).await?;
+        self.nats
+            .publish(subjects::register_bound(&self.identity), bytes.into())
+            .await?;
         self.nats.flush().await?;
         Ok(())
     }
@@ -344,7 +342,9 @@ impl HubClient {
             payload,
         );
         let bytes = env.to_json_bytes()?;
-        self.nats.publish(subjects::PRESENCE, bytes.into()).await?;
+        self.nats
+            .publish(subjects::presence_bound(&self.identity), bytes.into())
+            .await?;
         self.nats.flush().await?;
         Ok(())
     }

@@ -31,6 +31,7 @@ pub struct SessionRow {
     pub updated_at: DbTime,
     pub closed_at: Option<DbTime>,
     pub metadata: serde_json::Value,
+    pub backend_ctx: Option<serde_json::Value>,
 }
 
 /// Row type read back from the DB (includes the record ID; tolerant of
@@ -54,6 +55,8 @@ pub struct SessionRowWithId {
     closed_at: Option<StoredTime>,
     #[serde(default)]
     metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    backend_ctx: Option<serde_json::Value>,
 }
 
 /// Legacy rows used `""` for "unset".
@@ -78,13 +81,14 @@ impl SessionRowWithId {
             model: non_empty(self.model),
             provider: non_empty(self.provider),
             metadata: metadata_object(self.metadata.unwrap_or_default()),
+            backend_ctx: self.backend_ctx.filter(|v| !v.is_null()),
         })
     }
 }
 
 /// SQL columns shared between SELECT queries and row conversion.
 const SESSION_COLUMNS: &str = "id, session_id, orchestrator, worker, status, \
-     cwd, model, provider, created_at, updated_at, closed_at, metadata";
+     cwd, model, provider, created_at, updated_at, closed_at, metadata, backend_ctx";
 
 /// Convert a `SessionRecord` into a `SessionRow` for storage.
 pub fn session_to_row(record: &SessionRecord) -> SessionRow {
@@ -100,19 +104,29 @@ pub fn session_to_row(record: &SessionRecord) -> SessionRow {
         updated_at: db_time(record.updated_at),
         closed_at: record.closed_at.map(db_time),
         metadata: metadata_object(record.metadata.clone()),
+        backend_ctx: record.backend_ctx.clone(),
     }
 }
 
 /// Create a session in the DB.
+///
+/// Like `create_wave`, this refuses (atomically) to change the orchestrator
+/// of an existing session, so a create can't take over someone else's
+/// session.
 pub async fn create_session(db: &Db, session: SessionRecord) -> Result<()> {
     debug!(session_id = %session.session_id, "storing session record");
     let row = session_to_row(&session);
-    let _: Option<SessionRow> = db
-        .upsert(("sessions", &session.session_id))
-        .content(row)
+    let resp = db
+        .query(crate::storage::wave::owner_guarded_upsert(
+            "sessions", "session",
+        ))
+        .bind(("id", session.session_id.clone()))
+        .bind(("orch", session.orchestrator.clone()))
+        .bind(("row", row))
         .await
         .context("failed to create session")?;
-    Ok(())
+    crate::storage::wave::check_guarded(resp)
+        .with_context(|| format!("failed to create session '{}'", session.session_id))
 }
 
 /// Update a session's status. Sets `closed_at` when status is "closed".
@@ -131,6 +145,30 @@ pub async fn update_session_status(db: &Db, session_id: &str, status: &str) -> R
         .check()
         .with_context(|| format!("failed to update session '{session_id}'"))?;
     Ok(())
+}
+
+/// Set only `backend_ctx` (+ `updated_at`) — a field update, not a
+/// read-modify-write of the whole record, so a concurrent status change is
+/// never overwritten. `false` when the session doesn't exist.
+pub async fn set_backend_ctx(
+    db: &Db,
+    session_id: &str,
+    backend_ctx: serde_json::Value,
+) -> Result<bool> {
+    debug!(%session_id, "setting session backend_ctx");
+    let updated: Vec<serde_json::Value> = db
+        .query(
+            "UPDATE type::thing('sessions', $id) SET backend_ctx = $ctx, updated_at = $now \
+             RETURN session_id",
+        )
+        .bind(("id", session_id.to_string()))
+        .bind(("ctx", backend_ctx))
+        .bind(("now", db_now()))
+        .await?
+        .check()
+        .with_context(|| format!("failed to set backend_ctx on session '{session_id}'"))?
+        .take(0)?;
+    Ok(!updated.is_empty())
 }
 
 /// Get a single session by ID.

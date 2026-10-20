@@ -157,6 +157,14 @@ impl Storage for SurrealStorage {
         session::list_sessions(&self.db, filter).await
     }
 
+    async fn set_session_backend_ctx(
+        &self,
+        session_id: &str,
+        backend_ctx: serde_json::Value,
+    ) -> Result<bool> {
+        session::set_backend_ctx(&self.db, session_id, backend_ctx).await
+    }
+
     // ── Waves ────────────────────────────────────────────────
 
     async fn create_wave(&self, wave: WaveRecord) -> Result<()> {
@@ -173,6 +181,15 @@ impl Storage for SurrealStorage {
 
     async fn list_waves(&self, status: Option<&str>) -> Result<Vec<WaveRecord>> {
         wave::list_waves(&self.db, status).await
+    }
+
+    async fn set_wave_metadata_key(
+        &self,
+        wave_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<bool> {
+        wave::set_wave_metadata_key(&self.db, wave_id, key, value).await
     }
 
     async fn create_wave_task(&self, task: WaveTaskRecord) -> Result<()> {

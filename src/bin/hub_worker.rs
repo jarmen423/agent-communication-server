@@ -17,20 +17,36 @@
 //!   5. Publishes exactly one terminal result with `meta.reply_to = <task id>`
 //!      and payload `{status, task_id, result, error}` — on the task channel,
 //!      or as a DM to the sender when there is no task_channel.
+//!
+//! Cancel (refocus-iteration-2.md §4.2): a DM `kind = control` with payload
+//! `{"action": "cancel", "task_id": <task envelope id>}` kills the running
+//! command's process group (or drops a queued task) and publishes the
+//! terminal result with `status: "cancelled"`. Unknown/finished ids are
+//! ignored, and so is a cancel from anyone but the task's sender
+//! (HARDENING.md C5). Tasks still run one at a time; the inbox is read while
+//! a task runs so a cancel can reach it. Other tasks wait in a bounded queue
+//! (`--max-queued`); one that doesn't fit gets an `error` result at once.
+//!
+//! SIGTERM and Ctrl-C stop the worker; the running command's process group
+//! is killed on the way out.
+//!
+//! Logs go to stderr.
 
-use anyhow::{Context, Result};
+#[path = "hub_worker/exec.rs"]
+mod exec;
+#[path = "hub_worker/inbox.rs"]
+mod inbox;
+
+use anyhow::Result;
 use clap::Parser;
-use nats_hub::client::{looks_like_task_result, task_channel, TaskOutcome};
+use exec::{execute_command, ExecOutcome};
+use inbox::{cancel_target, task_prompt, warn_denied, CancelTarget, Inbox};
+use nats_hub::client::{task_channel, TaskOutcome};
 use nats_hub::{Envelope, HubClient, MessageKind};
-use std::process::{ExitStatus, Stdio};
+use serde_json::json;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Child;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
-
-/// Max chars of stderr quoted in an error result.
-const STDERR_TAIL: usize = 2000;
 
 /// Seconds between the first re-announcements (then every --heartbeat-secs).
 const ANNOUNCE_BACKOFF_SECS: [u64; 4] = [1, 2, 4, 8];
@@ -66,15 +82,22 @@ struct Args {
     /// and report `status: error` (0 = no timeout)
     #[arg(long, default_value_t = 600)]
     timeout_secs: u64,
+
+    /// Max tasks waiting behind the running one; more get an error result
+    #[arg(long, default_value_t = 256, value_parser = clap::value_parser!(u64).range(1..))]
+    max_queued: u64,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
 
     let args = Args::parse();
+    // Installed first, so a SIGTERM during startup is not lost either.
+    let mut stop = Stop::install()?;
 
     info!(
         identity = %args.identity,
@@ -127,10 +150,13 @@ async fn main() -> Result<()> {
 
     info!("hub-worker ready, waiting for tasks...");
 
-    // Dropping the loop on Ctrl+C drops any running child (kill_on_drop).
+    // Stopping drops the loop and with it the running command, whose
+    // process group is then killed (exec::GroupGuard).
+    let max_queued = usize::try_from(args.max_queued).unwrap_or(usize::MAX);
+    let mut inbox = Inbox::new(inbox_rx, broadcast_rx, max_queued);
     tokio::select! {
-        _ = run_loop(&client, &args, inbox_rx, broadcast_rx) => {}
-        _ = tokio::signal::ctrl_c() => info!("interrupted, shutting down"),
+        _ = run_loop(&client, &args, &mut inbox) => {}
+        sig = stop.recv() => info!(signal = sig, "shutting down"),
     }
 
     let _ = client.drain().await;
@@ -138,72 +164,196 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-type EnvRx = tokio::sync::mpsc::UnboundedReceiver<Envelope>;
+/// SIGTERM + SIGINT (Ctrl-C) as one stream.
+struct Stop {
+    #[cfg(unix)]
+    term: tokio::signal::unix::Signal,
+}
 
-async fn run_loop(
-    client: &HubClient,
-    args: &Args,
-    mut inbox_rx: EnvRx,
-    broadcast_rx: Option<EnvRx>,
-) {
-    let mut broadcast_rx = broadcast_rx;
+impl Stop {
+    fn install() -> Result<Self> {
+        Ok(Self {
+            #[cfg(unix)]
+            term: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+        })
+    }
+
+    async fn recv(&mut self) -> &'static str {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = self.term.recv() => "SIGTERM",
+            _ = tokio::signal::ctrl_c() => "SIGINT",
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            "SIGINT"
+        }
+    }
+}
+
+async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
     loop {
-        // `direct` = arrived on our inbox (vs. the optional broadcast channel).
-        let (env, direct) = match broadcast_rx {
-            Some(ref mut brx) => tokio::select! {
-                Some(env) = inbox_rx.recv() => (env, true),
-                Some(env) = brx.recv() => (env, false),
-                else => break,
-            },
-            None => match inbox_rx.recv().await {
-                Some(env) => (env, true),
-                None => break,
-            },
+        if let Some((task, prompt)) = inbox.pop_queued() {
+            handle_task(client, args, task, prompt, inbox).await;
+            continue;
+        }
+        let Some((env, direct)) = inbox.recv().await else {
+            break;
         };
-        handle_task(client, args, env, direct).await;
+        if let Some(id) = cancel_target(&env, direct) {
+            // Nothing runs between tasks; only a queued task can match.
+            on_cancel(client, inbox, id, &env.meta.from, None).await;
+            continue;
+        }
+        if !admit_session(inbox, &env) {
+            continue;
+        }
+        match task_prompt(&env, direct) {
+            Ok(prompt) => handle_task(client, args, env, prompt, inbox).await,
+            Err(why) => debug!(id = %env.meta.id, why, "not a task, ignoring"),
+        }
     }
     info!("inbox stream closed, shutting down");
 }
 
-/// Run one task and publish its status + terminal result (refocus.md §6).
-async fn handle_task(client: &HubClient, args: &Args, env: Envelope, direct: bool) {
-    info!(id = %env.meta.id, from = %env.meta.from, kind = ?env.meta.kind, "received envelope");
-
-    // Progress/bookkeeping kinds are never tasks. Never answer a result
-    // either: two workers DMing each other results would ping-pong forever.
-    let progress = matches!(
+/// C5 for session actions: false (logged) when `env` acts on a session it
+/// doesn't own. Progress/control kinds are never session actions.
+fn admit_session(inbox: &mut Inbox, env: &Envelope) -> bool {
+    if matches!(
         env.meta.kind,
         MessageKind::Status | MessageKind::Event | MessageKind::Control
+    ) {
+        return true;
+    }
+    match inbox.sessions.admit(env) {
+        Ok(()) => true,
+        Err(why) => {
+            warn!(id = %env.meta.id, %why, "session action ignored");
+            false
+        }
+    }
+}
+
+/// Apply a cancel for `id` from `by`. Returns true if it targets the running task.
+async fn on_cancel(
+    client: &HubClient,
+    inbox: &mut Inbox,
+    id: &str,
+    by: &str,
+    running: Option<&Envelope>,
+) -> bool {
+    match inbox.resolve_cancel(id, by, running) {
+        CancelTarget::Running => return true,
+        CancelTarget::Queued(task) => publish_cancelled(client, &task).await,
+        CancelTarget::Denied(owner) => warn_denied(id, by, &owner),
+        CancelTarget::Unknown => {
+            debug!(task_id = %id, "cancel for unknown/finished task, ignoring")
+        }
+    }
+    false
+}
+
+/// While `running` runs: alias a re-dispatch of a known session (C3), queue
+/// another task, or answer at once if the queue is full.
+async fn queue_or_reject(
+    client: &HubClient,
+    inbox: &mut Inbox,
+    env: Envelope,
+    direct: bool,
+    running: &Envelope,
+) {
+    if !admit_session(inbox, &env) {
+        return;
+    }
+    let prompt = match task_prompt(&env, direct) {
+        Ok(prompt) => prompt,
+        Err(why) => {
+            debug!(id = %env.meta.id, why, "not a task, ignoring");
+            return;
+        }
+    };
+    if inbox.alias_redispatch(&env, running) {
+        info!(id = %env.meta.id, "session_start for a session already in flight: aliased, not re-run");
+        return;
+    }
+    let Some(max) = inbox.full() else {
+        return inbox.queue(env, prompt);
+    };
+    warn!(id = %env.meta.id, max, "queue full, rejecting task");
+    let err = format!(
+        "worker {} is busy: {max} tasks already queued",
+        client.identity()
     );
-    if progress || looks_like_task_result(&env) {
-        debug!(id = %env.meta.id, "not a task, ignoring");
-        return;
+    if let Err(e) = client.send_task_result(&env, TaskOutcome::Error(err)).await {
+        error!(error = %e, "failed to send queue-full result");
     }
-    // Without a task channel the reply is a DM (rule 6) — only for envelopes
-    // sent to us, not for chatter on the broadcast channel.
-    if !direct && task_channel(&env).is_none() {
-        debug!(id = %env.meta.id, "broadcast without task_channel, ignoring");
-        return;
-    }
-    let prompt = extract_prompt(&env);
-    if prompt.is_empty() {
-        warn!(id = %env.meta.id, "no prompt found in payload, skipping");
-        return;
-    }
+    let _ = client.send_task_status(&env, "error").await;
+}
+
+/// Run one task and publish its status + terminal result (refocus.md §6).
+async fn handle_task(
+    client: &HubClient,
+    args: &Args,
+    env: Envelope,
+    prompt: String,
+    inbox: &mut Inbox,
+) {
+    info!(id = %env.meta.id, from = %env.meta.from, kind = ?env.meta.kind, "running task");
 
     if let Err(e) = client.send_task_status(&env, "working").await {
         warn!(error = %e, "failed to send working status");
     }
 
     let timeout = (args.timeout_secs > 0).then(|| Duration::from_secs(args.timeout_secs));
-    let outcome = match execute_command(&args.execute, &prompt, timeout).await {
-        Ok(output) => {
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut cancel_tx = Some(cancel_tx);
+    let cancelled = async {
+        // A dropped sender (never cancelled) must not look like a cancel.
+        if cancel_rx.await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    let run = execute_command(&args.execute, &prompt, timeout, cancelled);
+    tokio::pin!(run);
+
+    // Keep reading the bus while the command runs: a cancel for this task
+    // (from its sender) fires `cancel_tx`; other tasks wait in the queue.
+    let mut bus_open = true;
+    let outcome = loop {
+        tokio::select! {
+            outcome = &mut run => break outcome,
+            next = inbox.recv(), if bus_open => match next {
+                None => bus_open = false,
+                Some((other, other_direct)) => match cancel_target(&other, other_direct) {
+                    Some(id) => {
+                        if on_cancel(client, inbox, id, &other.meta.from, Some(&env)).await {
+                            if let Some(tx) = cancel_tx.take() {
+                                info!(task_id = %id, by = %other.meta.from, "cancel requested");
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                    None => queue_or_reject(client, inbox, other, other_direct, &env).await,
+                },
+            },
+        }
+    };
+
+    inbox.forget(&env.meta.id);
+    let outcome = match outcome {
+        ExecOutcome::Done(output) => {
             info!(id = %env.meta.id, output_len = output.len(), "task completed");
             TaskOutcome::Done(output)
         }
-        Err(e) => {
+        ExecOutcome::Error(e) => {
             error!(id = %env.meta.id, error = %e, "task failed");
-            TaskOutcome::Error(format!("{e:#}"))
+            TaskOutcome::Error(e)
+        }
+        ExecOutcome::Cancelled => {
+            info!(id = %env.meta.id, "task cancelled, process group killed");
+            publish_cancelled(client, &env).await;
+            return;
         }
     };
     let final_status = match outcome {
@@ -217,111 +367,28 @@ async fn handle_task(client: &HubClient, args: &Args, env: Envelope, direct: boo
     let _ = client.send_task_status(&env, final_status).await;
 }
 
-/// Extract the prompt from an envelope payload.
-/// Tries payload.prompt, .text, .command, then .message (human bridges).
-fn extract_prompt(env: &Envelope) -> String {
-    ["prompt", "text", "command", "message"]
-        .iter()
-        .find_map(|k| env.payload.get(*k).and_then(|v| v.as_str()))
-        .unwrap_or_default()
-        .to_string()
-}
-
-/// Execute a command, streaming `prompt` to stdin while concurrently
-/// collecting stdout and stderr. Returns stdout on exit status 0.
-async fn execute_command(command: &str, prompt: &str, timeout: Option<Duration>) -> Result<String> {
-    debug!(%command, prompt_len = prompt.len(), "executing command");
-
-    // Parse the command into program + args (simple split on whitespace)
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    let Some((program, rest)) = parts.split_first() else {
-        anyhow::bail!("empty execute command");
-    };
-
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(rest)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    // Own process group, so a timeout can kill the whole tree.
-    #[cfg(unix)]
-    cmd.process_group(0);
-
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("failed to spawn command: {command}"))?;
-
-    let run = collect_output(&mut child, prompt.as_bytes().to_vec());
-    let (status, stdout, stderr) = match timeout {
-        None => run.await?,
-        Some(limit) => match tokio::time::timeout(limit, run).await {
-            Ok(res) => res?,
-            Err(_) => {
-                kill_tree(&mut child).await;
-                anyhow::bail!("command timed out after {}s: {command}", limit.as_secs());
-            }
-        },
-    };
-
-    if !status.success() {
-        let stderr = String::from_utf8_lossy(&stderr);
-        let stderr = stderr.trim();
-        let tail_start = stderr
-            .char_indices()
-            .rev()
-            .nth(STDERR_TAIL)
-            .map_or(0, |(i, _)| i);
-        anyhow::bail!("command exited with {status}: {}", &stderr[tail_start..]);
+/// The terminal `status: "cancelled"` result (§4.2), routed like
+/// `HubClient::send_task_result` (task channel, else DM to the sender).
+async fn publish_cancelled(client: &HubClient, task: &Envelope) {
+    let payload = json!({
+        "status": "cancelled",
+        "task_id": task.meta.id,
+        "result": null,
+        "error": "cancelled",
+    });
+    let result = match task_channel(task) {
+        Some(channel) => Envelope::new(client.identity(), channel, MessageKind::Message, payload),
+        None => Envelope::new(
+            client.identity(),
+            task.meta.channel.clone(),
+            MessageKind::Message,
+            payload,
+        )
+        .to(&task.meta.from),
     }
-    Ok(String::from_utf8_lossy(&stdout).into_owned())
-}
-
-/// Write stdin, read stdout + stderr, and wait — all concurrently.
-async fn collect_output(
-    child: &mut Child,
-    input: Vec<u8>,
-) -> Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
-    let mut stdin = child.stdin.take().context("child stdin not piped")?;
-    let mut stdout = child.stdout.take().context("child stdout not piped")?;
-    let mut stderr = child.stderr.take().context("child stderr not piped")?;
-
-    let write = async move {
-        let res = stdin.write_all(&input).await;
-        drop(stdin); // close → EOF for the child
-        match res {
-            // The child may exit without consuming all input; not our error.
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
-            other => other,
-        }
-    };
-    let read_out = async {
-        let mut buf = Vec::new();
-        stdout.read_to_end(&mut buf).await.map(|_| buf)
-    };
-    let read_err = async {
-        let mut buf = Vec::new();
-        stderr.read_to_end(&mut buf).await.map(|_| buf)
-    };
-
-    let (w, out, err) = tokio::join!(write, read_out, read_err);
-    w.context("writing prompt to stdin")?;
-    let out = out.context("reading stdout")?;
-    let err = err.context("reading stderr")?;
-    let status = child.wait().await.context("waiting for command")?;
-    Ok((status, out, err))
-}
-
-/// SIGKILL the child's process group (unix), then the child itself, and reap it.
-async fn kill_tree(child: &mut Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        let _ = tokio::process::Command::new("kill")
-            .args(["-KILL", "--", &format!("-{pid}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
+    .reply_to(&task.meta.id);
+    if let Err(e) = client.send(&result).await {
+        error!(error = %e, "failed to send cancelled result");
     }
-    let _ = child.kill().await;
+    let _ = client.send_task_status(task, "cancelled").await;
 }

@@ -5,12 +5,16 @@ The prompt text selects behaviour:
   "crash"       exit(3) mid-turn with a stderr message (EOF for the client)
   "permission"  ask session/request_permission (reject/once/always options)
   "fs"          send an fs/read_text_file request (client must refuse it)
+  "hang"        stream one chunk, then wait for session/cancel and end the
+                turn with stopReason "cancelled" (an ACP-compliant cancel)
+  "stubborn"    ignore session/cancel and hang (the client must kill us)
 The reply text is JSON describing what the client sent us.
 Every initialize writes ~200 KiB to stderr (deadlocks an undrained pipe).
 """
 import json
 import os
 import sys
+import time
 
 state = {"caps": None, "n": 0}
 
@@ -39,6 +43,15 @@ def prompt(params):
     text = params["prompt"][0]["text"]
     sid = params["sessionId"]
     info = {"caps": state["caps"], "pid": os.getpid(), "session": sid}
+    if "hang" in text or "stubborn" in text:
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "working "}}}})
+        if "stubborn" in text:
+            time.sleep(300)
+        while True:
+            msg = read_msg()
+            if msg.get("method") == "session/cancel" and msg.get("params", {}).get("sessionId") == sid:
+                return {"stopReason": "cancelled"}
     if "crash" in text:
         sys.stderr.write("fatal: agent crashed on purpose\n")
         sys.stderr.flush()

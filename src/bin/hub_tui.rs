@@ -1,7 +1,7 @@
 //! hub-tui — ratatui-based operations dashboard for nats-hub.
 //!
 //! Keyboard-driven daily driver: agents, sessions, waves, live feed.
-//! See `docs/TUI_PLAN.md` for the full design.
+//! See `docs/archive/TUI_PLAN.md` for the full design.
 
 use anyhow::Result;
 use clap::Parser;

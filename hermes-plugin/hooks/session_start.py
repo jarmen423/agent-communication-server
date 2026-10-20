@@ -27,9 +27,10 @@ for _p in (os.path.join(_HERE, "..", "server"), _HERE + "/.."):
         break
 
 UP_MSG = (
-    "[nats-hub] Connected to bus at {url}. Use list_agents to see who's "
-    "online, delegate_async + wait_for_task to hand off work, send_direct "
-    "to DM an agent, start_session for multi-turn conversations."
+    "[nats-hub] Connected to bus at {url}. Use check_providers to see which "
+    "workers are alive and usable, delegate_async + wait_for_task to hand "
+    "off work (cancel_task to stop it), send_direct to DM an agent, "
+    "start_session for multi-turn conversations."
 )
 DOWN_MSG = (
     "[nats-hub] Warning: NATS bus at {url} is not reachable. In the "

@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.74"
 description = "NATS-based communication layer with control plane routing for agent + human messaging"
 license = "BSL-1.1"
-repository = "https://github.com/jarmen423/nats-hub"
+repository = "https://github.com/jarmen423/agent-communication-server"
 readme = "README.md"
 authors = ["Agent Memory Labs <josh@agentmemorylabs.com>"]
 keywords = ["nats", "agent", "messaging", "communication", "surrealdb"]
@@ -83,6 +83,10 @@ name = "hub-tui"
 path = "src/bin/hub_tui.rs"
 required-features = ["storage-surreal", "tui"]
 
+[[bin]]
+name = "hub-admin"
+path = "src/bin/hub_admin.rs"
+
 # ── Library dependencies (what downstream crates pull in) ──────
 [dependencies]
 async-nats = "0.38"
@@ -95,6 +99,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 async-trait = "0.1"
+nkeys = "0.4"
 
 # Binaries also need clap + tracing-subscriber (not needed by library consumers)
 clap = { version = "4", features = ["derive"] }
@@ -109,6 +114,11 @@ crossterm = { version = "0.28", optional = true }
 
 # ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
+
+# hub-worker kills its command's process group with killpg (already in the
+# lock file via tokio/mio; now a direct dependency).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

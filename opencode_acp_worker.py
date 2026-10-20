@@ -7,6 +7,7 @@ ctx["opencode_acp_session_id"].
 """
 import argparse
 import asyncio
+import os
 import sys
 
 from worker_backends.opencode_acp import OpencodeAcpBackend
@@ -21,7 +22,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--provider", default=None, help="OpenCode provider id (e.g. anthropic)")
     p.add_argument("--opencode-bin", default=None, help="path to opencode binary (default: $OPENCODE_BIN or PATH)")
     p.add_argument("--repo", default=".")
-    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
+    p.add_argument("--nats-url", default=os.environ.get("NATS_URL", "nats://127.0.0.1:4222"))
     p.add_argument("--channel", default=None)
     p.add_argument("--timeout", type=float, default=900.0, help="per-prompt ACP timeout seconds")
     p.add_argument("--permission-policy", default="allow_always",

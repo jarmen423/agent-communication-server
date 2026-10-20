@@ -2507,6 +2507,8 @@ dependencies = [
  "clap",
  "crossterm",
  "futures-util",
+ "libc",
+ "nkeys",
  "ratatui",
  "serde",
  "serde_json",

@@ -115,6 +115,7 @@ mod tests {
             started_at: None,
             completed_at: None,
             result: None,
+            verify_result: None,
         }
     }
 

@@ -8,13 +8,15 @@ comes from ``NATS_HUB_IDENTITY`` via ``hub_connection.identity()``; a stale
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any
 
 import hub_connection as conn
 from hub_buffers import hub
+from hub_primitives import summarize_env as _summarize_env
+from hub_providers import check_providers as _check_providers
 from hub_queries import QUERY_HANDLERS
+from hub_sessions import SESSION_HANDLERS
 
 
 def _err(msg: str) -> dict:
@@ -24,21 +26,6 @@ def _err(msg: str) -> dict:
 def _from_guard(args: dict) -> dict | None:
     bad = conn.check_from_arg(args)
     return _err(bad) if bad else None
-
-
-def _summarize_env(it: dict) -> dict:
-    env = it["env"]
-    return {
-        "seq": it["seq"],
-        "id": env.get("meta", {}).get("id"),
-        "from": env.get("meta", {}).get("from"),
-        "to": env.get("meta", {}).get("to"),
-        "channel": env.get("meta", {}).get("channel"),
-        "kind": env.get("meta", {}).get("kind"),
-        "timestamp": env.get("meta", {}).get("timestamp"),
-        "reply_to": env.get("meta", {}).get("reply_to"),
-        "payload": env.get("payload"),
-    }
 
 
 # ── Discovery ────────────────────────────────────────────────────
@@ -56,52 +43,6 @@ async def _list_agents(args: dict) -> dict:
 
 async def _get_agent(args: dict) -> dict:
     return await conn.api_request("agent.get", {"identity": args["identity"]})
-
-
-async def _check_providers(args: dict) -> dict:
-    """Honest provider check: bus liveness + optional supervisor probes."""
-    alive_secs = int(args.get("alive_within_secs") or 120)
-    found = await conn.api_request(
-        "agent.find", {"capabilities": [], "alive_within_secs": alive_secs})
-    if not found.get("ok"):
-        return found
-    agents = found.get("data", {}).get("agents") or []
-    alive = [
-        {
-            "identity": a.get("identity"),
-            "capabilities": a.get("capabilities", []),
-            "last_seen": a.get("last_seen"),
-            "models": (a.get("metadata") or {}).get("models"),
-        }
-        for a in agents
-    ]
-
-    probes = []
-    providers = args.get("providers") or []
-    if providers:
-        nc = await conn.get_nc()
-        for provider in providers:
-            try:
-                req = json.dumps({"provider": provider}).encode()
-                reply = await nc.request("hub.worker.models", req, timeout=5)
-                resp = json.loads(reply.data)
-                probes.append({
-                    "provider": provider,
-                    "ok": bool(resp.get("ok")),
-                    "models": resp.get("models") or [],
-                    "error": resp.get("error"),
-                })
-            except Exception as e:
-                probes.append({"provider": provider, "ok": False, "error": str(e)})
-
-    return {"ok": True, "data": {
-        "alive_agents": alive,
-        "provider_probes": probes,
-        "verifies": "bus registration + heartbeat liveness + supervisor "
-                    "model-list responses",
-        "does_not_verify": "provider credentials, CLI health, or whether a "
-                           "worker will actually accept a task",
-    }}
 
 
 # ── Messaging ────────────────────────────────────────────────────
@@ -163,7 +104,9 @@ async def _wait_for_message(args: dict) -> dict:
     )
     if it is None:
         return _err(f"no inbox message within {timeout}s"
-                    + (f" from {sender}" if sender else ""))
+                    + (f" from {sender}" if sender else "")
+                    + f" (inbox last_seq={h.inbox.buf.last_seq}); call wait_for_message again "
+                    "to keep waiting, or read_inbox to see buffered messages")
     return {"ok": True, "data": _summarize_env(it)}
 
 
@@ -188,13 +131,26 @@ async def _delegate_task(args: dict) -> dict:
     tracker = await hub().delegate_async(args["to"], args["prompt"])
     result = await hub().wait_for_task(tracker.task_id, timeout)
     if result is None:
-        return _err("task tracker missing")
+        return _err(f"task {tracker.task_id} was evicted before its result "
+                    "arrived (too many tracked tasks); check get_history("
+                    f"channel='{tracker.task_channel}')")
     if result.get("state") == "timeout":
+        # Don't leave the worker running a task nobody waits for any more.
+        try:
+            await hub().send_cancel(tracker)
+            sent = "a cancel was sent to the worker"
+        except Exception as e:  # noqa: BLE001 - bus down
+            sent = f"sending the cancel failed ({e or type(e).__name__})"
         return _err(f"delegate timed out after {timeout}s "
-                    f"(task_id={tracker.task_id})")
+                    f"(task_id={tracker.task_id}); {sent}. task_status / "
+                    "wait_for_task show whether it confirmed (state cancelled)")
+    if result.get("state") == "evicted":
+        return _err(_evicted(tracker.task_id, tracker.task_channel))
     payload = (result.get("result") or {})
     if result.get("state") == "error":
         return _err(f"task failed: {payload.get('error', 'unknown')}")
+    if result.get("state") == "cancelled":
+        return _err(f"task {tracker.task_id} was cancelled before it finished")
     return {"ok": True, "data": {
         "task_id": tracker.task_id,
         "task_channel": tracker.task_channel,
@@ -203,10 +159,24 @@ async def _delegate_task(args: dict) -> dict:
     }}
 
 
+def _evicted(task_id: str, task_channel: str) -> str:
+    return (f"task {task_id} was evicted from tracking before its result "
+            "arrived (too many tracked tasks); check get_history("
+            f"channel='{task_channel}')")
+
+
+def _unknown_task(task_id: str) -> dict:
+    return _err(
+        f"unknown task_id {task_id!r}: this MCP server only tracks tasks it "
+        "delegated itself (delegate_async/delegate_task) since it started, "
+        "and evicts the oldest finished ones. Use the task_id returned by "
+        "delegate_async, or get_history(channel='task.<id>') for older tasks.")
+
+
 async def _task_status(args: dict) -> dict:
     snap = await hub().task_status(args["task_id"], int(args.get("events_tail", 10)))
     if snap is None:
-        return _err(f"unknown task_id: {args['task_id']}")
+        return _unknown_task(args["task_id"])
     return {"ok": True, "data": snap}
 
 
@@ -214,108 +184,37 @@ async def _wait_for_task(args: dict) -> dict:
     timeout = float(args["timeout"])
     result = await hub().wait_for_task(args["task_id"], timeout)
     if result is None:
-        return _err(f"unknown task_id: {args['task_id']}")
+        return _unknown_task(args["task_id"])
+    if result.get("state") == "evicted":
+        return _err(_evicted(args["task_id"], result.get("task_channel", "task.<id>")))
     if result.get("state") == "timeout":
         return _err(f"no result within {timeout}s "
-                    f"(last_status={result.get('last_status')})")
+                    f"(last_status={result.get('last_status')}); call "
+                    "wait_for_task again to keep waiting, or cancel_task")
     return {"ok": True, "data": result}
 
 
-# ── Sessions ─────────────────────────────────────────────────────
-
-
-async def _start_session(args: dict) -> dict:
-    if (bad := _from_guard(args)) is not None:
-        return bad
-    h = hub()
-    await h.ensure_started()
-    worker = args["worker"]
-    prompt = args["prompt"]
-    session_id = uuid.uuid4().hex[:8]
-    session_channel = f"session.{session_id}"
-
-    # Buffer replies before sending session_start so nothing is missed.
-    await h.session_buffer(session_id)
-
-    payload: dict[str, Any] = {
-        "action": "session_start",
-        "session_id": session_id,
-        "session_channel": session_channel,
-        "prompt": prompt,
-    }
-    for k in ("model", "provider", "cwd"):
-        if args.get(k):
-            payload[k] = args[k]
-
-    env = conn.envelope(session_channel, payload, to=worker)
-    await conn.publish(session_channel, env)
-
-    resp = await conn.api_request("session.create", {
-        "session_id": session_id,
-        "orchestrator": conn.identity(),
-        "worker": worker,
-        "status": "active",
-        "cwd": args.get("cwd"),
-        "model": args.get("model"),
-        "provider": args.get("provider"),
-        "created_at": env["meta"]["timestamp"],
-        "updated_at": env["meta"]["timestamp"],
-        "metadata": {"prompt": prompt, "timeout": args.get("timeout", 30)},
-    })
-    if not resp.get("ok"):
-        return {"ok": False, "error":
-                f"session_start sent to {worker}, but session.create failed: "
-                f"{resp.get('error')}"}
-
-    return {"ok": True, "data": {"session_id": session_id, "channel": session_channel}}
-
-
-async def _send_to_session(args: dict) -> dict:
-    if (bad := _from_guard(args)) is not None:
-        return bad
-    session_id = args["session_id"]
-    channel = f"session.{session_id}"
-    env = conn.envelope(
-        channel,
-        {"action": "session_send", "session_id": session_id, "message": args["message"]},
-        to=None,
-    )
-    # Broadcast on the session channel: the worker is subscribed once the
-    # session is active (worker_runtime).
-    await conn.publish(channel, env)
-    return {"ok": True, "data": {"session_id": session_id}}
-
-
-async def _close_session(args: dict) -> dict:
-    if (bad := _from_guard(args)) is not None:
-        return bad
-    session_id = args["session_id"]
-    channel = f"session.{session_id}"
-    env = conn.envelope(
-        channel,
-        {"action": "session_close", "session_id": session_id},
-    )
-    await conn.publish(channel, env)
-    await hub().drop_session(session_id)
-    resp = await conn.api_request("session.update_status",
-                                  {"session_id": session_id, "status": "closed"})
-    if not resp.get("ok"):
-        return {"ok": False, "error": f"close sent, but status update failed: {resp.get('error')}"}
-    return {"ok": True, "data": {"session_id": session_id, "status": "closed"}}
-
-
-async def _session_replies(args: dict) -> dict:
-    h = hub()
-    session_id = args["session_id"]
-    ch = await h.session_buffer(session_id)
-    since = int(args.get("since_seq") or 0)
-    limit = int(args.get("limit") or 50)
-    items = ch.buf.since(since) if since else ch.buf.tail(limit)
-    return {"ok": True, "data": {
-        "session_id": session_id,
-        "last_seq": ch.buf.last_seq,
-        "messages": [_summarize_env(it) for it in items[:limit]],
-    }}
+async def _cancel_task(args: dict) -> dict:
+    """Contract §4.2: returns the terminal snapshot (state `cancelled`, or
+    done/error if the task finished before the cancel took effect)."""
+    task_id = args["task_id"]
+    timeout = float(args.get("timeout", 10))
+    res = await hub().cancel_task(task_id, timeout)
+    if res is None:
+        return _unknown_task(task_id)
+    snap = res["snapshot"]
+    if res["timed_out"]:
+        return {"ok": False, "data": snap, "error": (
+            f"cancel sent to {snap['worker']}, but no terminal result within "
+            f"{timeout:g}s. The worker may not support cancel yet or is busy; "
+            "the task is still tracked — wait_for_task or cancel_task again.")}
+    if not res["cancel_sent"]:
+        snap = {**snap, "note": f"task already finished ({snap['state']}); "
+                                "cancel not sent"}
+    elif snap["state"] != "cancelled":
+        snap = {**snap, "note": f"task finished ({snap['state']}) before the "
+                                "cancel took effect"}
+    return {"ok": True, "data": snap}
 
 
 # ── Waves ────────────────────────────────────────────────────────
@@ -325,53 +224,55 @@ async def _create_wave(args: dict) -> dict:
     if (bad := _from_guard(args)) is not None:
         return bad
     wave_id = uuid.uuid4().hex[:8]
-    now = conn.now()
-    result = await conn.api_request("wave.create", {
+    wave = {
         "wave_id": wave_id,
         "goal": args["goal"],
-        "status": "active",
+        "status": "pending",
         "orchestrator": conn.identity(),
-        "created_at": now,
-    })
-    if not result.get("ok"):
-        return result
-
-    tasks_created = []
+        "created_at": conn.now(),
+    }
+    tasks: list[dict[str, Any]] = []
     for t in args["tasks"]:
-        task_id = t.get("task_id") or uuid.uuid4().hex[:8]
-        record: dict[str, Any] = {
-            "wave_id": wave_id,
-            "task_id": task_id,
+        tasks.append({
+            "task_id": t.get("task_id") or uuid.uuid4().hex[:8],
             "worker": t["worker"],
             "goal": t["goal"],
-            "status": "pending",
             "write_scope": t.get("write_scope") or [],
             "dependencies": t.get("dependencies") or [],
             "handoff_path": t.get("handoff_path"),
             "verify_cmd": t.get("verify_cmd"),
-            "created_at": now,
-        }
-        r = await conn.api_request("wave.create_task", record)
-        tasks_created.append({
-            "task_id": task_id, "worker": t["worker"], "goal": t["goal"],
-            "ok": r.get("ok", False), "error": r.get("error"),
         })
-
-    return {"ok": True, "data": {"wave_id": wave_id, "tasks": tasks_created}}
+    # One atomic op: server-side validation (incl. dependency cycles)
+    # runs before anything is persisted.
+    result = await conn.api_request(
+        "wave.create", {"wave": wave, "tasks": tasks})
+    if not result.get("ok"):
+        return result
+    result["data"]["orchestration"] = "hub-server"
+    return result
 
 
 async def _spawn_wave(args: dict) -> dict:
-    try:
-        tracker = await hub().spawn_wave(args["wave_id"],
-                                         timeout=float(args.get("timeout", 3600)))
-    except Exception as e:
-        return _err(f"spawn_wave: {e}")
-    return {"ok": True, "data": {
-        "wave_id": tracker.wave_id,
-        "state": tracker.state,
-        "tasks": {tid: t.get("status") for tid, t in tracker.tasks.items()},
-        "note": "wave spawns in-process; this MCP server must stay alive until it finishes",
-    }}
+    """Hand the wave to the hub-server orchestrator and return.
+
+    The server dispatches ready tasks, enforces worker liveness, and drives
+    the wave to a terminal status — this MCP server does not need to stay
+    alive for the wave to finish.
+    """
+    if (bad := _from_guard(args)) is not None:
+        return bad
+    return await conn.api_request("wave.spawn", {
+        "wave_id": args["wave_id"],
+        "timeout_secs": int(args.get("timeout", 3600)),
+    })
+
+
+async def _cancel_wave(args: dict) -> dict:
+    """Cancel a wave: non-terminal tasks → cancelled; running workers get
+    the §4.2 cancel DM. Errors surface from the orchestrator."""
+    if (bad := _from_guard(args)) is not None:
+        return bad
+    return await conn.api_request("wave.cancel", {"wave_id": args["wave_id"]})
 
 
 HANDLERS = {
@@ -387,11 +288,10 @@ HANDLERS = {
     "delegate_task": _delegate_task,
     "task_status": _task_status,
     "wait_for_task": _wait_for_task,
-    "start_session": _start_session,
-    "send_to_session": _send_to_session,
-    "close_session": _close_session,
-    "session_replies": _session_replies,
+    "cancel_task": _cancel_task,
+    **SESSION_HANDLERS,
     "create_wave": _create_wave,
     "spawn_wave": _spawn_wave,
+    "cancel_wave": _cancel_wave,
     **QUERY_HANDLERS,
 }

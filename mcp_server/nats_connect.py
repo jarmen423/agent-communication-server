@@ -16,6 +16,11 @@ TLS is enabled when any of: `ca_file`, `cert_file`, `key_file`, `credentials_fil
 `NATS_ALLOW_INSECURE=1` in the environment. This forces an explicit, visible
 acknowledgement that certificate verification is being disabled.
 
+Request-reply uses the per-identity inbox prefix `_INBOX.<identity>`
+(contract C1), so replies land under `_INBOX.<identity>.>` — the only inbox
+subtree hub-admin's generated permissions let that identity subscribe. See
+`inbox_prefix_for` for how the identity is chosen.
+
 Example::
 
     from nats_connect import connect_nats
@@ -51,6 +56,55 @@ def _first(explicit: Any, env_name: str) -> Any:
     if explicit is not None:
         return explicit
     return _env(env_name)
+
+
+#: Characters permitted in a hub identity (one NATS token; contract §4.1).
+_IDENTITY_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
+
+
+def validate_identity(identity: str) -> str:
+    """Return `identity` unchanged or raise ``ValueError``.
+
+    Identities are embedded in bound subjects (`hub.pub.<id>.<channel>`,
+    `hub.register.<id>`, `hub.presence.<id>`, `hub.api.<id>.<op>`), so they
+    must be exactly one NATS token drawn from `[A-Za-z0-9_-]` — no `.`,
+    `*`, `>`, spaces, or empty strings.
+    """
+    if not identity or any(c not in _IDENTITY_CHARS for c in identity):
+        raise ValueError(
+            f"invalid identity {identity!r}: must be one or more of "
+            "[A-Za-z0-9_-] (no '.', '*', '>')"
+        )
+    return identity
+
+
+def _valid(identity: Optional[str]) -> Optional[str]:
+    if identity and all(c in _IDENTITY_CHARS for c in identity):
+        return identity
+    return None
+
+
+def inbox_prefix_for(
+    *,
+    user: Optional[str] = None,
+    identity: Optional[str] = None,
+    name: Optional[str] = None,
+) -> Optional[str]:
+    """Request-reply inbox prefix for a connection (contract C1).
+
+    ``_INBOX.<id>`` where ``<id>`` is the first valid identity among: the
+    NATS ``user`` (credentials are minted per identity, so the user is the
+    permission key), the explicit ``identity``, the connection ``name``
+    (workers pass their identity as the name), and ``NATS_HUB_IDENTITY``.
+    ``None`` when none applies — nats-py then uses its default ``_INBOX``.
+    """
+    for candidate in (user, identity, name, _env("NATS_HUB_IDENTITY")):
+        ok = _valid(candidate)
+        if ok:
+            return f"_INBOX.{ok}"
+    return None
 
 
 def build_tls_context(
@@ -123,6 +177,7 @@ async def connect_nats(
     credentials_file: Optional[str] = None,
     nkeys_seed: Optional[str] = None,
     name: Optional[str] = None,
+    identity: Optional[str] = None,
     **extra: Any,
 ) -> Client:
     """Connect to NATS with auth + TLS resolved from kwargs/env.
@@ -130,6 +185,11 @@ async def connect_nats(
     Env vars honored (kwarg wins): NATS_TOKEN, NATS_USER, NATS_PASSWORD,
     NATS_CA_FILE, NATS_CERT_FILE, NATS_KEY_FILE, NATS_CREDENTIALS_FILE,
     NATS_NKEYS_SEED, NATS_TLS_INSECURE (1/true/yes), NATS_NAME.
+
+    ``identity`` (or, failing that, the NATS user, ``name`` or
+    ``NATS_HUB_IDENTITY``) picks the reply inbox prefix ``_INBOX.<identity>``
+    (see ``inbox_prefix_for``); an explicit ``inbox_prefix=`` in ``extra``
+    still wins.
 
     Returns a connected nats.aio.client.Client.
     """
@@ -186,6 +246,9 @@ async def connect_nats(
         connect_kwargs["nkeys_seed"] = nkeys_seed
     if tls_context is not None:
         connect_kwargs["tls"] = tls_context
+    prefix = inbox_prefix_for(user=user, identity=identity, name=name)
+    if prefix:
+        connect_kwargs["inbox_prefix"] = prefix
 
     # Caller-supplied extras (connect_timeout, error_cb, etc.) win last.
     connect_kwargs.update(extra)

@@ -21,10 +21,14 @@ use tracing::{debug, warn};
 
 use crate::storage::Storage;
 
+pub mod authz;
 mod handlers;
+mod scoped_reads;
 #[cfg(feature = "storage-surreal")]
 mod stats;
+mod write_authz;
 
+pub use authz::{ApiAuthz, Caller, Scope};
 use handlers::*;
 
 /// NATS subject prefix for query API.
@@ -36,13 +40,18 @@ pub const DEFAULT_LIMIT: usize = 100;
 /// Largest `limit` a list operation accepts; above this the request fails.
 pub const MAX_LIMIT: usize = 1000;
 
-/// Build a query API subject: `hub.api.<operation>`.
+/// Build a legacy query API subject: `hub.api.<operation>`.
 pub fn subject(operation: &str) -> String {
     format!("{API_PREFIX}.{operation}")
 }
 
+/// Build a bound query API subject: `hub.api.<identity>.<operation>`.
+pub fn subject_bound(identity: &str, operation: &str) -> String {
+    format!("{API_PREFIX}.{identity}.{operation}")
+}
+
 /// Generic request envelope from CLI tools.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ApiRequest {
     /// Operation name (matches the subject suffix).
     pub op: String,
@@ -115,26 +124,40 @@ pub fn encode_response(resp: &ApiResponse, max_payload: usize) -> Vec<u8> {
     .to_bytes()
 }
 
-/// Start the query API listener on the hub-server side.
+/// Start the query API listener on the hub-server side (permissive mode —
+/// equivalent to [`start_api_listener_with_authz`] with
+/// [`ApiAuthz::permissive`]).
 ///
 /// Subscribes to `hub.api.>` and dispatches to the storage backend.
 /// Each operation is handled in a spawned task — non-blocking.
 pub async fn start_api_listener(storage: Arc<dyn Storage>, nats_url: &str) -> Result<()> {
+    start_api_listener_with_authz(storage, nats_url, ApiAuthz::permissive()).await
+}
+
+/// Start the query API listener with authorization config: bound subjects
+/// `hub.api.<identity>.<op>` are scoped per [`ApiAuthz`]; legacy
+/// `hub.api.<op>` is rejected when `authz.require_bound` is set.
+pub async fn start_api_listener_with_authz(
+    storage: Arc<dyn Storage>,
+    nats_url: &str,
+    authz: ApiAuthz,
+) -> Result<()> {
     // Same env auth path as ControlPlane / HubClient (NATS_TOKEN, TLS, …).
-    let opts = crate::HubConnectOptions::from_env();
+    let opts = crate::router::hub_server_connect_opts();
     let client = crate::connect_opts::connect_with_hub_opts(nats_url, &opts).await?;
     let mut sub = client.subscribe(format!("{API_PREFIX}.>")).await?;
 
-    debug!("query API listening on {API_PREFIX}.>");
+    debug!(require_bound = authz.require_bound, admins = ?authz.admins, "query API listening on {API_PREFIX}.>");
 
     while let Some(msg) = sub.next().await {
         let storage = storage.clone();
         let client = client.clone();
+        let authz = authz.clone();
         let reply_subject = msg.reply.clone();
         let subject = msg.subject.to_string();
 
         tokio::spawn(async move {
-            let resp = handle_request(&storage, &subject, &msg.payload).await;
+            let resp = handle_request_authorized(&storage, &subject, &msg.payload, &authz).await;
             if let Some(reply) = reply_subject {
                 let max_payload = client.server_info().max_payload;
                 let bytes = encode_response(&resp, max_payload);
@@ -150,24 +173,88 @@ pub async fn start_api_listener(storage: Arc<dyn Storage>, nats_url: &str) -> Re
 
 /// Dispatch one API request (`subject` = `hub.api.<op>`, `payload` = JSON
 /// [`ApiRequest`]) to the storage backend. Public so the API can be
-/// exercised without NATS.
+/// exercised without NATS. This is the permissive entry point — no caller
+/// identity or authorization is applied (pre-T1 semantics).
 pub async fn handle_request(
     storage: &Arc<dyn Storage>,
     subject: &str,
     payload: &[u8],
+) -> ApiResponse {
+    handle_request_authorized(storage, subject, payload, &ApiAuthz::permissive()).await
+}
+
+/// Dispatch one API request with caller identity + authorization.
+///
+/// The subject carries the caller: `hub.api.<identity>.<op>` binds the
+/// caller to `<identity>` (reads are scoped, writes are owner-scoped),
+/// while `hub.api.<op>` is the legacy form: rejected under
+/// `authz.require_bound`, privileged on a permissive hub, and an anonymous
+/// non-admin ([`Scope::Anonymous`]) once `--api-admin` is set.
+pub async fn handle_request_authorized(
+    storage: &Arc<dyn Storage>,
+    subject: &str,
+    payload: &[u8],
+    authz: &ApiAuthz,
 ) -> ApiResponse {
     let req: ApiRequest = match serde_json::from_slice(payload) {
         Ok(r) => r,
         Err(e) => return ApiResponse::err(format!("bad request: {e}")),
     };
 
-    // Extract operation from subject (hub.api.<op>) or req.op
-    let op = subject
-        .strip_prefix(&format!("{API_PREFIX}."))
-        .unwrap_or(&req.op);
+    let (caller, op) = match authz.parse_subject(subject) {
+        Ok((caller, op)) => (caller, op),
+        Err(resp) => return resp,
+    };
+    let op = if op.is_empty() {
+        req.op.as_str()
+    } else {
+        op.as_str()
+    };
 
-    debug!(op, "query API request");
+    debug!(op, ?caller, "query API request");
 
+    // Writes are gated *before* dispatch — post-filtering cannot undo a
+    // mutation the handler already applied. Non-admins may only mutate
+    // waves/sessions they own (see `write_authz`); an anonymous legacy
+    // caller on an enforcing hub may not write at all.
+    let scope = authz.scope(&caller);
+    if ApiAuthz::is_write_op(op) {
+        match scope {
+            Scope::Full => {}
+            Scope::Identity(identity) => {
+                if !authz
+                    .write_allowed(storage.as_ref(), identity, op, &req.params)
+                    .await
+                {
+                    return ApiResponse::err(format!(
+                        "forbidden: '{op}' — non-admin callers may only modify waves/sessions \
+                         they own (admins: --api-admin)"
+                    ));
+                }
+            }
+            Scope::Anonymous => {
+                return ApiResponse::err(format!(
+                    "forbidden: '{op}' — legacy hub.api.<op> callers own nothing on a hub \
+                     with --api-admin; call hub.api.<identity>.{op} instead"
+                ));
+            }
+        }
+    }
+
+    let resp = if scope != Scope::Full && scoped_reads::is_scoped_list(op) {
+        // Over-fetch so invisible rows don't shorten the caller's page.
+        scoped_reads::fetch_visible(storage, &req, op, scope).await
+    } else {
+        dispatch(storage, &req, op).await
+    };
+    authz
+        .authorize(storage, &caller, op, &req.params, resp)
+        .await
+}
+
+/// Route `req` to the storage handler for `op` (subject-derived; falls back
+/// to `req.op` when the subject is not an api subject).
+async fn dispatch(storage: &Arc<dyn Storage>, req: &ApiRequest, op: &str) -> ApiResponse {
     let s: &dyn Storage = storage.as_ref();
     let p = &req.params;
     match op {
@@ -180,12 +267,16 @@ pub async fn handle_request(
         "wave.list_tasks" => wave_list_tasks(s, p).await,
         "wave.update_task_status" => wave_update_task_status(s, p).await,
         "wave.get_task" => wave_get_task(s, p).await,
+        "wave.spawn" => wave_spawn(s, p).await,
+        "wave.status" => wave_status(s, p).await,
+        "wave.cancel" => wave_cancel(s, p).await,
 
         // ── Sessions ───────────────────────────────────────────
         "session.create" => session_create(s, p).await,
         "session.update_status" => session_update_status(s, p).await,
         "session.get" => session_get(s, p).await,
         "session.list" => session_list(s, p).await,
+        "session.set_backend_ctx" => session_set_backend_ctx(s, p).await,
 
         // ── Agents ─────────────────────────────────────────────
         "agent.find" => agent_find(s, p).await,

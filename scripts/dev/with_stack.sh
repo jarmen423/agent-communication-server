@@ -38,9 +38,19 @@ export NATS_URL="nats://127.0.0.1:$port"
 export TEST_NATS_URL="$NATS_URL"
 export NATS_HUB_TEST_STACK=1
 
+# Bound-identity mode (iteration 2 / T1): set NATS_HUB_REQUIRE_BOUND=1 to run
+# hub-server with --require-bound-identity + a test API admin. API clients then
+# need an identity — ApiClient/tools pick up NATS_HUB_IDENTITY=test-admin, and
+# tests can branch on the same env var for mode-dependent assertions.
+HUB_ARGS=(--nats-url "$NATS_URL" --db-path "$tmp/db")
+if [[ -n "${NATS_HUB_REQUIRE_BOUND:-}" ]]; then
+  HUB_ARGS+=(--require-bound-identity --api-admin test-admin)
+  export NATS_HUB_IDENTITY=test-admin
+fi
+
 echo "==> hub-server (db: $tmp/db)"
 RUST_LOG="${HUB_LOG:-warn}" "$CARGO_TARGET_DIR/debug/hub-server" \
-  --nats-url "$NATS_URL" --db-path "$tmp/db" >"$tmp/hub.log" 2>&1 &
+  "${HUB_ARGS[@]}" >"$tmp/hub.log" 2>&1 &
 pids+=("$!")
 sleep 1
 if ! kill -0 "${pids[-1]}" 2>/dev/null; then
