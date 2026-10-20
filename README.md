@@ -152,5 +152,10 @@ Feature flags, the `Storage` trait and embedding notes are in
 ## License
 
 <!-- license:start -->
-BSL 1.1 — converts to Apache 2.0 on 2030-01-01. The SurrealDB Rust SDK is Apache 2.0. (A `LICENSE` file is still to be added; the plugin manifests currently say MIT. Tracked in `refocus-iteration-2.md` §7; see [`LICENSE.md`](LICENSE.md).)
+nats-hub is licensed by path. [`LICENSING.md`](LICENSING.md) has the full map.
+
+- **Client side: Apache-2.0.** This covers the MCP server and plugins, the Python workers and bridges, the remote installers, the Rust client library and every client CLI (`hub-delegate`, `hub-watch`, `hub-tui`, …).
+- **Server side: BUSL-1.1.** This covers `hub-server`, `hub-admin` and what only they run: router, query API, orchestrator, storage, analytics and metrics, the WS bridge and visualizer, and the deploy configs. You may use it in production, including across your organization. You may not offer it, or a service substantially derived from it, to third parties as a hosted or managed service. Each version converts to Apache-2.0 four years after its first public release.
+
+Texts are in [`LICENSES/`](LICENSES/), and the machine-readable map is [`REUSE.toml`](REUSE.toml). The default build embeds SurrealDB, which is under SurrealDB's own BSL. Its grant forbids offering SurrealDB as a database service. nats-hub never exposes the database, and the `no-storage` build doesn't include it.
 <!-- license:end -->

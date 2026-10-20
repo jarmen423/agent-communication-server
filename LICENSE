@@ -1,0 +1,19 @@
+nats-hub is licensed by path. Different parts of this repository are under
+different licenses:
+
+  * Client side (MCP server and plugins, Python workers and bridges, the
+    Rust client library and client CLIs, installers): Apache License 2.0.
+    Full text: LICENSES/Apache-2.0.txt
+
+  * Server side (hub-server, hub-admin and the code and assets only they
+    run): Business Source License 1.1, with an Additional Use Grant that
+    allows production use except offering it to others as a hosted service.
+    Each version converts to Apache License 2.0 four years after its first
+    public release.
+    Full text and parameters: LICENSES/BUSL-1.1.txt
+
+LICENSING.md says which paths fall under which license, in plain language.
+REUSE.toml holds the same mapping in machine-readable form
+(https://reuse.software).
+
+Copyright (c) 2026 Agent Memory Labs

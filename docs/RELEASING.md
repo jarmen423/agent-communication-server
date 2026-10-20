@@ -8,10 +8,10 @@ Nothing is built or published from a laptop.
 
 | Asset | Contents |
 |---|---|
-| `nats-hub-<tag>-x86_64-unknown-linux-gnu.tar.gz` | Every `hub-*` binary (`hub-server`, `hub-delegate`, `hub-tui`, …), `README.md`, any `LICENSE*` |
+| `nats-hub-<tag>-x86_64-unknown-linux-gnu.tar.gz` | Every `hub-*` binary (`hub-server`, `hub-delegate`, `hub-tui`, …), `README.md`, and the license files (`LICENSE`, `NOTICE`, `LICENSING.md`, `LICENSES/`). `hub-server` and `hub-admin` are BUSL-1.1, the rest Apache-2.0 (see [`LICENSING.md`](../LICENSING.md)) |
 | `nats-hub-<tag>-aarch64-unknown-linux-gnu.tar.gz` | Same, linux arm64 |
 | `nats-hub-<tag>-aarch64-apple-darwin.tar.gz` | Same, macOS Apple Silicon |
-| `nats-hub-remote-<tag>.tar.gz` | Python remote-worker bundle: the files in `packaging/remote/FILES.txt` plus `install.sh` |
+| `nats-hub-remote-<tag>.tar.gz` | Python remote-worker bundle (Apache-2.0): the files in `packaging/remote/FILES.txt` plus `install.sh` and the license files |
 | `SHA256SUMS` | `sha256  filename` for every tarball above |
 
 Each tarball unpacks to one directory named like the tarball. The Linux

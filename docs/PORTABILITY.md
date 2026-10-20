@@ -83,7 +83,7 @@ the DB, other processes query it over NATS through the query API (`ApiClient`,
 ## BSL note (SurrealDB)
 
 This section is about **SurrealDB's** license, not nats-hub's. For nats-hub's
-own license, see [`LICENSE.md`](../LICENSE.md).
+own license, see [`LICENSING.md`](../LICENSING.md).
 
 SurrealDB's core is under the Business Source License. The `Storage` trait
 keeps all DB access behind a stable interface, so the bus can be embedded

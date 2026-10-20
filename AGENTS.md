@@ -127,8 +127,8 @@ scripts/install_remote.sh  — install client CLIs from a GitHub release (sha256
 scripts/dogfood_*.sh       — auth/TLS end-to-end dogfood scripts
 packaging/remote/          — thin Python bundle for remote workers (FILES.txt + install.sh)
 packaging/release/         — release asset packaging (used by .github/workflows/release.yml)
-packaging/license/         — set_license.py (license decision pending, see LICENSE.md)
 deploy/systemd/, config/   — unit files, nats-server configs (prod example, TLS example)
+LICENSE, LICENSING.md, REUSE.toml, LICENSES/ — licensed by path: Apache-2.0 client, BUSL-1.1 server
 .github/workflows/         — ci.yml (every push), release.yml (v* tags; dry runs)
 docs/                      — living docs; docs/archive/ = finished plans and handoffs
 ```
@@ -246,6 +246,7 @@ over `wss://` (or `tls://`/`nats://` on a trusted network).
 - **File size**: keep files under ~400 LOC. Split into focused modules.
 - **Tests that need NATS** read `NATS_URL` and never hard-code `:4222`.
 - **Plugins**: edit `mcp_server/`, then run `scripts/dev/sync_plugins.sh`. Never edit the plugin copies.
+- **Licensing**: by path (`LICENSING.md`, `REUSE.toml`). Client code is Apache-2.0 and server code BUSL-1.1. A new Rust file under `src/` is BUSL-1.1 unless you add it to the client list in `REUSE.toml`. Don't add per-file license headers.
 
 ## Testing
 
@@ -277,7 +278,7 @@ Python (`tests/python/`): `test_runtime_contract.py` (reply contract),
 `test_worker_{claude,codex,headless,acp,supervisor}.py` (fake-CLI backend
 tests), `test_mcp_server.py` / `test_mcp_followups.py` (MCP server),
 `test_smoke.py` (live echo round trip), and `test_install_release.py` /
-`test_license_switch.py` (release installers, license script). Fake CLIs live
+`test_licensing.py` (release installers, license map). Fake CLIs live
 in `tests/python/fixtures/`.
 
 ## Feature Flags
@@ -316,4 +317,4 @@ in `tests/python/fixtures/`.
 - `docs/HOSTED_PLAN.md`: hosted ACS (tenancy, auth, `acs` connector, phases)
 - `docs/DELIVERY.md`: durable delivery (JetStream, `--durable`)
 - `docs/archive/`: finished phase plans and handoffs (historical; see its README)
-- `LICENSE.md`: license decision status (pending)
+- `LICENSING.md`: the license split by path (Apache-2.0 client, BUSL-1.1 server); `REUSE.toml` is the machine-readable map

@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/jarmen423/agent-communication-server",
   "repository": "https://github.com/jarmen423/agent-communication-server",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["nats", "multi-agent", "orchestration", "coordination"],
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json",

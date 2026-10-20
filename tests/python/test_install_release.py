@@ -22,6 +22,9 @@ PACKAGE = REPO / "packaging" / "release" / "package.sh"
 INSTALL_REMOTE = REPO / "scripts" / "install_remote.sh"
 INSTALL_BUNDLE = REPO / "packaging" / "remote" / "install.sh"
 VERSION = "v9.9.9-test"
+LICENSE_FILES = (
+    "LICENSE", "NOTICE", "LICENSING.md", "LICENSES/Apache-2.0.txt", "LICENSES/BUSL-1.1.txt",
+)
 
 TARGETS = {
     ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
@@ -109,6 +112,10 @@ def test_package_layout(fake_release: Path) -> None:
     bundle = _run(["tar", "-tzf", str(fake_release / f"nats-hub-remote-{VERSION}.tar.gz")])
     assert f"nats-hub-remote-{VERSION}/remote_agent_adapter.py" in bundle.stdout
     assert f"nats-hub-remote-{VERSION}/install.sh" in bundle.stdout
+    bundle_entries = {e.rstrip("/") for e in bundle.stdout.split()}
+    for root, listing in ((top, entries), (f"nats-hub-remote-{VERSION}", bundle_entries)):
+        for rel in LICENSE_FILES:
+            assert f"{root}/{rel}" in listing, f"{rel} missing from {root}"
 
 
 def test_install_remote_from_release(fake_release: Path, home_env: dict[str, str]) -> None:
