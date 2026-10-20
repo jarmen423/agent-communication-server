@@ -3,6 +3,8 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+use super::ids::validate_id;
+
 /// Task definition from a `tasks.json` file passed to `hub-wave create`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WaveTaskInput {
@@ -31,6 +33,10 @@ fn scopes_overlap(a: &str, b: &str) -> bool {
 pub fn validate_tasks(tasks: &[WaveTaskInput]) -> Result<()> {
     if tasks.is_empty() {
         bail!("tasks list must not be empty");
+    }
+
+    for task in tasks {
+        validate_id("task_id", &task.task_id)?;
     }
 
     let ids: std::collections::HashSet<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
@@ -80,8 +86,12 @@ fn check_dependency_cycles(tasks: &[WaveTaskInput]) -> Result<()> {
     use std::collections::{HashMap, HashSet};
 
     // Kahn's algorithm: repeatedly resolve tasks with no unsatisfied deps.
+    // Dependencies are deduplicated (`["root", "root"]` is one edge), and a
+    // task counts as resolved only when its last dependency is actually
+    // removed — so a repeated dependency can't resolve a node twice and mask
+    // a cycle elsewhere.
     let mut unresolved: HashMap<&str, HashSet<&str>> = HashMap::new();
-    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut dependents: HashMap<&str, HashSet<&str>> = HashMap::new();
     for task in tasks {
         unresolved.insert(
             task.task_id.as_str(),
@@ -91,7 +101,7 @@ fn check_dependency_cycles(tasks: &[WaveTaskInput]) -> Result<()> {
             dependents
                 .entry(dep.as_str())
                 .or_default()
-                .push(task.task_id.as_str());
+                .insert(task.task_id.as_str());
         }
     }
 
@@ -100,20 +110,21 @@ fn check_dependency_cycles(tasks: &[WaveTaskInput]) -> Result<()> {
         .filter(|(_, deps)| deps.is_empty())
         .map(|(id, _)| *id)
         .collect();
-    let mut resolved = 0usize;
+    let mut resolved: HashSet<&str> = HashSet::new();
     while let Some(id) = queue.pop() {
-        resolved += 1;
+        if !resolved.insert(id) {
+            continue;
+        }
         for dependent in dependents.get(id).into_iter().flatten() {
             if let Some(deps) = unresolved.get_mut(dependent) {
-                deps.remove(id);
-                if deps.is_empty() {
+                if deps.remove(id) && deps.is_empty() {
                     queue.push(dependent);
                 }
             }
         }
     }
 
-    if resolved != tasks.len() {
+    if resolved.len() != tasks.len() {
         let mut stuck: Vec<&str> = unresolved
             .iter()
             .filter(|(_, deps)| !deps.is_empty())
@@ -193,5 +204,38 @@ mod tests {
         assert!(format!("{err}").contains("a"), "{err}");
         assert!(format!("{err}").contains("b"), "{err}");
         assert!(!format!("{err}").contains("root"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_dependencies_do_not_mask_a_cycle() {
+        // Regression: `x` listing `root` three times used to be counted as
+        // resolved three times, which made up for the stuck A↔B pair.
+        let tasks = vec![
+            task("root", &["src/r"], &[]),
+            task("x", &["src/x"], &["root", "root", "root"]),
+            task("a", &["src/a"], &["b"]),
+            task("b", &["src/b"], &["a"]),
+        ];
+        let err = validate_tasks(&tasks).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("cycle"), "{msg}");
+        assert!(msg.contains("a, b"), "{msg}");
+    }
+
+    #[test]
+    fn duplicate_dependencies_alone_are_fine() {
+        let tasks = vec![
+            task("root", &["src/r"], &[]),
+            task("x", &["src/x"], &["root", "root", "root"]),
+        ];
+        validate_tasks(&tasks).unwrap();
+    }
+
+    #[test]
+    fn rejects_task_ids_that_are_not_one_token() {
+        for bad in ["a.b", "a--b", "", "a b"] {
+            let tasks = vec![task(bad, &["src/a"], &[])];
+            assert!(validate_tasks(&tasks).is_err(), "{bad:?}");
+        }
     }
 }

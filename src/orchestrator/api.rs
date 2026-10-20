@@ -26,6 +26,18 @@ pub enum OrchCommand {
         wave_id: String,
         reply: oneshot::Sender<Result<Value, String>>,
     },
+    /// `wave.update_task_status` on a running wave: applied through the
+    /// orchestrator's state machine (only a `running` task may move, to
+    /// `done` / `failed` / `cancelled`, with the same effects as the
+    /// worker's own result — dependents dispatch, fail-fast, cancel DM),
+    /// never written to storage behind its back.
+    UpdateTask {
+        wave_id: String,
+        task_id: String,
+        status: String,
+        result: Option<String>,
+        reply: oneshot::Sender<Result<Value, String>>,
+    },
 }
 
 /// Clone-able sender into the orchestrator's command queue.

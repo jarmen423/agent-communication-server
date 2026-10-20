@@ -309,6 +309,7 @@ async fn main() -> Result<()> {
                 .unwrap_or(nats_hub::orchestrator::DEFAULT_LIVENESS_SECS);
             let orch_config = nats_hub::orchestrator::OrchestratorConfig {
                 liveness_ttl: std::time::Duration::from_secs(liveness_secs),
+                require_bound_identity: args.require_bound_identity,
             };
             match nats_hub::orchestrator::WaveOrchestrator::start(
                 storage.clone(),

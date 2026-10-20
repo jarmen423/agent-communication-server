@@ -119,7 +119,8 @@ QUERY_TOOLS = [
             "required": ["wave_id"],
             "properties": {
                 "wave_id": {"type": "string"},
-                "timeout": {"type": "integer", "description": "Overall wave timeout secs", "default": 3600},
+                "timeout": {"type": "integer", "description": "Overall wave timeout secs (1 s .. 7 days)",
+                            "default": 3600, "minimum": 1, "maximum": 604800},
             },
         },
     ),
