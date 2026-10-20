@@ -312,7 +312,7 @@ async fn e2e_rust_worker_cancel_kills_group_and_reports_cancelled() {
     // Unknown id: ignored. Queued task: cancelled at once, never runs.
     me.send(&cancel("no-such-task")).await.unwrap();
     me.send(&cancel(&queued.meta.id)).await.unwrap();
-    let q = recv_until(&mut rx, 10, |e| is_task_result(e, &queued.meta.id)).await;
+    let q = recv_until(&mut rx, 10, |e| is_task_result(e, &queued.meta.id, &worker)).await;
     assert_eq!(
         q.payload,
         json!({"status": "cancelled", "task_id": queued.meta.id, "result": null, "error": "cancelled"})
@@ -324,7 +324,10 @@ async fn e2e_rust_worker_cancel_kills_group_and_reports_cancelled() {
 
     let started = Instant::now();
     me.send(&cancel(&running.meta.id)).await.unwrap();
-    let r = recv_until(&mut rx, 10, |e| is_task_result(e, &running.meta.id)).await;
+    let r = recv_until(&mut rx, 10, |e| {
+        is_task_result(e, &running.meta.id, &worker)
+    })
+    .await;
     assert!(started.elapsed() < Duration::from_secs(10));
     assert_eq!(r.meta.reply_to.as_deref(), Some(running.meta.id.as_str()));
     assert_eq!(r.payload["status"], "cancelled");

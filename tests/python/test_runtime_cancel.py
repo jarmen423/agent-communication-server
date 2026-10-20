@@ -49,10 +49,19 @@ def test_cancel_running_and_queued_tasks(tmp_path):
 
             # Unknown task: ignored (no reply, worker keeps running the task).
             await send_cancel(nc, "pytest", identity, "no-such-task")
+            # A third party may not cancel someone else's task (C5).
+            await send_cancel(nc, "mallory", identity, running_id)
+            await send_cancel(nc, "mallory", identity, queued_id)
+            try:
+                early = await wait_result(queued_sub, queued_id, within=1.0)
+            except Exception:  # noqa: BLE001 - nats TimeoutError: nothing arrived
+                early = None
+            assert early is None, f"third-party cancel was honoured: {early}"
             # Queued task: cancelled without ever running.
             await send_cancel(nc, "pytest", identity, queued_id)
             queued = await wait_result(queued_sub, queued_id, within=10)
-            assert all(pid_alive(p) for p in pids.values()), "unknown/queued cancel hit the running task"
+            assert all(pid_alive(p) for p in pids.values()), \
+                "unknown/queued/third-party cancel hit the running task"
 
             loop = asyncio.get_running_loop()
             t0 = loop.time()

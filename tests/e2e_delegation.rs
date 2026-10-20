@@ -135,7 +135,7 @@ fn assert_contract(seen: &[Envelope], worker: &str, expect_result: &str) {
     }
     let results: Vec<_> = from_worker
         .iter()
-        .filter(|e| is_task_result(e, task_id))
+        .filter(|e| is_task_result(e, task_id, worker))
         .collect();
     assert_eq!(results.len(), 1, "exactly one terminal result");
     assert_eq!(
@@ -221,7 +221,7 @@ async fn run_task(url: &str, worker: &str, prompt: &str, secs: u64) -> (String, 
     .to(worker);
     let id = task.meta.id.clone();
     me.send(&task).await.unwrap();
-    let result = recv_until(&mut rx, secs, |e| is_task_result(e, &id)).await;
+    let result = recv_until(&mut rx, secs, |e| is_task_result(e, &id, worker)).await;
     let _ = me.drain().await;
     (id, result)
 }

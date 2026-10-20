@@ -66,6 +66,11 @@ wait_for_task(task_id, timeout=120)
   `running | done | error | cancelled`. It also has `last_status`, recent
   `events`, and `result` once the task has finished.
 - **`delegate_task`** is `delegate_async` plus `wait_for_task` in one call.
+  If it times out, it sends the worker a cancel, so nothing keeps running
+  unattended. Blocking timeouts are capped at 3600 s.
+- A result counts only if it comes from the worker you delegated to; a
+  result from anyone else is ignored. A tracker that is evicted (too many
+  tracked tasks) ends in state `evicted`, so waiters return instead of timing out.
 
 The terminal result payload is
 `{"status": "done"|"error"|"cancelled", "task_id", "result", "error"}`.
@@ -85,7 +90,9 @@ cancel_task(task_id, timeout=30)      → wait longer for the worker to confirm
   support, or a busy one), you get an **error** with the current snapshot.
   The task isn't marked cancelled locally, because it may still finish. Call
   `cancel_task` again, or `wait_for_task`.
-- You can only cancel tasks that this MCP server delegated.
+- You can only cancel tasks that this MCP server delegated, or session turns
+  it sent (the `message_id` from `start_session` / `send_to_session`).
+- Workers honour a cancel only from the identity that sent the task.
 
 ## 4. Your inbox
 
@@ -110,9 +117,10 @@ wait_for_message(timeout=60, since_seq=<last_seq>)
 
 ```
 start_session(worker="claude-1", prompt="Help me refactor foo.rs")
-  → {session_id, channel}
+  → {session_id, channel, message_id}
 session_replies(session_id)           → the worker's responses (seq'd)
-send_to_session(session_id, "Now add tests")
+send_to_session(session_id, "Now add tests")  → {session_id, message_id}
+cancel_task(message_id)               → stop that turn (queued or running)
 close_session(session_id)
 ```
 

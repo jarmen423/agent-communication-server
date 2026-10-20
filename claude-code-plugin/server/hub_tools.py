@@ -10,6 +10,8 @@ from mcp.types import Tool
 
 from hub_query_tools import QUERY_TOOLS
 
+MAX_WAIT_SECS = 3600  # cap for every blocking timeout argument
+
 TOOLS = [
     # ── Discovery ───────────────────────────────────────────────
     Tool(
@@ -184,7 +186,8 @@ TOOLS = [
             "type": "object",
             "required": ["timeout"],
             "properties": {
-                "timeout": {"type": "number", "minimum": 0, "description": "Seconds to wait"},
+                "timeout": {"type": "number", "minimum": 0, "maximum": MAX_WAIT_SECS,
+                            "description": f"Seconds to wait (max {MAX_WAIT_SECS})"},
                 "from": {
                     "type": "string",
                     "description": "Only match messages from this sender (filter, not identity)",
@@ -222,7 +225,8 @@ TOOLS = [
         name="delegate_task",
         description=(
             "Delegate a task and block until the worker's terminal result "
-            "arrives (or timeout). Equivalent to delegate_async + wait_for_task. "
+            "arrives (or timeout, which also sends the worker a cancel). "
+            "Equivalent to delegate_async + wait_for_task. "
             "Ignores status/event progress envelopes; returns only the real "
             "result envelope (kind=message correlated to the task id)."
         ),
@@ -232,7 +236,10 @@ TOOLS = [
             "properties": {
                 "to": {"type": "string", "description": "Worker agent identity"},
                 "prompt": {"type": "string", "description": "Task/prompt to send"},
-                "timeout": {"type": "number", "exclusiveMinimum": 0, "description": "Timeout in seconds", "default": 120},
+                "timeout": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_WAIT_SECS,
+                            "default": 120,
+                            "description": (f"Timeout in seconds (default 120, max {MAX_WAIT_SECS}); "
+                                            "on timeout the task is cancelled")},
             },
         },
     ),
@@ -264,14 +271,16 @@ TOOLS = [
             "required": ["task_id", "timeout"],
             "properties": {
                 "task_id": {"type": "string", "description": "task_id from delegate_async"},
-                "timeout": {"type": "number", "minimum": 0, "description": "Seconds to wait"},
+                "timeout": {"type": "number", "minimum": 0, "maximum": MAX_WAIT_SECS,
+                            "description": f"Seconds to wait (max {MAX_WAIT_SECS})"},
             },
         },
     ),
     Tool(
         name="cancel_task",
         description=(
-            "Cancel a task started via delegate_async/delegate_task. DMs the "
+            "Cancel a task started via delegate_async/delegate_task, or a "
+            "session turn (the message_id from start_session/send_to_session). DMs the "
             "worker a control {action: cancel, task_id}; the worker kills the "
             "running backend and publishes a terminal result with status "
             "'cancelled'. Waits up to timeout seconds and returns the terminal "
@@ -282,7 +291,8 @@ TOOLS = [
             "type": "object",
             "required": ["task_id"],
             "properties": {
-                "task_id": {"type": "string", "description": "task_id from delegate_async"},
+                "task_id": {"type": "string",
+                            "description": "task_id from delegate_async, or a session turn's message_id"},
                 "timeout": {
                     "type": "number", "minimum": 0, "maximum": 120, "default": 10,
                     "description": "Seconds to wait for the cancelled result (default 10)",
@@ -297,7 +307,8 @@ TOOLS = [
             "Start a stateful multi-turn session with a worker agent. Sends "
             "session_start to the worker's inbox and returns the session ID. "
             "Use send_to_session for follow-ups, session_replies to read what "
-            "the worker says back, and close_session when done."
+            "the worker says back, and close_session when done. Returns "
+            "message_id: the first turn's id, accepted by cancel_task."
         ),
         inputSchema={
             "type": "object",
@@ -308,13 +319,17 @@ TOOLS = [
                 "model": {"type": "string", "description": "Model to use (optional)"},
                 "provider": {"type": "string", "description": "Provider to use (optional)"},
                 "cwd": {"type": "string", "description": "Working directory (optional)"},
-                "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30},
+                "timeout": {"type": "integer", "minimum": 1, "maximum": MAX_WAIT_SECS,
+                            "description": "Timeout in seconds", "default": 30},
             },
         },
     ),
     Tool(
         name="send_to_session",
-        description="Send a follow-up message on an existing session channel.",
+        description=(
+            "Send a follow-up message on an existing session channel. Returns "
+            "the turn's message_id (pass it to cancel_task to stop that turn)."
+        ),
         inputSchema={
             "type": "object",
             "required": ["session_id", "message"],

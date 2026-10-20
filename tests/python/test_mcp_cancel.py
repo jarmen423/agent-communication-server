@@ -161,7 +161,7 @@ def test_tracker_terminal_states():
         for status, want in (("done", "done"), ("error", "error"),
                              ("cancelled", "cancelled"), (None, "done")):
             tr = hub_buffers.TaskTracker("t", "task.t", "w")
-            await tr.feed({"meta": {"kind": "message", "reply_to": "t"},
+            await tr.feed({"meta": {"kind": "message", "reply_to": "t", "from": "w"},
                            "payload": {"status": status, "task_id": "t"}})
             assert tr.state == want and tr.done.is_set()
 

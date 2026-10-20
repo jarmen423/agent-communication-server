@@ -3,7 +3,9 @@
 //! The command runs in its own process group. The prompt is streamed to its
 //! stdin while stdout/stderr are drained concurrently (no pipe deadlock).
 //! A timeout or a cancel (refocus-iteration-2.md §4.2) SIGKILLs the whole
-//! group and reaps the child before returning.
+//! group and reaps the child before returning. If the future is dropped
+//! mid-run (the worker is stopping: SIGTERM / Ctrl-C), [`GroupGuard`] kills
+//! the group too, so no grandchild outlives the worker.
 
 use anyhow::{Context, Result};
 use std::future::Future;
@@ -68,6 +70,9 @@ async fn run(
     let mut child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn command: {command}"))?;
+    // Declared after `child`, so on drop it runs first: the leader is not
+    // reaped yet and its pid still names the group.
+    let mut guard = GroupGuard::new(child.id());
 
     enum Ended {
         Finished(Result<(ExitStatus, Vec<u8>, Vec<u8>)>),
@@ -92,7 +97,10 @@ async fn run(
     };
 
     let (status, stdout, stderr) = match ended {
-        Ended::Finished(res) => res?,
+        Ended::Finished(res) => {
+            guard.disarm(); // the leader is reaped: its pid may be reused
+            res?
+        }
         Ended::TimedOut(limit) => {
             kill_tree(&mut child).await;
             anyhow::bail!("command timed out after {}s: {command}", limit.as_secs());
@@ -155,16 +163,48 @@ async fn collect_output(
 
 /// SIGKILL the child's process group (unix), then the child itself, and reap it.
 async fn kill_tree(child: &mut Child) {
-    #[cfg(unix)]
     if let Some(pid) = child.id() {
-        let _ = tokio::process::Command::new("kill")
-            .args(["-KILL", "--", &format!("-{pid}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
+        kill_group(pid);
     }
     let _ = child.kill().await;
+}
+
+/// SIGKILL process group `pgid` (the child was spawned with
+/// `process_group(0)`, so its pid is the group id). No-op off unix.
+fn kill_group(pgid: u32) {
+    #[cfg(unix)]
+    if let Ok(pgid) = libc::pid_t::try_from(pgid) {
+        if pgid > 1 {
+            // SAFETY: killpg only sends a signal; any pgid value is memory-safe.
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
+}
+
+/// Kills the command's process group when dropped while armed — i.e. when
+/// the run is abandoned (worker shutdown) rather than finished.
+struct GroupGuard(Option<u32>);
+
+impl GroupGuard {
+    fn new(pgid: Option<u32>) -> Self {
+        Self(pgid)
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0.take() {
+            kill_group(pgid);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -187,5 +227,59 @@ mod tests {
             ExecOutcome::Cancelled
         );
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// Dropping a running execution (worker shutdown) kills the whole group.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_the_run_kills_the_group() {
+        let dir = std::env::temp_dir().join(format!("hub-worker-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("grandchild.pid");
+        let script = dir.join("spawn.sh");
+        std::fs::write(
+            &script,
+            format!("sleep 60 &\necho $! > {}\nwait\n", pidfile.display()),
+        )
+        .unwrap();
+        let cmd = format!("sh {}", script.display());
+        let never = std::future::pending::<()>();
+        let run = execute_command(&cmd, "", None, never);
+        let pid: i32 = tokio::select! {
+            _ = run => panic!("command finished early"),
+            pid = async {
+                loop {
+                    if let Ok(t) = std::fs::read_to_string(&pidfile) {
+                        if let Ok(pid) = t.trim().parse() {
+                            break pid;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            } => pid,
+        }; // `run` is dropped here
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // SAFETY: kill(pid, 0) only probes for existence.
+        while unsafe { libc::kill(pid, 0) } == 0 && !is_zombie(pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild {pid} survived"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    fn is_zombie(pid: i32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|s| {
+                s.rsplit(')')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start()
+                    .starts_with('Z')
+            })
+            .unwrap_or(false)
     }
 }

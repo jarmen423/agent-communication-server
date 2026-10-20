@@ -144,8 +144,16 @@ def test_presence_heartbeat_marks_ready(sup, monkeypatch):
     async def scenario():
         async def heartbeat():
             await asyncio.sleep(0.5)
-            env = {"meta": {"from": "fake-4", "kind": "status"}, "payload": {"identity": "fake-4"}}
-            await sup._on_presence(SimpleNamespace(data=json.dumps(env).encode()))
+            # A spoofed heartbeat (claims fake-4 in meta/payload, but published
+            # on another identity's subject) must not mark fake-4 ready.
+            spoof = {"meta": {"from": "fake-4", "kind": "status"},
+                     "payload": {"identity": "fake-4"}}
+            await sup._on_presence(SimpleNamespace(subject="hub.presence.mallory",
+                                                   data=json.dumps(spoof).encode()))
+            assert not sup.children["fake-4"].ready
+            env = {"meta": {"from": "whoever", "kind": "status"}, "payload": {}}
+            await sup._on_presence(SimpleNamespace(subject="hub.presence.fake-4",
+                                                   data=json.dumps(env).encode()))
 
         hb = asyncio.create_task(heartbeat())
         res = await sup._spawn("fake-4", "fake")
@@ -154,6 +162,13 @@ def test_presence_heartbeat_marks_ready(sup, monkeypatch):
 
     res = _run(scenario())
     assert res["ready"] is True and res["status"] == "started"
+
+
+def test_presence_identity_from_subject_only():
+    assert ws.presence_identity("hub.presence.alice") == "alice"
+    assert ws.presence_identity("hub.presence") is None
+    assert ws.presence_identity("hub.presence.a.b") is None
+    assert ws.presence_identity("hub.register.alice") is None
 
 
 def test_silent_worker_reports_pending_presence(sup, monkeypatch):
