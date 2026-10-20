@@ -47,6 +47,30 @@ finished task ids are ignored, with a debug log and no reply.
 The runtime's inbox callback never blocks: envelopes are queued and run one at
 a time (`worker_backends/inbox.py`), and a cancel is applied immediately. A
 queued delegated task is answered `cancelled` at once and never runs.
+Session-channel turns (`session_send`) go through the same queue, so a queued
+follow-up turn is cancellable as soon as it arrives.
+
+**Who may cancel (C5).** A cancel is honoured only when its `meta.from` equals
+the `meta.from` of the task envelope it names; anyone else's cancel is ignored
+(logged). On a permissive hub `meta.from` is self-asserted, so this is best
+effort; on a `--require-bound-identity` hub the router stamps it from the
+subject and the check is real. Delegators apply the same rule to results:
+`hub-delegate`, `HubClient` users of `is_task_result(env, task_id, worker)`
+and the MCP server accept a terminal result only from the worker they
+delegated to.
+
+**Re-dispatch (C3).** A `session_start` for a session whose turn is still
+queued or running (an orchestrator re-dispatch after a restart) does not start
+a second run. Its envelope id becomes an alias of the in-flight turn, so a
+cancel by either id stops it. Both the Python runtime and `hub-worker` do this.
+Session ids are opaque (wave tasks use `<wave_id>--<task_id>`); a backend that
+turns a session id into a directory name accepts only a single safe path
+component.
+
+**Exactly one terminal result.** Once a turn has started publishing its
+result, a later failure (for example the status publish failing) is logged and
+never answered with a second result; a cancel that arrives after the result is
+ignored.
 
 | Backend type | What cancel does |
 |---|---|
@@ -54,10 +78,20 @@ queued delegated task is answered `cancelled` at once and never runs.
 | ACP stdio (hermes, grok, opencode acp) | ACP `session/cancel` notification, then a wait of up to `cancel_grace_sec` (5 s) for the prompt to end. An agent that ignores it has its process group killed, and the next turn restarts it. |
 | ACP HTTP (kilo acp) | ACP `session/cancel` notification (the agent is remote; there is no local process) |
 | SdkAgent (cursor, echo) | A Python thread can't be killed: the turn is abandoned and its eventual result discarded. Pass `cancel_sync=` when the SDK has a stop call. |
-| Rust `hub-worker --execute` | SIGKILL of the command's process group |
+| Rust `hub-worker --execute` | SIGKILL of the command's process group (`libc::killpg`) |
+| `verify_cmd` (wave tasks, Python runtime) | SIGTERM, then SIGKILL, of the verify command's process group; the result is `cancelled`, not `done` |
 
 `hub-delegate`: the first Ctrl-C sends the cancel and waits up to 10 s for the
 `cancelled` result (exit code 4). A second Ctrl-C exits at once (exit code 130).
+When `--timeout` expires it also sends the cancel before exiting (exit code 2),
+and MCP `delegate_task` does the same on its timeout. MCP `cancel_task` also
+accepts a session turn's `message_id` (returned by `start_session` and
+`send_to_session`).
+
+`hub-worker` handles SIGTERM like Ctrl-C and kills the running command's
+process group on the way out. Tasks that arrive while one runs wait in a queue
+bounded by `--max-queued` (default 256); a task that doesn't fit gets an
+`error` result at once ("worker … is busy"). Only task envelopes are queued.
 
 ## Progress handlers are per turn
 
@@ -88,6 +122,19 @@ That op name is the integration point to confirm against T2.
 | **One-shot** | `hub-delegate` DM (no `action`) | `task.<uuid>` |
 | **Session** | `action: session_start` on inbox | `session.<uuid>` (or custom `channel`) |
 | **Wave task** | `action: session_start` + `wave_id` | `wave.<id>.task.<task_id>` + wave broadcast |
+
+A `session_send` for a session the worker doesn't hold (and can't resume from
+the hub) is answered with an `error` event and an `error` result on the
+session channel. `session_close` unsubscribes the session's channel (and wave
+channel) and drops its state.
+
+**`verify_cmd`** (wave tasks) runs after the backend turn succeeds, through the
+shell, in the worker's repo (`WorkerConfig.workdir`, else the backend's
+`repo`, else the process cwd). It runs in its own process group with
+stdout+stderr drained into a bounded tail (quoted in the error), and is killed
+after `NATS_HUB_VERIFY_TIMEOUT_SECS` (default 600 s;
+`WorkerConfig.verify_timeout_secs`). If the command exits but leaves a
+background process holding its output open, the group is killed after 2 s.
 
 ## Progress events
 
