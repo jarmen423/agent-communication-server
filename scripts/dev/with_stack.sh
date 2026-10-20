@@ -48,6 +48,13 @@ if [[ -n "${NATS_HUB_REQUIRE_BOUND:-}" ]]; then
   export NATS_HUB_IDENTITY=test-admin
 fi
 
+# Durable delivery (W2-A): NATS_HUB_DURABLE=1 runs hub-server with --durable
+# (JetStream streams + shared routing consumer; the nats-server above already
+# has JetStream). The whole suite then runs against the durable router.
+if [[ -n "${NATS_HUB_DURABLE:-}" ]]; then
+  HUB_ARGS+=(--durable)
+fi
+
 echo "==> hub-server (db: $tmp/db)"
 RUST_LOG="${HUB_LOG:-warn}" "$CARGO_TARGET_DIR/debug/hub-server" \
   "${HUB_ARGS[@]}" >"$tmp/hub.log" 2>&1 &

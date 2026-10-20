@@ -82,6 +82,12 @@ websocket {
 # has no publish right on _INBOX at all. Users that answer requests (the
 # hub-server user, and role=service users such as the worker supervisor)
 # get `allow_responses: true` instead.
+#
+# Durable delivery (docs/DELIVERY.md → Permissions): each agent may attach
+# (hub.delivery.<id>.>), read and ack ONLY its own inbox consumer
+# (inbox-<id>) and DIRECT.GET the tasks stream; it can never create
+# consumers. The hub-server user creates them ($JS.API.>, $JS.ACK.>). These
+# grants are harmless when JetStream is off.
 authorization {
     users: [
         # role: hub-server (router, query API, wave orchestrator, ws bridge)
@@ -91,7 +97,7 @@ authorization {
         # sees every envelope on hub.pub.*.>, so it adds no visibility.
         { user: "hub-server", password: "REPLACE_WITH_LONG_RANDOM_PASSWORD",
           permissions: {
-            publish:   { allow: ["channel.>", "hub.>"] },
+            publish:   { allow: ["channel.>", "hub.>", "$JS.API.>", "$JS.ACK.>"] },
             subscribe: { allow: ["hub.>", "channel.>", "_INBOX.hub-server.>"] },
             allow_responses: true,
           } },
@@ -100,7 +106,12 @@ authorization {
           allowed_connection_types: ["WEBSOCKET"]
           permissions: {
             publish:   { allow: ["hub.pub.echo-1.>", "hub.register.echo-1",
-                                 "hub.presence.echo-1", "hub.api.echo-1.>"] },
+                                 "hub.presence.echo-1", "hub.api.echo-1.>",
+                                 "hub.delivery.echo-1.>",
+                                 "$JS.API.CONSUMER.INFO.HUB_INBOX.inbox-echo-1",
+                                 "$JS.API.CONSUMER.MSG.NEXT.HUB_INBOX.inbox-echo-1",
+                                 "$JS.ACK.HUB_INBOX.inbox-echo-1.>",
+                                 "$JS.API.DIRECT.GET.HUB_TASKS"] },
             subscribe: { allow: ["channel.inbox.echo-1", "channel.task.>",
                                  "channel.session.>", "channel.wave.>",
                                  "_INBOX.echo-1.>"] },
@@ -111,7 +122,12 @@ authorization {
             publish:   { allow: ["hub.pub.worker-supervisor.>",
                                  "hub.register.worker-supervisor",
                                  "hub.presence.worker-supervisor",
-                                 "hub.api.worker-supervisor.>", "hub.worker.>"] },
+                                 "hub.api.worker-supervisor.>", "hub.worker.>",
+                                 "hub.delivery.worker-supervisor.>",
+                                 "$JS.API.CONSUMER.INFO.HUB_INBOX.inbox-worker-supervisor",
+                                 "$JS.API.CONSUMER.MSG.NEXT.HUB_INBOX.inbox-worker-supervisor",
+                                 "$JS.ACK.HUB_INBOX.inbox-worker-supervisor.>",
+                                 "$JS.API.DIRECT.GET.HUB_TASKS"] },
             subscribe: { allow: ["channel.inbox.worker-supervisor",
                                  "channel.task.>", "channel.session.>",
                                  "channel.wave.>", "_INBOX.worker-supervisor.>",
@@ -124,6 +140,20 @@ authorization {
 
 # Add one users{} entry per agent (hub-admin add-agent prints the block).
 # To revoke an agent, delete its entry and reload (nats-server --signal reload).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Durable delivery (hub-server --durable) — see docs/DELIVERY.md
+# ─────────────────────────────────────────────────────────────────────────────
+# Uncomment to keep DMs for offline agents, survive hub-server restarts and
+# let delegators resume task results. hub-server creates the streams
+# (HUB_INGRESS / HUB_INBOX / HUB_TASKS) itself; size the caps for your
+# retention (defaults: 24 h ingress/tasks, 7 d inbox). `hub-admin
+# render-config --durable` emits this block for you.
+# jetstream {
+#     store_dir: "/var/lib/nats-hub/jetstream"
+#     max_file_store: 10G
+#     max_memory_store: 256M
+# }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Capacity & safety limits
