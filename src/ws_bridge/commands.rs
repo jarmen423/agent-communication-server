@@ -33,6 +33,7 @@ pub(super) async fn handle_client_command(
                 .get("to")
                 .and_then(|t| t.as_str())
                 .context("send_message requires to")?;
+            crate::protocol::require_valid_identity(to)?;
             let message = v
                 .get("message")
                 .and_then(|t| t.as_str())
@@ -112,6 +113,7 @@ pub(super) async fn handle_client_command(
                 .get("identity")
                 .and_then(|t| t.as_str())
                 .context("ensure_worker requires identity")?;
+            crate::protocol::require_valid_identity(identity)?;
             let provider = v
                 .get("provider")
                 .and_then(|t| t.as_str())
@@ -147,6 +149,7 @@ pub(super) async fn handle_client_command(
                 .get("identity")
                 .and_then(|t| t.as_str())
                 .context("stop_agent requires identity")?;
+            crate::protocol::require_valid_identity(identity)?;
             let _ = client
                 .request_json(
                     "hub.worker.stop",
@@ -183,6 +186,7 @@ pub(super) async fn handle_client_command(
                 .get("identity")
                 .and_then(|t| t.as_str())
                 .context("resume_agent requires identity")?;
+            crate::protocol::require_valid_identity(identity)?;
             let channel = format!("agents.{identity}");
             let env = Envelope::new(
                 sender,

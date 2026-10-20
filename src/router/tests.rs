@@ -255,3 +255,84 @@ async fn has(core: &RouterCore, identity: &str) -> bool {
         .iter()
         .any(|a| a.identity == identity)
 }
+
+// ── Router hygiene (hardening H1) ──────────────────────────────────
+
+#[tokio::test]
+async fn invalid_meta_to_is_dropped() {
+    let core = RouterCore::new();
+    for bad in ["", "a.b", "*", ">", "bob smith", "inbox.bob"] {
+        let env = Envelope::new("alice", "chat", MessageKind::Message, json!({})).to(bad);
+        assert!(
+            core.on_send("hub.pub.alice.chat", &bytes(&env)).is_none(),
+            "meta.to {bad:?} must be dropped (bound)"
+        );
+        assert!(
+            core.on_send("hub.send.chat", &bytes(&env)).is_none(),
+            "meta.to {bad:?} must be dropped (legacy)"
+        );
+    }
+    let ok = Envelope::new("alice", "chat", MessageKind::Message, json!({})).to("bob_2-x");
+    assert!(core.on_send("hub.pub.alice.chat", &bytes(&ok)).is_some());
+}
+
+#[tokio::test]
+async fn bound_send_overwrites_meta_channel_from_subject() {
+    let core = RouterCore::new();
+    // body claims another channel; the subject decides
+    let env = Envelope::new("alice", "inbox.carol", MessageKind::Message, json!({}));
+    let (dest, routed, publish) = core.on_send("hub.pub.alice.chat", &bytes(&env)).unwrap();
+    assert_eq!(dest, "channel.chat");
+    assert_eq!(routed.meta.channel, "chat");
+    assert_eq!(
+        Envelope::from_json_bytes(&publish).unwrap().meta.channel,
+        "chat"
+    );
+
+    // an unchanged envelope keeps its original bytes
+    let clean = bytes(&Envelope::new(
+        "alice",
+        "chat",
+        MessageKind::Message,
+        json!({}),
+    ));
+    let (_, _, publish) = core.on_send("hub.pub.alice.chat", &clean).unwrap();
+    assert_eq!(publish, clean);
+}
+
+#[tokio::test]
+async fn inbox_channel_send_becomes_a_dm() {
+    let core = RouterCore::new();
+    // `inbox.bob` without meta.to (old bridge style) is a DM to bob: stored
+    // with to_identity = bob so read scoping keeps it private.
+    let env = Envelope::new("alice", "inbox.bob", MessageKind::Message, json!({}));
+    for subject in ["hub.pub.alice.inbox.bob", "hub.send.inbox.bob"] {
+        let (dest, routed, publish) = core.on_send(subject, &bytes(&env)).unwrap();
+        assert_eq!(dest, "channel.inbox.bob", "{subject}");
+        assert_eq!(routed.meta.to.as_deref(), Some("bob"), "{subject}");
+        assert_eq!(
+            Envelope::from_json_bytes(&publish)
+                .unwrap()
+                .meta
+                .to
+                .as_deref(),
+            Some("bob")
+        );
+    }
+    // multi-token inbox channels are not an identity: left as broadcast
+    let env = Envelope::new("alice", "inbox.a.b", MessageKind::Message, json!({}));
+    let (_, routed, _) = core
+        .on_send("hub.pub.alice.inbox.a.b", &bytes(&env))
+        .unwrap();
+    assert!(routed.meta.to.is_none());
+}
+
+#[tokio::test]
+async fn legacy_register_with_invalid_identity_is_dropped() {
+    let core = RouterCore::new();
+    core.on_register("hub.register", &register_payload("bad.id", &["x"]))
+        .await;
+    core.on_presence("hub.presence", &presence_payload("bad*id"))
+        .await;
+    assert!(core.registry.list().await.is_empty());
+}
