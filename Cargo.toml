@@ -115,6 +115,11 @@ crossterm = { version = "0.28", optional = true }
 # ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
 
+# hub-worker kills its command's process group with killpg (already in the
+# lock file via tokio/mio; now a direct dependency).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 

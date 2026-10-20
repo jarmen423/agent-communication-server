@@ -9,7 +9,10 @@
 //!   otherwise a DM back to the sender (rule 6). Either way
 //!   `meta.reply_to = <task id>` and the payload is
 //!   `{status, task_id, result, error}`.
-//! * [`is_task_result`] is the delegator-side matcher (rule 5).
+//! * [`is_task_result`] is the delegator-side matcher (rule 5), restricted to
+//!   results sent by the worker the task was delegated to (HARDENING.md C5:
+//!   best effort on a permissive hub, where `meta.from` is self-asserted;
+//!   enforced on a `--require-bound-identity` hub, where the router stamps it).
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -53,11 +56,12 @@ pub fn task_result_payload(task_id: &str, outcome: &TaskOutcome) -> Value {
     }
 }
 
-/// Delegator-side matcher (rule 5): `kind = message` and either
-/// `meta.reply_to == task_id` or `payload.task_id == task_id`.
-/// `status` / `event` envelopes are progress, never the result.
-pub fn is_task_result(env: &Envelope, task_id: &str) -> bool {
+/// Delegator-side matcher (rule 5): `kind = message`, sent by `worker`
+/// (C5), and either `meta.reply_to == task_id` or `payload.task_id ==
+/// task_id`. `status` / `event` envelopes are progress, never the result.
+pub fn is_task_result(env: &Envelope, task_id: &str, worker: &str) -> bool {
     env.meta.kind == MessageKind::Message
+        && env.meta.from == worker
         && (env.meta.reply_to.as_deref() == Some(task_id)
             || env.payload.get("task_id").and_then(Value::as_str) == Some(task_id))
 }
@@ -158,11 +162,20 @@ mod tests {
         let status = Envelope::new("w", "task.x", MessageKind::Status, json!({})).reply_to(id);
         let event = Envelope::new("w", "task.x", MessageKind::Event, json!({"task_id": id}));
         let other = Envelope::new("w", "task.x", MessageKind::Message, json!({})).reply_to("x");
-        assert!(is_task_result(&by_reply, id));
-        assert!(is_task_result(&by_payload, id));
-        assert!(!is_task_result(&status, id));
-        assert!(!is_task_result(&event, id));
-        assert!(!is_task_result(&other, id));
+        assert!(is_task_result(&by_reply, id, "w"));
+        assert!(is_task_result(&by_payload, id, "w"));
+        assert!(!is_task_result(&status, id, "w"));
+        assert!(!is_task_result(&event, id, "w"));
+        assert!(!is_task_result(&other, id, "w"));
+    }
+
+    #[test]
+    fn matcher_requires_the_delegated_worker() {
+        let id = "task-id-1";
+        let forged =
+            Envelope::new("mallory", "task.x", MessageKind::Message, json!({})).reply_to(id);
+        assert!(!is_task_result(&forged, id, "w"));
+        assert!(is_task_result(&forged, id, "mallory"));
     }
 
     #[test]

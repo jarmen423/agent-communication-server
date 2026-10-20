@@ -19,12 +19,14 @@
 //!   4. Router routes to channel.inbox.<worker>
 //!   5. Worker receives, processes, publishes status/events + one result to
 //!      channel.task.<short-uuid> (reply contract, refocus.md §6)
-//!   6. hub-delegate takes the first `message` whose meta.reply_to or
-//!      payload.task_id equals the task id, and prints it
+//!   6. hub-delegate takes the first `message` from the worker whose
+//!      meta.reply_to or payload.task_id equals the task id, and prints it
+//!      (results from anyone else are ignored — HARDENING.md C5)
 //!
 //! Ctrl-C (refocus-iteration-2.md §4.2): the first one DMs the worker
 //! `kind = control {"action": "cancel", "task_id"}` and waits up to 10s for
-//! the `cancelled` result; a second Ctrl-C exits at once.
+//! the `cancelled` result; a second Ctrl-C exits at once. A `--timeout`
+//! also sends the cancel, so the worker doesn't keep running unattended.
 //!
 //! stdout carries only the result; all logs and progress go to stderr.
 //!
@@ -35,9 +37,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use nats_hub::client::is_task_result;
 use nats_hub::{Envelope, HubClient, MessageKind};
-use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::time::Instant;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
@@ -89,14 +91,16 @@ struct Args {
 }
 
 /// The prompt from `--prompt TEXT`, `--prompt -` (stdin) or `--prompt-file`.
-fn read_prompt(args: &Args) -> Result<String> {
+async fn read_prompt(args: &Args) -> Result<String> {
     let prompt = match (&args.prompt, &args.prompt_file) {
-        (_, Some(path)) => std::fs::read_to_string(path)
+        (_, Some(path)) => tokio::fs::read_to_string(path)
+            .await
             .with_context(|| format!("reading --prompt-file {}", path.display()))?,
         (Some(p), None) if p == "-" => {
             let mut buf = String::new();
-            std::io::stdin()
+            tokio::io::stdin()
                 .read_to_string(&mut buf)
+                .await
                 .context("reading the prompt from stdin")?;
             buf
         }
@@ -117,7 +121,7 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let prompt = read_prompt(&args)?;
+    let prompt = read_prompt(&args).await?;
 
     // Generate a short task UUID for the task channel
     let task_uuid = uuid::Uuid::new_v4();
@@ -184,8 +188,10 @@ async fn main() -> Result<()> {
                     eprintln!("\n[hub-delegate] no cancel confirmation from {} within {}s", args.to, CANCEL_WAIT.as_secs());
                     match exit(&client, 130).await {}
                 }
+                // Don't leave the worker running a task nobody waits for.
+                send_cancel(&client, &args.to, &task_channel, &task_id).await;
                 eprintln!(
-                    "\n[hub-delegate] TIMEOUT after {}s — no reply from {to}",
+                    "\n[hub-delegate] TIMEOUT after {}s — no reply from {to}; cancel sent",
                     args.timeout,
                     to = args.to
                 );
@@ -212,10 +218,20 @@ async fn main() -> Result<()> {
             match exit(&client, 3).await {}
         };
 
-        // Rule 5: the result is the first `message` correlated to our task;
-        // every status/event envelope is progress.
-        if is_task_result(&env, &task_id) {
+        // Rule 5: the result is the first `message` correlated to our task
+        // and sent by the worker we delegated to (C5); every status/event
+        // envelope is progress.
+        if is_task_result(&env, &task_id, &args.to) {
             break env;
+        }
+        if env.meta.kind == MessageKind::Message
+            && env.meta.reply_to.as_deref() == Some(task_id.as_str())
+        {
+            eprintln!(
+                "[hub-delegate] ignoring a result for {task_id} from {} (delegated to {})",
+                env.meta.from, args.to
+            );
+            continue;
         }
         if args.verbose {
             print_progress(&env);
