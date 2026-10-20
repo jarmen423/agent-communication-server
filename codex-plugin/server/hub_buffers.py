@@ -18,11 +18,12 @@ import asyncio
 import json
 import sys
 import time
-import uuid
 
 import hub_connection as conn
+import hub_delivery
 from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
     _note_bad_envelope,
+    InboxBuffer,
     INBOX_BUFFER_MAX,
     MAX_TRACKED_TASKS,
     TASK_UNSUB_GRACE,
@@ -36,6 +37,7 @@ from hub_primitives import (  # noqa: F401  (re-exported for callers/tests)
 )
 
 MAX_SESSION_BUFFERS = 50  # open channel.session.<id> subscriptions
+CATCH_UP_EVERY = 3.0  # seconds between stored-channel re-reads while waiting
 MAX_SESSION_TURNS = 200  # session turn ids remembered for cancel_task
 
 
@@ -72,6 +74,7 @@ class HubState:
         self._generation = 0
         self._lock = asyncio.Lock()
         self._bg: set[asyncio.Task] = set()
+        self._resubscribe = False  # set when a replaced connection kept trackers
 
     def spawn_bg(self, coro) -> asyncio.Task:
         """Fire-and-forget with a strong reference and logged failures."""
@@ -98,20 +101,38 @@ class HubState:
                 self._reset_after_reconnect()
             self._generation = conn.generation()
             ident = conn.identity()
-            self.inbox = ChannelBuffer(f"channel.inbox.{ident}", INBOX_BUFFER_MAX)
+            await self.inbox.stop()
+            self.inbox = InboxBuffer(ident, INBOX_BUFFER_MAX)
             await self.inbox.start()
             self._started = True
+            if self._resubscribe:
+                await self._resubscribe_tasks()
 
     def _reset_after_reconnect(self) -> None:
         """The connection was closed and replaced: every subscription is gone.
-        Fail running tasks loudly instead of letting callers time out."""
+
+        On a durable hub (the task channels are stored) running tasks keep
+        going: they are re-subscribed and caught up from the stream, so a
+        result published while we were away still arrives. Otherwise they
+        fail loudly instead of letting callers time out."""
+        keep = False
         for t in self.tasks.values():
             t.sub = None
             if t.result is None:
-                t.state = "error"
-                t.last_status = "connection lost; task result unknown"
-                t.done.set()
+                if t.catch_up.available:  # stored channel: recoverable
+                    keep = True
+                    continue
+                t.fail_connection_lost()
+        self._resubscribe = keep
         self.sessions.clear()  # recreated lazily by session_buffer()
+
+    async def _resubscribe_tasks(self) -> None:
+        self._resubscribe = False
+        for t in list(self.tasks.values()):
+            if t.done.is_set():
+                continue
+            await self._subscribe_task(t)
+            await t.catch_up_now()
 
     async def _track(self, tracker: TaskTracker) -> None:
         """Register a tracker, evicting the oldest (finished first) over cap."""
@@ -138,53 +159,94 @@ class HubState:
     async def delegate_async(self, worker: str, prompt: str) -> TaskTracker:
         """Subscribe to the task channel BEFORE DMing the worker (§6.1)."""
         await self.ensure_started()
-        task_channel = f"task.{uuid.uuid4().hex[:8]}"
-        env = conn.envelope(
-            task_channel,
-            {"prompt": prompt, "task_channel": task_channel},
-            kind="message",
-            to=worker,
-        )
+        env = conn.envelope("task", {}, kind="message", to=worker)
         task_id = env["meta"]["id"]
+        # Derived from the task id, so a reconnecting delegator (or
+        # `hub-delegate --resume <task_id>`) can find the channel again.
+        task_channel = hub_delivery.task_channel_for(task_id)
+        env["meta"]["channel"] = task_channel
+        env["payload"] = {"prompt": prompt, "task_channel": task_channel}
         tracker = TaskTracker(task_id, task_channel, worker)
 
-        async def cb(msg) -> None:
-            try:
-                data = json.loads(msg.data.decode())
-            except Exception as e:
-                _note_bad_envelope(f"channel.{task_channel}", e)
-                return
-            was_done = tracker.done.is_set()
-            await tracker.feed(data)
-            if tracker.done.is_set() and not was_done:
-                # Result is in: release the subscription after a short grace
-                # period (late progress events are harmless to drop).
-                async def _release() -> None:
-                    await asyncio.sleep(TASK_UNSUB_GRACE)
-                    await tracker.close()
-
-                self.spawn_bg(_release())
-
-        nc = await conn.get_nc()
-        tracker.sub = await nc.subscribe(f"channel.{task_channel}", cb=cb)
-        await nc.flush()
+        await self._subscribe_task(tracker)
         await asyncio.sleep(SUB_READY_DELAY)
 
         await self._track(tracker)
         await conn.publish(task_channel, env)
+        # Learn now whether the hub stores task channels, so a later
+        # reconnect knows the result is recoverable.
+        self.spawn_bg(self._catch_up(tracker))
         return tracker
+
+    async def _subscribe_task(self, tracker: TaskTracker) -> None:
+        """(Re)subscribe ``channel.<task_channel>`` for a tracker."""
+        async def cb(msg) -> None:
+            try:
+                data = json.loads(msg.data.decode())
+            except Exception as e:
+                _note_bad_envelope(f"channel.{tracker.task_channel}", e)
+                return
+            was_done = tracker.done.is_set()
+            await tracker.feed(data)
+            if tracker.done.is_set() and not was_done:
+                self._release_later(tracker)
+
+        nc = await conn.get_nc()
+        tracker.sub = await nc.subscribe(f"channel.{tracker.task_channel}", cb=cb)
+        await nc.flush()
+
+    def _release_later(self, tracker: TaskTracker) -> None:
+        """Result is in: release the subscription after a short grace
+        period (late progress events are harmless to drop)."""
+        async def _release() -> None:
+            await asyncio.sleep(TASK_UNSUB_GRACE)
+            await tracker.close()
+
+        self.spawn_bg(_release())
 
     async def task_status(self, task_id: str, events_tail: int = 10) -> dict | None:
         tracker = self.tasks.get(task_id)
-        return tracker.snapshot(events_tail) if tracker else None
+        if tracker is None:
+            return None
+        await self._catch_up(tracker)
+        return tracker.snapshot(events_tail)
+
+    async def _catch_up(self, tracker: TaskTracker) -> None:
+        """Read back what the stored task channel has that we missed."""
+        if tracker.done.is_set() or tracker.catch_up.available is False:
+            return
+        if conn._nc is None:
+            return  # never connected (unit tests): nothing to read back with
+        try:
+            await self.ensure_started()  # re-subscribes trackers after a reconnect
+        except Exception as e:  # noqa: BLE001 - the bus is down: try again later
+            print(f"[nats-hub] reconnect for catch-up failed: {e}", file=sys.stderr)
+            return
+        was_done = tracker.done.is_set()
+        await tracker.catch_up_now()
+        if tracker.done.is_set() and not was_done:
+            self._release_later(tracker)
 
     async def wait_for_task(self, task_id: str, timeout: float) -> dict | None:
+        """Wait for the terminal result. On a durable hub the stored task
+        channel is re-read every CATCH_UP_EVERY seconds while waiting, so a
+        result published during a reconnect isn't missed."""
         tracker = self.tasks.get(task_id)
         if tracker is None:
             return None
-        try:
-            await asyncio.wait_for(tracker.done.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            await self._catch_up(tracker)
+            remaining = deadline - loop.time()
+            if tracker.done.is_set() or remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(tracker.done.wait(),
+                                       timeout=min(remaining, CATCH_UP_EVERY))
+            except asyncio.TimeoutError:
+                continue
+        if not tracker.done.is_set():
             return {"state": "timeout", "task_id": task_id,
                     "last_status": tracker.last_status}
         return tracker.snapshot()

@@ -14,6 +14,7 @@ remote_agent_adapter.py
 
 # ── Shared Python runtime (imported by the adapter) ─────────────────
 nats_connect.py
+hub_delivery.py                        # durable inbox + dedupe (imported by worker_runtime.py)
 worker_runtime.py
 worker_events.py
 

@@ -20,6 +20,7 @@ from collections import deque
 from typing import Any, Callable
 
 import hub_connection as conn
+import hub_delivery
 
 
 def _note_bad_envelope(where: str, err: Exception) -> None:
@@ -131,6 +132,9 @@ class TaskTracker:
         self.created_at = time.time()
         self.cancel_requested_at: float | None = None  # set by cancel_task
         self.sub = None  # NATS subscription on channel.<task_channel>
+        # Reads the stored task channel back (durable hub) and dedupes it
+        # against the live subscription: at-least-once → handled once.
+        self.catch_up = hub_delivery.ChannelCatchUp(task_channel)
 
     async def close(self) -> None:
         if self.sub is not None:
@@ -141,6 +145,24 @@ class TaskTracker:
                 pass  # connection already closed — nothing to release
 
     async def feed(self, env: dict) -> None:
+        if not self.catch_up.first_sight(env):
+            return  # redelivery, or already read back from the stream
+        await self._feed(env)
+
+    async def catch_up_now(self) -> None:
+        """Feed whatever the stored task channel has that we missed (e.g.
+        published while the connection was down). No-op on a core hub."""
+        if self.done.is_set() or self.catch_up.available is False:
+            return
+        try:
+            envs = await self.catch_up.poll(await conn.get_nc())
+        except Exception as e:  # noqa: BLE001 - best effort; live sub still runs
+            print(f"[nats-hub] task catch-up failed: {e}", file=sys.stderr)
+            return
+        for env in envs:
+            await self._feed(env)
+
+    async def _feed(self, env: dict) -> None:
         meta = env.get("meta", {})
         kind = meta.get("kind")
         if kind == "status":
@@ -163,6 +185,13 @@ class TaskTracker:
                       f"{env.get('meta', {}).get('from')!r} (delegated to "
                       f"{self.worker!r})", file=sys.stderr)
             await self.other_messages.put(env)
+
+    def fail_connection_lost(self) -> None:
+        """The connection was replaced and the result can't be recovered."""
+        if not self.done.is_set():
+            self.state = "error"
+            self.last_status = "connection lost; task result unknown"
+            self.done.set()
 
     def evict(self) -> None:
         """Dropped from tracking while running: release waiters instead of
@@ -199,6 +228,7 @@ class ChannelBuffer:
         self.subject = subject
         self.buf = RingBuffer(maxlen)
         self._sub = None
+        self._seen = hub_delivery.SeenIds()
 
     async def start(self) -> None:
         if self._sub is not None:
@@ -211,10 +241,16 @@ class ChannelBuffer:
             except Exception as e:
                 _note_bad_envelope(self.subject, e)
                 return
-            await self.buf.put(env)
+            await self.put(env)
 
         self._sub = await nc.subscribe(self.subject, cb=cb)
         await nc.flush()
+
+    async def put(self, env: dict) -> None:
+        """Buffer ``env`` unless its ``meta.id`` was already buffered."""
+        meta = env.get("meta") if isinstance(env, dict) else None
+        if self._seen.first_sight(meta.get("id") if isinstance(meta, dict) else None):
+            await self.buf.put(env)
 
     async def stop(self) -> None:
         if self._sub is not None:
@@ -225,3 +261,31 @@ class ChannelBuffer:
                 pass
 
 
+
+
+class InboxBuffer(ChannelBuffer):
+    """The orchestrator's inbox: the durable JetStream inbox on a
+    ``--durable`` hub (DMs sent while this MCP server was down are buffered
+    first), else a core subscription. Redeliveries are dropped by ``meta.id``."""
+
+    def __init__(self, identity: str, maxlen: int = INBOX_BUFFER_MAX) -> None:
+        super().__init__(f"channel.inbox.{identity}", maxlen)
+        self.identity = identity
+        self.durable = False
+
+    async def start(self) -> None:
+        if self._sub is not None:
+            return
+        nc = await conn.get_nc()
+
+        async def cb(msg) -> None:
+            try:
+                env = json.loads(msg.data.decode())
+            except Exception as e:
+                _note_bad_envelope(self.subject, e)
+                return
+            await self.put(env)
+
+        self._sub = await hub_delivery.subscribe_inbox(nc, self.identity, cb)
+        self.durable = self._sub.durable
+        await nc.flush()

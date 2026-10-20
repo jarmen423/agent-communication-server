@@ -17,7 +17,9 @@ inbox callback here never blocks:
   :meth:`on_session_message`, so a queued follow-up turn is registered (and
   cancellable) the moment it arrives;
 - a ``session_start`` for a session whose turn is still queued or running is
-  not run twice (C3): its envelope id becomes an alias of that turn.
+  not run twice (C3): its envelope id becomes an alias of that turn;
+- delivery is at-least-once on a ``--durable`` hub: an envelope whose
+  ``meta.id`` was already seen (a redelivery) is dropped here.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import json
 import logging
 from typing import Any, Awaitable, Callable
 
+from hub_delivery import SeenIds
 from worker_backends.task_registry import TaskRegistry, cancel_request
 
 logger = logging.getLogger("worker_runtime")
@@ -60,12 +63,16 @@ class InboxDispatcher:
         self._reported: set[str] = set()  # queued tasks already answered
         # session id → envelope id of its in-flight session_start turn (C3).
         self._start_turns: dict[str, str] = {}
+        self._seen = SeenIds()  # redelivered meta.ids (at-least-once delivery)
 
     async def on_message(self, msg: Any) -> None:
         envelope = _decode(msg, self.log)
         if envelope is None:
             return
         meta = envelope.get("meta") or {}
+        if not self._seen.first_sight(meta.get("id")):
+            logger.debug("duplicate envelope %s dropped", meta.get("id"))
+            return
         cancel_id = cancel_request(envelope)
         if cancel_id is not None:
             if msg.subject == self.inbox_subject:  # cancels are DMs, not chatter
