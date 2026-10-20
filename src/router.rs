@@ -13,10 +13,12 @@ use futures_util::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use crate::client::AgentInfo;
+use crate::delivery::DeliveryConfig;
 use crate::protocol::subjects;
 use crate::storage::{AgentFilter, AgentRecord, Storage};
 use crate::MetricsCollector;
 
+mod durable;
 mod mirror;
 mod routing;
 mod state;
@@ -60,6 +62,8 @@ pub struct ControlPlane {
     core: RouterCore,
     storage: Option<Arc<dyn Storage>>,
     mirror_capacity: usize,
+    /// `Some` = route from the JetStream ingress stream (`--durable`).
+    durable: Option<Arc<DeliveryConfig>>,
 }
 
 impl ControlPlane {
@@ -78,6 +82,7 @@ impl ControlPlane {
             core: RouterCore::new(),
             storage: None,
             mirror_capacity: DEFAULT_MIRROR_CAPACITY,
+            durable: None,
         })
     }
 
@@ -115,6 +120,15 @@ impl ControlPlane {
     /// [`DEFAULT_MIRROR_CAPACITY`]). Writes beyond it are dropped and counted.
     pub fn with_mirror_capacity(mut self, capacity: usize) -> Self {
         self.mirror_capacity = capacity;
+        self
+    }
+
+    /// Durable delivery (`hub-server --durable`): route from the JetStream
+    /// ingress stream through the shared `router` consumer and store DMs and
+    /// task/session/wave traffic (see [`crate::delivery`]). Without it the
+    /// router uses plain core-NATS subscriptions, exactly as before.
+    pub fn with_durable(mut self, cfg: DeliveryConfig) -> Self {
+        self.durable = Some(Arc::new(cfg));
         self
     }
 
@@ -175,6 +189,10 @@ impl ControlPlane {
             }
         }
 
+        if let Some(cfg) = self.durable.clone() {
+            return self.run_durable(cfg).await;
+        }
+
         let mut send_sub = self
             .nats
             .subscribe(format!("{}.>", subjects::SEND_PREFIX))
@@ -185,26 +203,7 @@ impl ControlPlane {
             .subscribe(format!("{}.*.>", subjects::PUB_PREFIX))
             .await
             .context("control plane: subscribe to hub.pub.*.> failed")?;
-        let mut reg_sub = self
-            .nats
-            .subscribe(subjects::REGISTER)
-            .await
-            .context("control plane: subscribe to hub.register failed")?;
-        let mut bound_reg_sub = self
-            .nats
-            .subscribe(format!("{}.*", subjects::REGISTER))
-            .await
-            .context("control plane: subscribe to hub.register.* failed")?;
-        let mut presence_sub = self
-            .nats
-            .subscribe(subjects::PRESENCE)
-            .await
-            .context("control plane: subscribe to hub.presence failed")?;
-        let mut bound_presence_sub = self
-            .nats
-            .subscribe(format!("{}.*", subjects::PRESENCE))
-            .await
-            .context("control plane: subscribe to hub.presence.* failed")?;
+        let mut feeds = self.subscribe_feeds().await?;
 
         info!(
             require_bound = self.core.require_bound,
@@ -215,11 +214,68 @@ impl ControlPlane {
             tokio::select! {
                 Some(msg) = send_sub.next() => self.handle_send(&msg).await,
                 Some(msg) = bound_send_sub.next() => self.handle_send(&msg).await,
-                Some(msg) = reg_sub.next() => self.core.on_register(msg.subject.as_str(), &msg.payload).await,
-                Some(msg) = bound_reg_sub.next() => self.core.on_register(msg.subject.as_str(), &msg.payload).await,
-                Some(msg) = presence_sub.next() => self.core.on_presence(msg.subject.as_str(), &msg.payload).await,
-                Some(msg) = bound_presence_sub.next() => self.core.on_presence(msg.subject.as_str(), &msg.payload).await,
+                Some(msg) = feeds.next() => self.on_feed(&msg).await,
             }
+        }
+    }
+
+    /// `--durable`: route from the shared ingress consumer; registrations
+    /// and heartbeats stay core-NATS (they are repeated, not stored).
+    async fn run_durable(&self, cfg: Arc<DeliveryConfig>) -> Result<()> {
+        let ingress = self.start_durable(cfg).await?;
+        let mut feeds = self.subscribe_feeds().await?;
+        let mut msgs = self.ingress_messages(&ingress).await?;
+        info!(
+            require_bound = self.core.require_bound,
+            "control plane routing from the durable ingress consumer; subscribed to hub.register(.*), hub.presence(.*)"
+        );
+        loop {
+            tokio::select! {
+                item = msgs.next() => match item {
+                    Some(Ok(msg)) => self.handle_durable(&ingress, msg).await,
+                    Some(Err(e)) => debug!(error = %e, "ingress consumer stream error"),
+                    None => {
+                        warn!("ingress consumer stream ended; re-opening");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        match self.ingress_messages(&ingress).await {
+                            Ok(m) => msgs = m,
+                            Err(e) => error!(error = %e, "re-opening the ingress consumer failed"),
+                        }
+                    }
+                },
+                Some(msg) = feeds.next() => self.on_feed(&msg).await,
+            }
+        }
+    }
+
+    /// Registration + presence subscriptions (legacy and bound), merged.
+    async fn subscribe_feeds(
+        &self,
+    ) -> Result<futures_util::stream::SelectAll<async_nats::Subscriber>> {
+        let mut subs = Vec::new();
+        for subject in [
+            subjects::REGISTER.to_string(),
+            format!("{}.*", subjects::REGISTER),
+            subjects::PRESENCE.to_string(),
+            format!("{}.*", subjects::PRESENCE),
+        ] {
+            subs.push(
+                self.nats
+                    .subscribe(subject.clone())
+                    .await
+                    .with_context(|| format!("control plane: subscribe to {subject} failed"))?,
+            );
+        }
+        Ok(futures_util::stream::select_all(subs))
+    }
+
+    /// One registration or heartbeat message.
+    async fn on_feed(&self, msg: &async_nats::Message) {
+        let subject = msg.subject.as_str();
+        if subject == subjects::REGISTER || subject.starts_with("hub.register.") {
+            self.core.on_register(subject, &msg.payload).await;
+        } else {
+            self.core.on_presence(subject, &msg.payload).await;
         }
     }
 
