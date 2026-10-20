@@ -1,0 +1,254 @@
+# Hosted ACS — plan
+
+**Status:** draft, 2026-10-20. Nothing here is built yet except the parts the
+"What we already have" table marks ✅. Decisions still open are listed at the
+end.
+
+## 1. What we're building
+
+A user signs up for an **ACS account**. We run their hub. They connect any
+machine in a minute, the way you add a machine to Tailscale:
+
+```
+$ acs login            # opens the browser: device-code sign-in
+$ acs up               # background daemon: keeps credentials fresh
+$ acs mcp install claude   # wires the MCP plugin to this account
+```
+
+From then on, every agent on every machine they've connected can delegate to,
+DM and run waves with every other agent in their account, with durable delivery
+when laptops sleep. Self-hosting keeps working with the same binaries (see
+section 9).
+
+## 2. What we already have
+
+| Need | State | Where |
+|---|---|---|
+| Identity bound to the credential (no forged `from`) | ✅ | Bound subjects + `--require-bound-identity`, `SECURITY.md` |
+| Per-identity inbox/reply privacy, owner-scoped API | ✅ | `hub-admin` ACLs, `src/query_api/authz.rs`, `write_authz.rs` |
+| Durable delivery (sleeping laptops, hub restarts) | ✅ | `hub-server --durable`, `DELIVERY.md` |
+| Remote clients over `wss://` with creds files | ✅ | `NATS_CREDENTIALS_FILE`, `JOIN_HUB.md` |
+| Release binaries for linux/macOS | ✅ | `release.yml`, `install_remote.sh` |
+| Many tenants on one NATS deployment, isolated | ⬜ | Section 3 |
+| Credentials issued by an account service, not a config file | ⬜ | Section 3 |
+| `acs` connector (login, daemon, MCP install) | ⬜ | Section 4 |
+| Provisioning a hub-server per tenant | ⬜ | Section 5 |
+| Account service, billing, dashboard | ⬜ | Section 6 (private) |
+| Hosted ops (cluster, TLS, backups, limits, monitoring) | ⬜ | Section 7 |
+
+## 3. Tenancy and auth
+
+### Shape
+
+```
+                       ┌──────────── ACS control plane (private) ────────────┐
+ browser ── sign up ──▶│ accounts · tenants · devices · identities · billing │
+                       │ holds each tenant's account signing keys (KMS)      │
+                       └───────┬───────────────────────────┬─────────────────┘
+               push account JWT│                           │ deploy / scale
+                               ▼                           ▼
+   ┌──────────── NATS cluster (operator mode, 3 nodes) ┐   ┌ per-tenant hub-server ┐
+   │  account T_acme   account T_globex   ...          │◀──│ --durable             │
+   │  (own subjects, own JetStream quota, own streams) │   │ --require-bound-id    │
+   └──────────▲────────────────────────────────────────┘   │ SurrealDB on a volume │
+              │ wss://connect.acs…  (user JWT + nkey)       └───────────────────────┘
+      laptop: acs daemon → creds → MCP / workers
+```
+
+- **One NATS account per tenant.** Accounts are NATS's isolation boundary:
+  subjects, streams and consumers in one account are invisible to every other.
+  Each tenant gets the same `hub.*`/`channel.*` subjects and the same `HUB_*`
+  stream names. Nothing in our code needs a tenant prefix.
+- **Operator mode (decentralized JWT auth).** We hold the operator key offline.
+  The control plane creates each tenant's account JWT (with JetStream limits:
+  storage, streams, consumers, connections) and pushes it to the cluster's
+  built-in account resolver. No config file per tenant and no server restart.
+- **Credentials are user JWTs signed by the tenant's account signing key.**
+  The JWT's name is the agent identity. Its permissions are exactly what
+  `hub-admin` renders today (`src/bin/hub_admin/acl.rs`). Every entry there
+  is either constant or parameterized by the identity alone (`hub.pub.<id>.>`,
+  `_INBOX.<id>.>`, `$JS.API.CONSUMER.MSG.NEXT.HUB_INBOX.inbox-<id>`, …).
+  That lets us use **scoped signing keys**: one key per role (worker,
+  orchestrator, admin) whose permission template uses `{{name()}}`. Changing
+  a template updates every connected user immediately.
+- **The tenant's hub-server** connects as a hub-server user in that account
+  only. The "hub-server credential is all-powerful" residual risk is then
+  bounded by the tenant.
+
+### Recommendation: operator mode + scoped signing keys, not auth callout
+
+| | Operator/JWT (recommended) | Auth callout |
+|---|---|---|
+| Who decides on connect | nats-server, offline, from the signed JWT | our auth service, on every connect |
+| Control plane down | existing creds keep working; only new logins fail | **nobody can connect** |
+| Revocation | short JWT expiry + account revocation list | immediate (deny next connect) |
+| Fits our ACL model | 1:1 via `{{name()}}` templates | also fine (service returns a user JWT) |
+| Ops | resolver + key custody | an HA auth service on the connect path |
+
+Callout's advantage is mapping an arbitrary external token straight to a NATS
+user, so `acs` wouldn't need to hold an nkey. Its cost is that our service
+sits on the connect path for every tenant. We avoid that and use short-lived
+JWTs (24 h, refreshed by `acs`) for timely revocation. **The spike (H-0)
+confirms this before we build on it.**
+
+**Known gap:** `hub-admin --channels` adds per-agent extra broadcast
+channels, which a role template can't express. Options: tenant-wide broadcast
+channels in the template (simplest; a tenant is one team), or sign those
+users with an unscoped key and explicit permissions. Decide in the spike.
+
+### Credential lifecycle
+
+1. `acs login` runs the OAuth device-code flow against the control plane and
+   gets a **device refresh token**, stored in the OS keychain (file fallback,
+   `0600`).
+2. For each identity on that device (`acs agent add claude-laptop`), `acs`
+   generates an **nkey locally** and sends only the public key. The control
+   plane checks that the identity name is free in the tenant and not
+   reserved (same rules as `check_identity`), then returns a user JWT signed
+   with the role's scoped key, valid for 24 h.
+3. The daemon writes `~/.config/acs/creds/<identity>.creds` and refreshes it
+   before expiry. NATS clients pick up the new JWT on reconnect, and our
+   clients already reconnect.
+4. Revoking a device or identity: the control plane stops refreshing it and
+   adds the user key to the account's revocation list (pushed immediately).
+
+Private keys never leave the device. The control plane holds account signing
+keys (KMS-backed), never user keys.
+
+## 4. The `acs` connector (public, Apache-2.0)
+
+A single static Rust binary built on the client crate (the client/server crate
+split is part of the license work).
+
+| Command | Does |
+|---|---|
+| `acs login` / `logout` | device-code sign-in; stores the device refresh token |
+| `acs up` / `down` | install/start the daemon (systemd user unit, launchd agent) |
+| `acs status` | account, tenant, connection, identities, credential expiry |
+| `acs agent add <id> [--role worker\|orchestrator]` / `rm` | mint/revoke an identity on this device |
+| `acs mcp install claude\|codex\|hermes [--identity id]` | write the plugin/MCP config: `NATS_URL`, `NATS_CREDENTIALS_FILE`, `NATS_HUB_IDENTITY` |
+| `acs worker run <backend> --identity id` | start a worker (wraps the existing Python workers or `hub-worker`) |
+
+**v1:** the daemon is a credential manager. Agents connect straight to
+`wss://connect.acs…` with their own creds file. Nothing on our wire protocol
+changes.
+
+**Later, maybe:** a local leaf node (`localhost:4222`) so local agents need no
+creds at all. That's closer to tailscaled, but identity binding gets harder:
+the leaf connection is one NATS user, so the daemon would have to enforce
+per-agent subjects locally. Not for v1.
+
+**MCP without the binary:** possible (the MCP server runs the device flow
+itself), but it duplicates the connector. v1 requires `acs`. Revisit after
+beta.
+
+## 5. Per-tenant hub-server
+
+- **One container per tenant**, running
+  `hub-server --durable --require-bound-identity --api-admin <owner identity>`
+  with embedded SurrealDB on a persistent volume. This is exactly the
+  self-hosted reference deployment, so hosted and self-host don't drift.
+- **Why not one multi-tenant hub-server?** hub-server and its embedded DB are
+  single-tenant by design (one RocksDB, one writer). One container per tenant
+  is simple, isolated and fine for the first hundreds of tenants. Revisit if
+  per-container overhead dominates cost.
+- **Durability makes restarts cheap.** With `--durable`, sends wait in the
+  tenant's `HUB_INGRESS` while its hub-server restarts or redeploys, and route
+  when it's back. This also makes **scale-to-zero** possible later (wake on
+  pending ingress). Not v1.
+- **HA:** a single replica with auto-restart. RPO comes from volume snapshots
+  (W2-B backup). True HA with one consistent history needs SurrealDB server
+  mode behind the `Storage` trait (`DELIVERY.md` → "Several hub-servers"),
+  which is future work.
+- **hub-server changes needed:** almost none for v1. It already runs inside
+  one account without knowing about tenants. Needed: readiness/health
+  endpoint for the orchestrator (container platform), tenant label on
+  `/metrics`, and the WS bridge/visualizer authenticated by an ACS session
+  instead of a shared bridge token (dashboard, H-4).
+
+## 6. Control plane (private repo)
+
+Not published (license section). Owns:
+
+- users, orgs/tenants, devices, identities; OAuth sign-in + device-code flow
+- account JWT creation and push to the resolver; account signing keys in KMS
+- hub-server provisioning (create volume + container, rolling upgrades)
+- usage metering (from account JetStream usage and hub-server metrics), billing
+  (Stripe), audit log
+
+Storage: managed Postgres. The control plane needs boring relational data and
+backups, unlike the per-tenant message history. Language: open (Rust/axum
+shares the JWT/nkey code with `acs`; TypeScript is faster for the web app).
+
+## 7. Hosted ops
+
+- **NATS:** 3-node cluster, JetStream R3 for tenant streams (`replicas` is
+  already in `--delivery-config`), TLS terminated at nats-server
+  (`wss://connect.acs…`, ACME certs). One region first.
+- **Limits per tenant** (account JWT): connections, subscriptions, payload
+  size, JetStream storage/streams/consumers. Keep the `HUB_*` stream limits
+  under the account quota (`DELIVERY.md` → hosted notes).
+- **Encryption at rest:** encrypted disks, plus JetStream `cipher` for stored
+  DMs and task traffic (closes the "plaintext on the nats-server host"
+  residual risk for hosted).
+- **Monitoring:** nats-server `/varz`/`/jsz`, hub-server `/metrics` per
+  tenant, alerts on routing lag (`HUB_INGRESS` pending), hub-server restarts
+  and quota near limits.
+- **Backups:** SurrealDB volume snapshots (W2-B); JetStream is a buffer, not
+  the archive.
+- **Secrets:** operator key offline; system account creds only on ops hosts;
+  account signing keys in KMS; hub-server creds per tenant, injected at
+  deploy.
+
+## 8. Security, hosted view
+
+The residual risks in `SECURITY.md` change meaning once a tenant is a team:
+
+- **Workload channels are team-public:** still true, but only *within the
+  tenant*. Acceptable for v1 (a tenant is one team). Per-task confidentiality
+  stays a later feature.
+- **The hub-server credential is all-powerful:** bounded to one tenant's
+  account.
+- **A leaked credential is an identity takeover:** bounded by 24 h JWT expiry
+  and revocation.
+- **New risk: cross-tenant isolation.** NATS accounts do the heavy lifting.
+  We still need an isolation test (two accounts, every subject family, JS API,
+  `_INBOX`, `$SYS`) in CI. Part of H-0.
+- **New risk: the control plane** holds account signing keys. KMS, audit log,
+  admin MFA.
+
+## 9. Self-host stays first-class
+
+- Same `hub-server`, same clients. Config-mode auth (`hub-admin
+  render-config`) stays the default for self-hosters.
+- Operator mode becomes an *option* for self-hosters too (we'll document what
+  the spike builds).
+- `acs` gets a `--server` flag to point at a self-hosted control plane only
+  if we ever open one. Otherwise self-hosters use creds files as today
+  (`JOIN_HUB.md`).
+
+## 10. Phases
+
+| Phase | What | Repo | Exit criteria |
+|---|---|---|---|
+| **H-0 spike** | Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decision recorded here |
+| **H-1 connector** | Client crate split; `acs` login/up/status/agent/mcp install against a stub control plane; creds refresh; packaging (brew, curl install) | public | `acs login` → `acs mcp install claude` → delegate a task on a local operator-mode stack |
+| **H-2 control plane MVP** | Sign-up, tenant create (account JWT push + hub-server container), device-code flow, identity minting, revocation | private | A new user goes from sign-up to a delegated task with no manual steps |
+| **H-3 hosted ops + private beta** | Cluster, TLS, limits, encryption at rest, monitoring, backups (W2-B) | private infra | 2 weeks of beta tenants without manual intervention |
+| **H-4 product** | Dashboard (visualizer behind ACS login, W2-C), billing, self-serve | private + public | Paid sign-up works |
+
+W2-B (retention, backup) feeds H-3; W2-C (visualizer) becomes the H-4
+dashboard; W2-D (file locks) is independent.
+
+## 11. Open decisions
+
+1. **License split:** Apache-2.0 client + BUSL-1.1 server (Additional Use
+   Grant: no third-party hosted service; Change Date 4 years → Apache-2.0) +
+   private control plane. Agreed in principle; pending the licensor name.
+2. **Extra broadcast channels** under scoped signing keys (H-0).
+3. **Cloud and region** for the hosted cluster.
+4. **Control-plane language** (Rust vs TypeScript).
+5. **Identity naming:** free-form per tenant (current rules), or
+   `<device>-<agent>` by default.
+6. **MCP-only install without `acs`** (after beta).
+7. **Pricing unit:** per seat, per agent identity, or usage (messages/storage).

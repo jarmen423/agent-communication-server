@@ -313,5 +313,7 @@ in `tests/python/fixtures/`.
 - `docs/PORTABILITY.md`: embedding, feature flags, Storage trait
 - `docs/RELEASING.md`: release workflow, dry runs, install from release
 - `docs/PRODUCT_VISION.md`, `docs/DATABASE_PLAN.md`: vision and persistence design
+- `docs/HOSTED_PLAN.md`: hosted ACS (tenancy, auth, `acs` connector, phases)
+- `docs/DELIVERY.md`: durable delivery (JetStream, `--durable`)
 - `docs/archive/`: finished phase plans and handoffs (historical; see its README)
 - `LICENSE.md`: license decision status (pending)

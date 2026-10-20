@@ -104,6 +104,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done (verified + merged) · �
 | W2-B | Persistence: retention, analytics pushdown, backup | wave 2 | — | ⬜ | |
 | W2-C | Visualizer/observability to 100% | wave 2 | — | ⬜ | |
 | W2-D | File-lock broadcast (new feature) | wave 2 | — | ⬜ | |
+| H-0 | Hosted spike: operator mode, scoped signing keys, tenant isolation | wave 2 | — | ⬜ | `docs/HOSTED_PLAN.md` §10. Next up. |
 
 **Wave 1 integration (orchestrator, `iter2/integration`).** Merging T1 + T2 turned up three bugs that neither task's own tests caught. All are fixed with regression tests:
 1. **Missed heartbeats.** The wave orchestrator only listened on legacy `hub.presence`, so it missed T1's bound heartbeats and would fail live long tasks after the liveness TTL. It now subscribes to both, taking the identity from the subject (`subscribe_subject_tagged`). Regression: `bound_heartbeats_keep_long_running_task_alive`.
@@ -143,5 +144,5 @@ A genuinely required new dependency is fine; flag it.
 
 ## 7. Decisions needed from Josh
 
-1. **License.** BSL-1.1, MIT or Apache-2.0? The crate says BSL-1.1, the plugins say MIT, and there's no LICENSE file. T5 prepares everything except the choice.
-2. **North star** (carried over from iteration 1): A (a hub for your own multi-machine coding agents, recommended), B (an embeddable crate) or C (a consumer product). It affects wave 2's priorities, mainly how much goes into the visualizer versus JetStream/HA.
+1. **License.** Direction agreed 2026-10-20: Apache-2.0 for the client (MCP, connector, workers, client CLIs), BUSL-1.1 for the server (Additional Use Grant: no third-party hosted service; Change Date 4 years → Apache-2.0), hosted control plane private. Pending: the licensor name, then applying it (`set_license.py` needs per-path support).
+2. **North star: decided 2026-10-20 — hosted ACS.** Users sign into an ACS account, we host their hub, and they connect machines with the `acs` connector or the MCP plugin. Plan and phases H-0…H-4: [`docs/HOSTED_PLAN.md`](docs/HOSTED_PLAN.md).
