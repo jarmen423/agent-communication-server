@@ -206,12 +206,33 @@ async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
             on_cancel(client, inbox, id, &env.meta.from, None).await;
             continue;
         }
+        if !admit_session(inbox, &env) {
+            continue;
+        }
         match task_prompt(&env, direct) {
             Ok(prompt) => handle_task(client, args, env, prompt, inbox).await,
             Err(why) => debug!(id = %env.meta.id, why, "not a task, ignoring"),
         }
     }
     info!("inbox stream closed, shutting down");
+}
+
+/// C5 for session actions: false (logged) when `env` acts on a session it
+/// doesn't own. Progress/control kinds are never session actions.
+fn admit_session(inbox: &mut Inbox, env: &Envelope) -> bool {
+    if matches!(
+        env.meta.kind,
+        MessageKind::Status | MessageKind::Event | MessageKind::Control
+    ) {
+        return true;
+    }
+    match inbox.sessions.admit(env) {
+        Ok(()) => true,
+        Err(why) => {
+            warn!(id = %env.meta.id, %why, "session action ignored");
+            false
+        }
+    }
 }
 
 /// Apply a cancel for `id` from `by`. Returns true if it targets the running task.
@@ -242,6 +263,9 @@ async fn queue_or_reject(
     direct: bool,
     running: &Envelope,
 ) {
+    if !admit_session(inbox, &env) {
+        return;
+    }
     let prompt = match task_prompt(&env, direct) {
         Ok(prompt) => prompt,
         Err(why) => {

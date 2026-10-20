@@ -357,3 +357,76 @@ async fn e2e_delegate_ignores_result_from_non_worker() {
     let _ = worker.drain().await;
     let _ = mallory.drain().await;
 }
+
+// ── hub-worker session actions (C5) ───────────────────────────────────
+
+#[tokio::test]
+async fn e2e_rust_worker_ignores_session_send_from_non_owner() {
+    let Some(url) = stack_url() else { return };
+    let worker = uniq("sess-worker");
+    let probe = HubClient::connect(&url, uniq("probe")).await.unwrap();
+    let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
+    let _w = Command::new(env!("CARGO_BIN_EXE_hub-worker"))
+        .args([
+            "--identity",
+            &worker,
+            "--nats-url",
+            &url,
+            "--execute",
+            "rev",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    recv_until(&mut reg, 30, |e| e.payload["identity"] == worker.as_str()).await;
+
+    let boss = HubClient::connect(&url, uniq("boss")).await.unwrap();
+    let mallory = HubClient::connect(&url, uniq("mallory")).await.unwrap();
+    let sid = uniq("s");
+    let channel = format!("session.{sid}");
+    let mut boss_in = boss.subscribe_inbox().await.unwrap();
+    let mut mallory_in = mallory.subscribe_inbox().await.unwrap();
+    let act = |from: &HubClient, action: &str, text: &str| {
+        Envelope::new(
+            from.identity(),
+            &channel,
+            MessageKind::Message,
+            json!({"action": action, "session_id": sid, "message": text, "prompt": text}),
+        )
+        .to(&worker)
+    };
+
+    let start = act(&boss, "session_start", "abc");
+    boss.send(&start).await.unwrap();
+    let r = recv_until(&mut boss_in, 15, |e| {
+        is_task_result(e, &start.meta.id, &worker)
+    })
+    .await;
+    assert_eq!(r.payload["result"], "cba");
+
+    // Someone else's turn on boss's session never runs.
+    let forged = act(&mallory, "session_send", "evil");
+    mallory.send(&forged).await.unwrap();
+    let answered = try_recv_until(&mut mallory_in, Duration::from_secs(2), |e| {
+        e.meta.reply_to.as_deref() == Some(forged.meta.id.as_str())
+    })
+    .await;
+    assert!(
+        answered.is_none(),
+        "non-owner session_send ran: {answered:?}"
+    );
+
+    let send = act(&boss, "session_send", "xyz");
+    boss.send(&send).await.unwrap();
+    let r = recv_until(&mut boss_in, 15, |e| {
+        is_task_result(e, &send.meta.id, &worker)
+    })
+    .await;
+    assert_eq!(r.payload["result"], "zyx");
+    let _ = probe.drain().await;
+    let _ = boss.drain().await;
+    let _ = mallory.drain().await;
+}

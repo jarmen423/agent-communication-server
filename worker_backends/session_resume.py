@@ -56,6 +56,29 @@ def backend_ctx_from(resp: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def owner_from(resp: dict[str, Any]) -> str | None:
+    """The session owner (``orchestrator``) from a ``session.get`` response."""
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return None
+    data = resp.get("data") or {}
+    session = data.get("session") if isinstance(data.get("session"), dict) else data
+    owner = session.get("orchestrator") if isinstance(session, dict) else None
+    return owner if isinstance(owner, str) and owner else None
+
+
+async def fetch_resume_state(
+    api: ApiRequest, session_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """``(backend_ctx, owner)`` of a persisted session, ``(None, None)`` on
+    any error. The owner gates who may drive a resumed session (C5)."""
+    try:
+        resp = await api(GET_OP, {"session_id": session_id})
+    except Exception as e:  # noqa: BLE001 - resume is best effort
+        logger.warning("session %s: %s failed: %s", session_id, GET_OP, e)
+        return None, None
+    return backend_ctx_from(resp), owner_from(resp)
+
+
 async def fetch_backend_ctx(api: ApiRequest, session_id: str) -> dict[str, Any] | None:
     try:
         return backend_ctx_from(await api(GET_OP, {"session_id": session_id}))

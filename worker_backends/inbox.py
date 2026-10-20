@@ -105,12 +105,17 @@ class InboxDispatcher:
 
     def _dedupe_start(self, session_id: Any, task_id: str, owner: str) -> bool:
         """C3: a re-dispatched session_start while that session's turn is
-        still queued or running aliases the running turn instead of a rerun."""
+        still queued or running aliases the running turn instead of a rerun.
+        One from anyone but the turn's sender is dropped (C5). True = handled."""
         if not isinstance(session_id, str) or not session_id:
             return False
         running = self._start_turns.get(session_id)
         if running is None or running not in self.registry:
             return False
+        if owner != self.registry.owner(running):  # C5: not the session's owner
+            print(f"[{self.log}] session_start {task_id} for session {session_id} from "
+                  f"{owner!r} ignored: owner is {self.registry.owner(running)!r}")
+            return True
         if not self.registry.alias(task_id, running, owner=owner):
             return False
         print(f"[{self.log}] session_start {task_id} for session {session_id} "

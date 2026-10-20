@@ -287,6 +287,44 @@ def test_redispatched_session_start_aliases_running_turn():
     assert started == [id1, id3] and id2 not in started
 
 
+def test_redispatch_from_a_third_party_is_dropped_not_aliased():
+    """C5 + C3: someone else's session_start for a running session must not
+    become an alias (it could then cancel the owner's turn)."""
+    async def run():
+        h = Harness()
+        start = {"action": "session_start", "session_id": "w1--t1", "prompt": "go"}
+        first, id1 = _msg("hub-orchestrator", "message", start)
+        await h.inbox.on_message(first)
+        await h.settle()
+        forged, id2 = _msg("mallory", "message", start)
+        await h.inbox.on_message(forged)
+        await h.settle()
+        not_aliased = id2 not in h.registry
+        await h.inbox.on_message(_msg("mallory", "control",
+                                      {"action": "cancel", "task_id": id2})[0])
+        await h.settle()
+        running = not h.registry.get(id1).requested
+        await h.close()
+        return not_aliased, running, h.started
+
+    not_aliased, running, started = asyncio.run(run())
+    assert not_aliased and running and len(started) == 1
+
+
+def test_session_owner_from_record():
+    from worker_backends import session_resume as sr
+
+    rec = {"ok": True, "data": {"session": {"orchestrator": "boss", "backend_ctx": {"k": 1}}}}
+
+    async def api(op, params):
+        return rec
+
+    assert sr.owner_from(rec) == "boss"
+    assert sr.owner_from({"ok": False}) is None
+    assert sr.owner_from({"ok": True, "data": {"session": {}}}) is None
+    assert asyncio.run(sr.fetch_resume_state(api, "s")) == ({"k": 1}, "boss")
+
+
 def test_session_channel_send_is_cancellable_while_queued():
     async def run():
         h = Harness()

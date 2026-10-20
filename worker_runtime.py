@@ -242,17 +242,30 @@ async def run_worker(cfg: WorkerConfig) -> None:
             "sender": sender,
         }
 
-    async def resume_session(session_id: str, session_channel: str, sender: str) -> bool:
+    async def resume_session(session_id: str, session_channel: str,
+                             owner: str | None = None) -> bool:
         """Rebuild a session this process doesn't hold (worker restart) from
-        the backend_ctx persisted via the API (session.get)."""
+        the backend_ctx persisted via the API (session.get). Its owner is the
+        record's ``orchestrator`` (never the sender of the triggering message)."""
         if not cfg.session_resume or session_id in active_sessions:
             return session_id in active_sessions
-        ctx = await session_resume.fetch_backend_ctx(api_request, session_id)
+        ctx, record_owner = await session_resume.fetch_resume_state(api_request, session_id)
         if ctx is None:
             return False
-        await open_session(session_id, session_channel, sender, {}, ctx)
+        await open_session(session_id, session_channel, owner or record_owner or "unknown",
+                           {}, ctx)
         print(f"[{log}] resumed session {session_id} from persisted backend_ctx")
         return True
+
+    def owner_ok(session_id: str, sender: str | None, action: str) -> bool:
+        """C5 for sessions: only the session's owner (the sender of its
+        session_start, or the persisted record's orchestrator) may drive it."""
+        owner = active_sessions[session_id].get("sender")
+        if sender and sender == owner:
+            return True
+        print(f"[{log}] {action} for session {session_id} from {sender!r} ignored: "
+              f"owner is {owner!r}")
+        return False
 
     async def process_session_msg(msg: Msg) -> None:
         try:
@@ -281,10 +294,18 @@ async def run_worker(cfg: WorkerConfig) -> None:
             sender = meta.get("from", "unknown")
             prompt = payload.get("prompt")
             print(f"[{log}] session_start: {session_id} from {sender} on {session_channel}")
-            if session_id not in active_sessions:  # a re-sent start reuses the session
-                # After a worker restart the backend session may still exist.
-                ctx = (await session_resume.fetch_backend_ctx(api_request, session_id)
-                       if cfg.session_resume else None)
+            if session_id in active_sessions:  # a re-sent start reuses the session
+                if not owner_ok(session_id, sender, action):
+                    return
+            else:
+                # After a worker restart the backend session may still exist,
+                # but only its owner may pick it up again.
+                ctx, owner = ((await session_resume.fetch_resume_state(api_request, session_id))
+                              if cfg.session_resume else (None, None))
+                if ctx is not None and owner and owner != sender:
+                    print(f"[{log}] session_start {session_id} from {sender}: persisted "
+                          f"session belongs to {owner}; not resuming its backend_ctx")
+                    ctx = None
                 await open_session(session_id, session_channel, sender, payload, ctx)
             await publish(session_channel, "status", {"status": "ready"})
             if prompt:
@@ -292,8 +313,10 @@ async def run_worker(cfg: WorkerConfig) -> None:
 
         elif action == "session_send":
             channel = meta.get("channel") or f"session.{session_id}"
-            if not await resume_session(session_id, channel, meta.get("from", "unknown")):
+            if not await resume_session(session_id, channel):
                 await report_unknown_session(session_id, channel, meta.get("id"))
+                return
+            if not owner_ok(session_id, meta.get("from"), action):
                 return
             session = active_sessions[session_id]
             message = payload.get("message") or payload.get("prompt") or payload.get("text")
@@ -305,6 +328,8 @@ async def run_worker(cfg: WorkerConfig) -> None:
         elif action == "session_close":
             if session_id not in active_sessions:
                 print(f"[{log}] session_close for unknown session {session_id}, ignoring")
+                return
+            if not owner_ok(session_id, meta.get("from"), action):
                 return
             session = active_sessions.pop(session_id)
             print(f"[{log}] session_close: {session_id}")

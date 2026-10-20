@@ -8,6 +8,9 @@
 //! A `session_start` for a session whose task is already queued or running
 //! (an orchestrator re-dispatch) is not run twice: its id becomes an alias
 //! of that task, so a cancel by either id works (C3).
+//!
+//! Session actions are gated by [`Sessions::admit`]: only the session's owner
+//! (the sender of its `session_start`) may send to or close it (C5).
 
 use nats_hub::client::{looks_like_task_result, task_channel};
 use nats_hub::{Envelope, MessageKind};
@@ -25,6 +28,8 @@ pub struct Inbox {
     max_queued: usize,
     /// alias envelope id → (task id it stands for, the alias's sender)
     aliases: HashMap<String, (String, String)>,
+    /// Session owners (C5 for session actions).
+    pub sessions: Sessions,
 }
 
 /// What a cancel request resolves to.
@@ -37,6 +42,66 @@ pub enum CancelTarget {
     Denied(String),
     /// Unknown or finished.
     Unknown,
+}
+
+/// Sessions this worker has seen started, with their owners (bounded).
+const MAX_SESSIONS: usize = 1024;
+
+#[derive(Default)]
+pub struct Sessions {
+    owners: VecDeque<(String, String)>, // (session id, owner), oldest first
+}
+
+impl Sessions {
+    fn owner(&self, session: &str) -> Option<&str> {
+        self.owners
+            .iter()
+            .find(|(s, _)| s == session)
+            .map(|(_, o)| o.as_str())
+    }
+
+    /// C5 for sessions. `Ok` lets `env` through (non-session envelopes
+    /// always pass); `Err(reason)` means ignore it. A first `session_start`
+    /// records its sender as the owner; the owner's `session_close` forgets
+    /// the session. `session_send`/`session_close` for a session this worker
+    /// never saw started are refused: there is no owner to check against.
+    pub fn admit(&mut self, env: &Envelope) -> Result<(), String> {
+        let Some(action) = env.payload.get("action").and_then(|v| v.as_str()) else {
+            return Ok(());
+        };
+        if !matches!(action, "session_start" | "session_send" | "session_close") {
+            return Ok(());
+        }
+        let session = env
+            .payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| env.meta.channel.strip_prefix("session."))
+            .map(str::to_string);
+        let Some(session) = session else {
+            return Err(format!("{action} without a session id"));
+        };
+        let from = env.meta.from.as_str();
+        match (action, self.owner(&session)) {
+            ("session_start", None) => {
+                if self.owners.len() >= MAX_SESSIONS {
+                    self.owners.pop_front();
+                }
+                self.owners.push_back((session, from.to_string()));
+                Ok(())
+            }
+            (_, Some(owner)) if owner != from => Err(format!(
+                "{action} for session {session} from {from}: owner is {owner}"
+            )),
+            ("session_close", Some(_)) => {
+                self.owners.retain(|(s, _)| *s != session);
+                Ok(())
+            }
+            (_, Some(_)) => Ok(()),
+            (_, None) => Err(format!("{action} for unknown session {session}")),
+        }
+    }
 }
 
 /// The session id of a `session_start` task (C3 dedupe key).
@@ -55,6 +120,7 @@ impl Inbox {
             queued: VecDeque::new(),
             max_queued,
             aliases: HashMap::new(),
+            sessions: Sessions::default(),
         }
     }
 
@@ -244,6 +310,36 @@ mod tests {
         );
         assert_eq!(q.pop_queued().unwrap().0.meta.id, b_id);
         assert!(q.pop_queued().is_none());
+    }
+
+    #[test]
+    fn only_the_session_owner_may_send_or_close() {
+        let mut s = Sessions::default();
+        let act = |from: &str, action: &str| {
+            task(
+                from,
+                json!({"action": action, "session_id": "s1", "message": "m"}),
+            )
+        };
+        assert!(s.admit(&task("x", json!({"prompt": "plain"}))).is_ok());
+        assert!(
+            s.admit(&act("boss", "session_send")).is_err(),
+            "unknown session"
+        );
+        assert!(s.admit(&act("boss", "session_start")).is_ok());
+        assert!(s.admit(&act("mallory", "session_send")).is_err());
+        assert!(s.admit(&act("mallory", "session_start")).is_err());
+        assert!(s.admit(&act("mallory", "session_close")).is_err());
+        assert!(s.admit(&act("boss", "session_send")).is_ok());
+        // Session id from the channel when the payload has none (HubClient::close_session).
+        let close = Envelope::new(
+            "boss",
+            "session.s1",
+            MessageKind::Message,
+            json!({"action": "session_close"}),
+        );
+        assert!(s.admit(&close).is_ok());
+        assert!(s.admit(&act("boss", "session_send")).is_err(), "closed");
     }
 
     #[test]

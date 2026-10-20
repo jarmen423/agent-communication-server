@@ -4,7 +4,10 @@
 - ``session_close`` frees the session: its channel subscription is gone, so
   a later broadcast ``session_send`` is not answered (H3.12);
 - a ``session_send`` for a session the worker doesn't hold gets an ``error``
-  result on the session channel instead of silence (H3.6).
+  result on the session channel instead of silence (H3.6);
+- C5 for sessions: ``session_send`` / ``session_close`` from anyone but the
+  session's owner (the sender of its ``session_start``) are ignored — the
+  backend never runs — while the owner's work.
 """
 from __future__ import annotations
 
@@ -19,11 +22,27 @@ from worker_runtime import make_envelope
 SENDER = "pytest"
 
 
-async def _pub(nc, env: bytes) -> str:
+async def _pub(nc, env: bytes, sender: str = SENDER) -> str:
     meta = json.loads(env)["meta"]
-    await nc.publish(f"hub.pub.{SENDER}.{meta['channel']}", env)
+    await nc.publish(f"hub.pub.{sender}.{meta['channel']}", env)
     await nc.flush()
     return meta["id"]
+
+
+async def _no_reply(sub, task_id: str, within: float) -> bool:
+    """True if nothing at all (status/event/result) correlates to ``task_id``."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + within
+    while (left := deadline - loop.time()) > 0:
+        try:
+            msg = await sub.next_msg(timeout=left)
+        except Exception:  # noqa: BLE001 - nats TimeoutError
+            return True
+        env = json.loads(msg.data)
+        if env["meta"].get("reply_to") == task_id or (
+                env.get("payload") or {}).get("task_id") == task_id:
+            return False
+    return True
 
 
 async def _no_result(sub, task_id: str, within: float) -> bool:
@@ -54,6 +73,16 @@ def test_session_close_frees_session_and_unknown_session_errors(tmp_path):
                 "session_channel": channel, "prompt": "abc"})
             first = await wait_result(sub, await _pub(nc, start), within=15)
 
+            # A third party can publish on the session channel, but the
+            # worker ignores its turns and its close (no reply, no backend run).
+            forged = make_envelope("mallory", None, channel, "message", {
+                "action": "session_send", "session_id": sid, "message": "evil"})
+            ignored_send = await _no_reply(sub, await _pub(nc, forged, "mallory"), within=2.0)
+            forged_close = make_envelope("mallory", None, channel, "message", {
+                "action": "session_close", "session_id": sid})
+            await _pub(nc, forged_close, "mallory")
+            await asyncio.sleep(0.5)
+
             send = make_envelope(SENDER, None, channel, "message", {
                 "action": "session_send", "session_id": sid, "message": "xyz"})
             second = await wait_result(sub, await _pub(nc, send), within=15)
@@ -70,12 +99,15 @@ def test_session_close_frees_session_and_unknown_session_errors(tmp_path):
             dm = make_envelope(SENDER, worker, channel, "message", {
                 "action": "session_send", "session_id": sid, "message": "dm"})
             unknown = await wait_result(sub, await _pub(nc, dm), within=15)
-            return first, second, unanswered, unknown, proc.poll()
+            log = (tmp_path / "worker.log").read_text()
+            return first, second, unanswered, unknown, proc.poll(), ignored_send, log
         finally:
             stop_worker(proc)
             await nc.close()
 
-    first, second, unanswered, unknown, exit_code = run(scenario())
+    first, second, unanswered, unknown, exit_code, ignored_send, log = run(scenario())
+    assert ignored_send, "a third party's session_send was answered"
+    assert "evil" not in log and "ignored: owner is 'pytest'" in log, log
     assert first["payload"]["status"] == "done" and first["payload"]["result"] == "echo: cba"
     assert second["payload"]["result"] == "echo: zyx"
     assert unanswered, "a closed session must not keep its channel subscription"

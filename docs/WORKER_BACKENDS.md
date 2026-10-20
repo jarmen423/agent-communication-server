@@ -59,6 +59,16 @@ subject and the check is real. Delegators apply the same rule to results:
 and the MCP server accept a terminal result only from the worker they
 delegated to.
 
+**Who may drive a session (C5).** `session_send` and `session_close` are
+accepted only from the session's owner: the sender of its `session_start`
+(for waves, the orchestrator identity), or for a session resumed after a
+restart, the persisted record's `orchestrator`. Anyone else's are ignored
+with a log line and no reply (the backend never runs). A re-sent
+`session_start` from someone else is ignored too, and a new `session_start`
+from a non-owner never adopts a persisted session's `backend_ctx`.
+`hub-worker` applies the same rule to session actions DMed to it, and refuses
+`session_send`/`session_close` for sessions it never saw started.
+
 **Re-dispatch (C3).** A `session_start` for a session whose turn is still
 queued or running (an orchestrator re-dispatch after a restart) does not start
 a second run. Its envelope id becomes an alias of the in-flight turn, so a
