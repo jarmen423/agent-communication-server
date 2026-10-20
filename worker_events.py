@@ -15,8 +15,16 @@ concurrent turns on one backend never see each other's progress, and a
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Protocol
 
+from worker_backends.proc import (
+    StderrTail,
+    drain_stream,
+    kill_group,
+    track_group,
+    untrack_group,
+)
 from worker_backends.progress import PROGRESS_HANDLER, ProgressHandler
 from worker_backends.task_registry import TurnCancel
 
@@ -150,15 +158,85 @@ async def publish_cancelled(
     await publish(channel, "status", {"status": "cancelled"}, reply_to=task_id)
 
 
-async def run_verify_cmd(verify_cmd: str) -> None:
+VERIFY_TIMEOUT_SECS = 600.0  # default; WorkerConfig.verify_timeout_secs overrides
+VERIFY_OUTPUT_TAIL_BYTES = 16 * 1024  # output kept for the error message
+VERIFY_ERROR_TAIL_CHARS = 4000
+VERIFY_PIPE_GRACE_SECS = 2.0  # after exit, wait this long for the output to close
+
+
+def verify_timeout_from_env(default: float = VERIFY_TIMEOUT_SECS) -> float:
+    """``NATS_HUB_VERIFY_TIMEOUT_SECS`` (seconds, > 0), else ``default``."""
+    raw = os.environ.get("NATS_HUB_VERIFY_TIMEOUT_SECS")
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+async def run_verify_cmd(
+    verify_cmd: str,
+    *,
+    cwd: str | None = None,
+    timeout: float | None = VERIFY_TIMEOUT_SECS,
+) -> None:
+    """Run a wave task's ``verify_cmd`` (shell) to completion.
+
+    - Its own process group, killed (TERM, then KILL) on timeout or when the
+      caller is cancelled (a §4.2 cancel during verify), so no orphan survives.
+    - stdout+stderr are drained as they arrive into a bounded tail buffer, so a
+      chatty command can never block on a full pipe; the tail is quoted in
+      the error.
+    - Runs in ``cwd`` (the worker's repo/workdir).
+    """
     proc = await asyncio.create_subprocess_shell(
         verify_cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=cwd,
+        start_new_session=True,
     )
-    await proc.wait()
+    track_group(proc.pid)
+    tail = StderrTail(VERIFY_OUTPUT_TAIL_BYTES)
+
+    async def _collect() -> None:
+        drain = asyncio.ensure_future(drain_stream(proc.stdout, tail.feed))
+        try:
+            # proc.wait() resolves only once the pipe closes too, so watch the
+            # exit status instead: a background grandchild may hold the pipe.
+            while not drain.done() and proc.returncode is None:
+                await asyncio.wait({drain}, timeout=0.1)
+            if not drain.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(drain), VERIFY_PIPE_GRACE_SECS)
+                except asyncio.TimeoutError:
+                    await kill_group(proc, grace=0)  # SIGKILLs the leftovers
+            await drain
+            await proc.wait()
+        finally:
+            drain.cancel()
+
+    try:
+        await asyncio.wait_for(_collect(), timeout=timeout)
+    except asyncio.TimeoutError:
+        await kill_group(proc)
+        raise RuntimeError(
+            f"verify_cmd timed out after {timeout:g}s: {verify_cmd}"
+            + _quoted(tail.text(VERIFY_ERROR_TAIL_CHARS))) from None
+    except BaseException:
+        await asyncio.shield(kill_group(proc))
+        raise
+    finally:
+        if proc.returncode is not None:
+            untrack_group(proc.pid)
     if proc.returncode != 0:
-        raise RuntimeError(f"verify_cmd failed (exit {proc.returncode}): {verify_cmd}")
+        raise RuntimeError(f"verify_cmd failed (exit {proc.returncode}): {verify_cmd}"
+                           + _quoted(tail.text(VERIFY_ERROR_TAIL_CHARS)))
+
+
+def _quoted(output: str) -> str:
+    return f"\n--- output (tail) ---\n{output}" if output else ""
 
 
 async def execute_with_events(
@@ -175,14 +253,21 @@ async def execute_with_events(
     wave_channel: str | None = None,
     verify_cmd: str | None = None,
     cancel: TurnCancel | None = None,
+    verify_cwd: str | None = None,
+    verify_timeout: float | None = VERIFY_TIMEOUT_SECS,
 ) -> tuple[str, dict[str, Any]] | None:
     """Run one worker turn, emitting started/progress/completed|error events.
 
     If the backend supports streaming (e.g. Grok ACP), mid-turn message/thought
     chunks are forwarded as progress events so visualizers can update live.
-    ``cancel.cancel()`` stops the turn: the result is then ``status:
-    cancelled`` (and an ``error`` event with ``cancelled: true``, so wave
-    watchers treat the task as terminal).
+    ``cancel.cancel()`` stops the turn — the backend run or a running
+    ``verify_cmd`` — and the result is then ``status: cancelled`` (and an
+    ``error`` event with ``cancelled: true``, so wave watchers treat the task
+    as terminal).
+
+    Exactly one terminal result is published: once ``finish`` (or the
+    cancelled path) has started, a later failure is logged, never answered
+    with a second result.
     """
     emit = lambda et, data: publish_event_dual(
         publish_event_fn, channel, wave_channel, task_id, et, data
@@ -201,7 +286,11 @@ async def execute_with_events(
             text = payload.get("text") or payload.get("message") or ""
             await emit("progress", {"message": text, **payload, "phase": "message"})
 
+    terminal_sent = False
+
     async def finish(kind: str, payload: dict[str, Any], status: str, event: dict[str, Any]) -> None:
+        nonlocal terminal_sent
+        terminal_sent = True
         await emit(kind, event)
         await publish(channel, "message", payload, reply_to=task_id)
         await publish(channel, "status", {"status": status}, reply_to=task_id)
@@ -218,7 +307,13 @@ async def execute_with_events(
             raise asyncio.CancelledError
         if verify_cmd:
             await emit("progress", {"message": f"running verify: {verify_cmd}", "phase": "verify"})
-            await run_verify_cmd(verify_cmd)
+            verify = asyncio.ensure_future(
+                run_verify_cmd(verify_cmd, cwd=verify_cwd, timeout=verify_timeout))
+            if cancel is not None:
+                cancel.attach(verify)  # a cancel during verify kills its group
+            await verify
+            if cancelled():
+                raise asyncio.CancelledError
             await emit("milestone", {"name": "verify_passed"})
         await finish("completed", result_payload(task_id, result=result_text), done_status,
                      {"result": result_text})
@@ -226,11 +321,18 @@ async def execute_with_events(
     except asyncio.CancelledError:
         if not cancelled():
             raise  # worker shutdown, not a §4.2 cancel
+        if terminal_sent:
+            print(f"[worker] cancel of {task_id} arrived after its result; ignored")
+            return None
+        terminal_sent = True
         await publish_cancelled(publish, publish_event_fn, channel, task_id,
                                 by=cancel.by if cancel is not None else None,
                                 wave_channel=wave_channel)
         return None
     except Exception as err:
         message = str(err) or type(err).__name__
+        if terminal_sent:  # publishing the result itself failed: never send a second
+            print(f"[worker] publishing the result of {task_id} failed: {message}")
+            return None
         await finish("error", result_payload(task_id, error=message), "error", {"error": message})
         return None

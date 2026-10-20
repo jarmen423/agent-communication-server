@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -42,7 +43,9 @@ from worker_events import (
     execute_with_events,
     publish_cancelled,
     publish_event as emit_event,
+    result_payload,
     run_to_result,
+    verify_timeout_from_env,
 )
 
 # Seconds between the first re-announcements (then every heartbeat_secs).
@@ -78,6 +81,16 @@ class WorkerConfig:
     # session.get, see worker_backends/session_resume.py). On unless
     # NATS_HUB_SESSION_RESUME=0.
     session_resume: bool = field(default_factory=session_resume.resume_enabled)
+    # Where a wave task's verify_cmd runs (default: the backend's repo, else
+    # the process cwd) and how long it may take (NATS_HUB_VERIFY_TIMEOUT_SECS,
+    # default 600 s).
+    workdir: str | None = None
+    verify_timeout_secs: float = field(default_factory=verify_timeout_from_env)
+
+
+def _verify_cwd(cfg: WorkerConfig) -> str:
+    repo = cfg.workdir or getattr(cfg.backend, "repo", None)
+    return str(repo) if repo else os.getcwd()
 
 
 async def run_worker(cfg: WorkerConfig) -> None:
@@ -187,6 +200,8 @@ async def run_worker(cfg: WorkerConfig) -> None:
                 wave_channel=session.get("wave_channel"),
                 verify_cmd=session.get("verify_cmd"),
                 cancel=cancel,
+                verify_cwd=_verify_cwd(cfg),
+                verify_timeout=cfg.verify_timeout_secs,
             )
         finally:
             registry.finish(task_id)
@@ -206,7 +221,9 @@ async def run_worker(cfg: WorkerConfig) -> None:
         payload: dict,
         backend_ctx: dict[str, Any] | None = None,
     ) -> None:
-        sub = await nc.subscribe(f"channel.{session_channel}", cb=process_session_msg)
+        # Through the dispatcher: a follow-up turn is registered (cancellable)
+        # on arrival and queued, never run concurrently with another turn.
+        sub = await nc.subscribe(f"channel.{session_channel}", cb=inbox.on_session_message)
         wave_id = payload.get("wave_id")
         wave_channel = f"wave.{wave_id}" if wave_id else None
         wave_sub = None
@@ -276,7 +293,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
         elif action == "session_send":
             channel = meta.get("channel") or f"session.{session_id}"
             if not await resume_session(session_id, channel, meta.get("from", "unknown")):
-                print(f"[{log}] session_send unknown session {session_id}")
+                await report_unknown_session(session_id, channel, meta.get("id"))
                 return
             session = active_sessions[session_id]
             message = payload.get("message") or payload.get("prompt") or payload.get("text")
@@ -287,6 +304,7 @@ async def run_worker(cfg: WorkerConfig) -> None:
 
         elif action == "session_close":
             if session_id not in active_sessions:
+                print(f"[{log}] session_close for unknown session {session_id}, ignoring")
                 return
             session = active_sessions.pop(session_id)
             print(f"[{log}] session_close: {session_id}")
@@ -294,6 +312,19 @@ async def run_worker(cfg: WorkerConfig) -> None:
             if session.get("wave_subscription"):
                 await session["wave_subscription"].unsubscribe()
             await publish(session["channel"], "status", {"status": "closed"})
+
+    async def report_unknown_session(session_id: str | None, channel: str,
+                                     task_id: str | None) -> None:
+        """A turn for a session this worker doesn't hold (and can't resume):
+        answer on the session channel instead of dropping it silently."""
+        print(f"[{log}] session_send for unknown session {session_id}")
+        if not session_id:
+            return
+        error = f"unknown session {session_id} on worker {cfg.identity}"
+        await publish_event(channel, "error", {"error": error, "session_id": session_id},
+                            reply_to=task_id)
+        await publish(channel, "message", result_payload(task_id, error=error),
+                      reply_to=task_id)
 
     # ── Inbox router ────────────────────────────────────────────
 

@@ -58,6 +58,15 @@ PY = sys.executable
 DEFAULT_LOG_DIR = REPO / ".tools" / "run" / "workers"
 READY_TIMEOUT_SEC = 30.0
 
+
+def presence_identity(subject: str | None) -> str | None:
+    """``hub.presence.<identity>`` → ``<identity>`` (one token), else None."""
+    parts = (subject or "").split(".")
+    if len(parts) == 3 and parts[:2] == ["hub", "presence"] and parts[2]:
+        return parts[2]
+    return None
+
+
 class Supervisor:
     def __init__(
         self, nats_url: str, repo: Path, python: str,
@@ -104,12 +113,10 @@ class Supervisor:
     # ── readiness ──────────────────────────────────────────────────────
 
     async def _on_presence(self, msg) -> None:
-        try:
-            env = json.loads(msg.data.decode())
-        except Exception:
-            return
-        meta = env.get("meta") or {}
-        identity = meta.get("from") or (env.get("payload") or {}).get("identity")
+        # Bound heartbeat subject hub.presence.<identity>: the identity comes
+        # from the subject (NATS permissions bind it to the publisher), never
+        # from the self-asserted meta.from / payload.identity.
+        identity = presence_identity(msg.subject)
         if not identity:
             return
         child = self.children.get(identity)

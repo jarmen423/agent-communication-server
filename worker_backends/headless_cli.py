@@ -28,6 +28,7 @@ from worker_backends.proc import ProcResult, ProcTimeout, run_streaming
 from worker_backends.progress import current_progress_handler
 
 DEFAULT_TIMEOUT_SEC = 900.0
+_SAFE_SESSION_DIR = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
 
 # per-turn progress handler (worker_backends.progress): async (kind, data) -> None
 ProgressHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -100,6 +101,10 @@ class HeadlessCliBackend:
     def _cwd(self, ctx: dict[str, Any]) -> Path:
         sid = ctx.get("_session_id")
         if sid and self.spec.session_cwd_subdir:
+            # Session ids are opaque and come off the bus (e.g. the wave id
+            # `<wave_id>--<task_id>`): only one safe path component may be used.
+            if not isinstance(sid, str) or not _SAFE_SESSION_DIR.fullmatch(sid):
+                raise ValueError(f"session id {sid!r} is not a safe directory name")
             p = self.repo / self.spec.session_cwd_subdir / sid
             p.mkdir(parents=True, exist_ok=True)
             return p
