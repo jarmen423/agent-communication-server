@@ -20,6 +20,21 @@ DM and run waves with every other agent in their account, with durable delivery
 when laptops sleep. Self-hosting keeps working with the same binaries (see
 section 9).
 
+### Kinds of agents, and how each connects
+
+ACS is the connector for *all* of a user's agents, not only coding CLIs:
+
+| Agent kind | Examples | Connects through | Can act as |
+|---|---|---|---|
+| Local CLI agents | Claude Code, Codex, Cursor, Hermes | `acs` + the local (stdio) MCP plugin, or a worker | orchestrator **and** worker |
+| Personal agents / bots running as services | dots, grok bot, muse | `acs` on their host with a headless login (§4), then the MCP plugin, the Python client or `hub-worker` | orchestrator **and** worker (always on) |
+| Web chat apps | claude.ai, chatgpt.com, grok.com | the **hosted remote MCP endpoint** (§4b), added as a custom connector; ACS sign-in via OAuth | orchestrator only (acts during a chat turn) |
+
+Web chat agents can't run a binary or hold a connection open between turns,
+so they can't sit waiting for tasks. They can delegate, check their inbox
+and fetch results, and durable delivery (`--durable`) keeps their DMs and
+task results until the next turn picks them up.
+
 ## 2. What we already have
 
 | Need | State | Where |
@@ -138,9 +153,39 @@ creds at all. That's closer to tailscaled, but identity binding gets harder:
 the leaf connection is one NATS user, so the daemon would have to enforce
 per-agent subjects locally. Not for v1.
 
-**MCP without the binary:** possible (the MCP server runs the device flow
-itself), but it duplicates the connector. v1 requires `acs`. Revisit after
-beta.
+**MCP without the binary:** on a machine, v1 requires `acs` (a local MCP
+server running its own device flow would duplicate the connector). Where
+there is no machine at all (web chat apps), use §4b.
+
+**Headless login** for always-on bots and servers (dots, grok bot, muse):
+`acs login --headless` prints the device-code URL to open on any other
+device, or `acs login --key <service key>` uses a per-identity service key
+created in the dashboard. Either way the daemon then refreshes credentials
+as usual.
+
+## 4b. Hosted remote MCP endpoint (for web chat apps)
+
+`https://mcp.acs…/` speaks MCP over streamable HTTP with OAuth sign-in, so a
+user adds ACS as a custom connector in claude.ai, ChatGPT or Grok and
+approves it with their ACS login.
+
+- **Each connector install is one identity** in the tenant (for example
+  `claude-web`, `chatgpt-web`), minted on the OAuth consent screen.
+- **The endpoint holds the NATS connection for it.** It is a multi-tenant
+  service that connects into each tenant's account with that identity's
+  credentials, using the same tool set as `mcp_server/` (delegate, inbox,
+  `wait_for_task`, waves, sessions). Today's MCP server is stdio-only and
+  keeps its buffers in memory, so the hosted version reads inboxes and task
+  results from JetStream (the `inbox-<id>` consumer, `HUB_TASKS`) instead of
+  process memory. That makes it stateless and horizontally scalable.
+- **Turn-bounded waits.** Chat apps cap how long one tool call may run, so
+  `delegate` returns a task id quickly and `wait_for_task` waits only up to
+  that cap. A later turn picks up the result.
+- **To verify per platform (H-0):** which apps accept remote MCP connectors
+  with OAuth on which plans, their tool-call timeouts, and whether they
+  need a published/approved app for non-developer users.
+- Code: public (Apache-2.0, it's a client) but it runs only as part of the
+  hosted service.
 
 ## 5. Per-tenant hub-server
 
@@ -170,7 +215,9 @@ beta.
 
 Not published (license section). Owns:
 
-- users, orgs/tenants, devices, identities; OAuth sign-in + device-code flow
+- users, orgs/tenants, devices, identities; OAuth sign-in, device-code flow,
+  service keys, and the OAuth authorization server the remote MCP endpoint
+  (§4b) uses
 - account JWT creation and push to the resolver; account signing keys in KMS
 - hub-server provisioning (create volume + container, rolling upgrades)
 - usage metering (from account JetStream usage and hub-server metrics), billing
@@ -231,8 +278,9 @@ The residual risks in `SECURITY.md` change meaning once a tenant is a team:
 
 | Phase | What | Repo | Exit criteria |
 |---|---|---|---|
-| **H-0 spike** | Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decision recorded here |
-| **H-1 connector** | Client crate split; `acs` login/up/status/agent/mcp install against a stub control plane; creds refresh; packaging (brew, curl install) | public | `acs login` → `acs mcp install claude` → delegate a task on a local operator-mode stack |
+| **H-0 spike** | Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT; check remote-MCP connector support (OAuth, tool timeouts, plan/approval requirements) in claude.ai, ChatGPT and Grok | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decisions recorded here |
+| **H-1 connector** | Client crate split; `acs` login (incl. headless/service key)/up/status/agent/mcp install against a stub control plane; creds refresh; packaging (brew, curl install) | public | `acs login` → `acs mcp install claude` → delegate a task on a local operator-mode stack; a bot host joins headless |
+| **H-1b remote MCP endpoint** | Streamable-HTTP MCP server backed by JetStream (stateless), OAuth against the stub control plane, turn-bounded waits | public | claude.ai (as a custom connector) delegates to a local worker and fetches the result in a later turn |
 | **H-2 control plane MVP** | Sign-up, tenant create (account JWT push + hub-server container), device-code flow, identity minting, revocation | private | A new user goes from sign-up to a delegated task with no manual steps |
 | **H-3 hosted ops + private beta** | Cluster, TLS, limits, encryption at rest, monitoring, backups (W2-B) | private infra | 2 weeks of beta tenants without manual intervention |
 | **H-4 product** | Dashboard (visualizer behind ACS login, W2-C), billing, self-serve | private + public | Paid sign-up works |
@@ -244,7 +292,7 @@ dashboard; W2-D (file locks) is independent.
 
 1. **License split:** Apache-2.0 client + BUSL-1.1 server (Additional Use
    Grant: no third-party hosted service; Change Date 4 years → Apache-2.0) +
-   private control plane. Agreed in principle; pending the licensor name.
+   private control plane. Agreed; licensor "Agent Memory Labs".
 2. **Extra broadcast channels** under scoped signing keys (H-0).
 3. **Cloud and region** for the hosted cluster.
 4. **Control-plane language** (Rust vs TypeScript).
