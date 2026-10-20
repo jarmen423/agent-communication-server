@@ -191,3 +191,24 @@ pub async fn stop(mut child: Child) {
     let _ = child.start_kill();
     let _ = child.wait().await;
 }
+
+/// [`wait_routing`] as a specific authenticated identity.
+pub async fn wait_routing_as(url: &str, identity: &str, opts: nats_hub::HubConnectOptions) {
+    let client = HubClient::connect_with_opts(url, identity, opts)
+        .await
+        .unwrap();
+    let mut rx = client
+        .subscribe_subject(&format!("channel.inbox.{identity}"))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let env = Envelope::new(identity, "probe", MessageKind::Control, json!({})).to(identity);
+        client.send(&env).await.unwrap();
+        if let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
+            let _ = client.drain().await;
+            return;
+        }
+    }
+    panic!("router never started routing on {url}");
+}

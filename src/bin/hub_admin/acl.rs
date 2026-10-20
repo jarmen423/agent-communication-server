@@ -8,6 +8,56 @@ use nats_hub::query_api::authz::OP_NAMESPACES;
 
 pub(crate) const ROLES: &[&str] = &["worker", "orchestrator", "admin", "service"];
 
+/// Stream names the durable-delivery grants refer to (must match
+/// hub-server's `--delivery-config`; defaults match its defaults).
+#[derive(Clone, Debug)]
+pub(crate) struct JsNames {
+    pub inbox: String,
+    pub tasks: String,
+}
+
+impl Default for JsNames {
+    fn default() -> Self {
+        Self {
+            inbox: nats_hub::delivery::config::DEFAULT_INBOX_STREAM.into(),
+            tasks: nats_hub::delivery::config::DEFAULT_TASKS_STREAM.into(),
+        }
+    }
+}
+
+impl JsNames {
+    pub(crate) fn new(inbox: &str, tasks: &str) -> Result<Self> {
+        for n in [inbox, tasks] {
+            if !nats_hub::delivery::config::valid_name(n) {
+                bail!("invalid stream name {n:?}: use [A-Za-z0-9_-]+");
+            }
+        }
+        Ok(Self {
+            inbox: inbox.into(),
+            tasks: tasks.into(),
+        })
+    }
+}
+
+/// Durable-delivery grants for one agent (docs/DELIVERY.md → Permissions).
+/// Agents never create JetStream objects: hub-server creates the inbox
+/// consumer on `hub.delivery.<id>.inbox`. The agent may then only look up,
+/// pull from and ack **its own** consumer, and read the tasks stream by
+/// sequence (`DIRECT.GET`; the same visibility `channel.task.>` already
+/// gives). No `CONSUMER.CREATE`, no `STREAM.MSG.GET` on the inbox stream,
+/// no other identity's consumer. All harmless on a hub without JetStream
+/// (nobody answers), so they are always rendered.
+fn delivery_publish_allow(identity: &str, js: &JsNames) -> Vec<String> {
+    let consumer = nats_hub::delivery::inbox_consumer_name(identity);
+    vec![
+        format!("hub.delivery.{identity}.>"),
+        format!("$JS.API.CONSUMER.INFO.{}.{consumer}", js.inbox),
+        format!("$JS.API.CONSUMER.MSG.NEXT.{}.{consumer}", js.inbox),
+        format!("$JS.ACK.{}.{consumer}.>", js.inbox),
+        format!("$JS.API.DIRECT.GET.{}", js.tasks),
+    ]
+}
+
 /// Refuse identities an agent credential must never carry: invalid tokens,
 /// API op namespaces (bound API subjects would parse as legacy ops) and the
 /// hub's own component identities.
@@ -78,7 +128,7 @@ fn subscribe_allow(identity: &str, role: &str, channels: &[String]) -> Vec<Strin
 /// except `hub.worker.>` (worker-supervisor requests: list/models/ensure/
 /// stop), which services and orchestrating roles (orchestrator, admin) may
 /// call; plain workers may not.
-fn publish_allow(identity: &str, role: &str) -> Vec<String> {
+fn publish_allow(identity: &str, role: &str, js: &JsNames) -> Vec<String> {
     let mut allow = vec![
         format!("hub.pub.{identity}.>"),
         format!("hub.register.{identity}"),
@@ -88,6 +138,7 @@ fn publish_allow(identity: &str, role: &str) -> Vec<String> {
     if role != "worker" {
         allow.push("hub.worker.>".into());
     }
+    allow.extend(delivery_publish_allow(identity, js));
     allow
 }
 
@@ -106,6 +157,7 @@ pub(crate) fn user_entry(
     secret: &str,
     channels: &[String],
     ws_only: bool,
+    js: &JsNames,
 ) -> String {
     let cred = if let Some(pubkey) = secret.strip_prefix("nkey:") {
         format!("nkey: {pubkey}")
@@ -132,7 +184,7 @@ pub(crate) fn user_entry(
         publish: {{ allow: [{}] }},
         subscribe: {{ allow: [{}] }},{responses}
       }} }},"#,
-        quoted_list(&publish_allow(identity, role)),
+        quoted_list(&publish_allow(identity, role, js)),
         quoted_list(&subscribe_allow(identity, role, channels)),
     )
 }
@@ -148,12 +200,15 @@ pub(crate) fn user_entry(
 ///   sees every envelope on `hub.pub.*.>`, so this adds no visibility) and
 ///   its own reply inbox `_INBOX.hub-server.>` (every in-process client
 ///   connects as user `hub-server`, so they all share this prefix).
+/// - publish `$JS.API.>` / `$JS.ACK.>`: durable delivery (`--durable`)
+///   creates the streams and consumers and acks ingress; harmless without
+///   JetStream.
 pub(crate) fn hub_server_entry(password: &str) -> String {
     format!(
         r#"    # role: hub-server (router, query API, wave orchestrator, ws bridge)
     {{ user: "hub-server", password: "{password}",
       permissions: {{
-        publish: {{ allow: ["channel.>", "hub.>"] }},
+        publish: {{ allow: ["channel.>", "hub.>", "$JS.API.>", "$JS.ACK.>"] }},
         subscribe: {{ allow: ["hub.>", "channel.>", "_INBOX.hub-server.>"] }},
         allow_responses: true,
       }} }},"#
