@@ -4,10 +4,14 @@
 //! Only *task* envelopes are ever queued (see [`task_prompt`]), so a cancel
 //! can only match a task. A cancel is honoured only when it comes from the
 //! sender of the task it names (HARDENING.md C5).
+//!
+//! A `session_start` for a session whose task is already queued or running
+//! (an orchestrator re-dispatch) is not run twice: its id becomes an alias
+//! of that task, so a cancel by either id works (C3).
 
 use nats_hub::client::{looks_like_task_result, task_channel};
 use nats_hub::{Envelope, MessageKind};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use tracing::warn;
 
 pub type EnvRx = tokio::sync::mpsc::UnboundedReceiver<Envelope>;
@@ -19,6 +23,28 @@ pub struct Inbox {
     pub broadcast: Option<EnvRx>,
     queued: VecDeque<(Envelope, String)>,
     max_queued: usize,
+    /// alias envelope id → (task id it stands for, the alias's sender)
+    aliases: HashMap<String, (String, String)>,
+}
+
+/// What a cancel request resolves to.
+pub enum CancelTarget {
+    /// The running task (directly or through an alias).
+    Running,
+    /// A queued task, removed from the queue.
+    Queued(Envelope),
+    /// Known, but `by` didn't send it (C5); carries the task's sender.
+    Denied(String),
+    /// Unknown or finished.
+    Unknown,
+}
+
+/// The session id of a `session_start` task (C3 dedupe key).
+pub fn session_start_id(env: &Envelope) -> Option<&str> {
+    (env.payload.get("action").and_then(|v| v.as_str()) == Some("session_start"))
+        .then(|| env.payload.get("session_id").and_then(|v| v.as_str()))
+        .flatten()
+        .filter(|s| !s.is_empty())
 }
 
 impl Inbox {
@@ -28,6 +54,7 @@ impl Inbox {
             broadcast,
             queued: VecDeque::new(),
             max_queued,
+            aliases: HashMap::new(),
         }
     }
 
@@ -59,17 +86,74 @@ impl Inbox {
         self.queued.push_back((task, prompt));
     }
 
-    /// Drop a queued task on cancel — only when `by` sent it (C5). Returns
-    /// it so a `cancelled` result can be sent.
-    pub fn take_queued(&mut self, id: &str, by: &str) -> Option<Envelope> {
-        let pos = self.queued.iter().position(|(e, _)| e.meta.id == id)?;
-        if self.queued[pos].0.meta.from != by {
-            warn!(task_id = %id, %by, owner = %self.queued[pos].0.meta.from,
-                  "cancel from someone other than the task's sender, ignoring");
-            return None;
-        }
-        self.queued.remove(pos).map(|(e, _)| e)
+    /// C3: if `task` re-dispatches the session of the running task or of a
+    /// queued one, register it as an alias of that task and return true
+    /// (the caller then neither queues nor runs it).
+    pub fn alias_redispatch(&mut self, task: &Envelope, running: &Envelope) -> bool {
+        let Some(session) = session_start_id(task) else {
+            return false;
+        };
+        let target = if session_start_id(running) == Some(session) {
+            running.meta.id.clone()
+        } else {
+            match self
+                .queued
+                .iter()
+                .find(|(e, _)| session_start_id(e) == Some(session))
+            {
+                Some((e, _)) => e.meta.id.clone(),
+                None => return false,
+            }
+        };
+        self.aliases
+            .insert(task.meta.id.clone(), (target, task.meta.from.clone()));
+        true
     }
+
+    /// Resolve a cancel for `id` from `by` against the running task and the
+    /// queue (C5: only the sender of the named envelope may cancel it). A
+    /// queued match is removed so a `cancelled` result can be sent.
+    pub fn resolve_cancel(
+        &mut self,
+        id: &str,
+        by: &str,
+        running: Option<&Envelope>,
+    ) -> CancelTarget {
+        let (target, alias_owner) = match self.aliases.get(id) {
+            Some((target, owner)) => (target.clone(), Some(owner.clone())),
+            None => (id.to_string(), None),
+        };
+        if let Some(run) = running.filter(|r| r.meta.id == target) {
+            let owner = alias_owner.unwrap_or_else(|| run.meta.from.clone());
+            return if owner == by {
+                CancelTarget::Running
+            } else {
+                CancelTarget::Denied(owner)
+            };
+        }
+        let Some(pos) = self.queued.iter().position(|(e, _)| e.meta.id == target) else {
+            return CancelTarget::Unknown;
+        };
+        let owner = alias_owner.unwrap_or_else(|| self.queued[pos].0.meta.from.clone());
+        if owner != by {
+            return CancelTarget::Denied(owner);
+        }
+        self.forget(&target);
+        match self.queued.remove(pos) {
+            Some((task, _)) => CancelTarget::Queued(task),
+            None => CancelTarget::Unknown,
+        }
+    }
+
+    /// Drop the aliases of a task that finished or was cancelled.
+    pub fn forget(&mut self, task_id: &str) {
+        self.aliases.retain(|_, (target, _)| target != task_id);
+    }
+}
+
+/// Log a denied cancel (C5).
+pub fn warn_denied(task_id: &str, by: &str, owner: &str) {
+    warn!(%task_id, %by, %owner, "cancel from someone other than the task's sender, ignoring");
 }
 
 /// The task id of a §4.2 cancel request (only DMs count).
@@ -148,10 +232,67 @@ mod tests {
         q.queue(a, "a".into());
         q.queue(b, "b".into());
         assert_eq!(q.full(), Some(2));
-        assert!(q.take_queued(&a_id, "mallory").is_none(), "third party");
-        assert!(q.take_queued("nope", "boss").is_none());
-        assert_eq!(q.take_queued(&a_id, "boss").unwrap().meta.id, a_id);
+        assert!(
+            matches!(q.resolve_cancel(&a_id, "mallory", None), CancelTarget::Denied(o) if o == "boss")
+        );
+        assert!(matches!(
+            q.resolve_cancel("nope", "boss", None),
+            CancelTarget::Unknown
+        ));
+        assert!(
+            matches!(q.resolve_cancel(&a_id, "boss", None), CancelTarget::Queued(t) if t.meta.id == a_id)
+        );
         assert_eq!(q.pop_queued().unwrap().0.meta.id, b_id);
         assert!(q.pop_queued().is_none());
+    }
+
+    #[test]
+    fn redispatched_session_start_aliases_the_running_task() {
+        let mut q = inbox(4);
+        let start = |from: &str| {
+            task(
+                from,
+                json!({"action": "session_start", "session_id": "w1--t1",
+                              "prompt": "go", "task_channel": "wave.w1.task.t1"}),
+            )
+        };
+        let running = start("orch");
+        let again = start("orch");
+        assert!(q.alias_redispatch(&again, &running));
+        assert!(q.full().is_none() && q.pop_queued().is_none(), "not queued");
+        // A cancel by the newest id (C2) stops the running task.
+        assert!(matches!(
+            q.resolve_cancel(&again.meta.id, "orch", Some(&running)),
+            CancelTarget::Running
+        ));
+        assert!(matches!(
+            q.resolve_cancel(&again.meta.id, "eve", Some(&running)),
+            CancelTarget::Denied(_)
+        ));
+        let other = task(
+            "orch",
+            json!({"action": "session_start", "session_id": "w1--t2",
+                                        "prompt": "x"}),
+        );
+        assert!(!q.alias_redispatch(&other, &running), "different session");
+        let plain = task("orch", json!({"prompt": "x"}));
+        assert!(!q.alias_redispatch(&plain, &running));
+        // A re-dispatch of a *queued* session aliases the queued task.
+        q.queue(other.clone(), "x".into());
+        let other_again = task(
+            "orch",
+            json!({"action": "session_start", "session_id": "w1--t2",
+                                              "prompt": "x"}),
+        );
+        assert!(q.alias_redispatch(&other_again, &running));
+        assert!(
+            matches!(q.resolve_cancel(&other_again.meta.id, "orch", Some(&running)),
+                         CancelTarget::Queued(t) if t.meta.id == other.meta.id)
+        );
+        q.forget(&running.meta.id);
+        assert!(matches!(
+            q.resolve_cancel(&again.meta.id, "orch", None),
+            CancelTarget::Unknown
+        ));
     }
 }

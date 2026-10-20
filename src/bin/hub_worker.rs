@@ -40,7 +40,7 @@ mod inbox;
 use anyhow::Result;
 use clap::Parser;
 use exec::{execute_command, ExecOutcome};
-use inbox::{cancel_target, task_prompt, Inbox};
+use inbox::{cancel_target, task_prompt, warn_denied, CancelTarget, Inbox};
 use nats_hub::client::{task_channel, TaskOutcome};
 use nats_hub::{Envelope, HubClient, MessageKind};
 use serde_json::json;
@@ -203,10 +203,7 @@ async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
         };
         if let Some(id) = cancel_target(&env, direct) {
             // Nothing runs between tasks; only a queued task can match.
-            match inbox.take_queued(id, &env.meta.from) {
-                Some(task) => publish_cancelled(client, &task).await,
-                None => debug!(task_id = %id, "cancel for unknown/finished task, ignoring"),
-            }
+            on_cancel(client, inbox, id, &env.meta.from, None).await;
             continue;
         }
         match task_prompt(&env, direct) {
@@ -217,8 +214,34 @@ async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
     info!("inbox stream closed, shutting down");
 }
 
-/// While a task runs: queue another task, or answer at once if the queue is full.
-async fn queue_or_reject(client: &HubClient, inbox: &mut Inbox, env: Envelope, direct: bool) {
+/// Apply a cancel for `id` from `by`. Returns true if it targets the running task.
+async fn on_cancel(
+    client: &HubClient,
+    inbox: &mut Inbox,
+    id: &str,
+    by: &str,
+    running: Option<&Envelope>,
+) -> bool {
+    match inbox.resolve_cancel(id, by, running) {
+        CancelTarget::Running => return true,
+        CancelTarget::Queued(task) => publish_cancelled(client, &task).await,
+        CancelTarget::Denied(owner) => warn_denied(id, by, &owner),
+        CancelTarget::Unknown => {
+            debug!(task_id = %id, "cancel for unknown/finished task, ignoring")
+        }
+    }
+    false
+}
+
+/// While `running` runs: alias a re-dispatch of a known session (C3), queue
+/// another task, or answer at once if the queue is full.
+async fn queue_or_reject(
+    client: &HubClient,
+    inbox: &mut Inbox,
+    env: Envelope,
+    direct: bool,
+    running: &Envelope,
+) {
     let prompt = match task_prompt(&env, direct) {
         Ok(prompt) => prompt,
         Err(why) => {
@@ -226,6 +249,10 @@ async fn queue_or_reject(client: &HubClient, inbox: &mut Inbox, env: Envelope, d
             return;
         }
     };
+    if inbox.alias_redispatch(&env, running) {
+        info!(id = %env.meta.id, "session_start for a session already in flight: aliased, not re-run");
+        return;
+    }
     let Some(max) = inbox.full() else {
         return inbox.queue(env, prompt);
     };
@@ -275,25 +302,21 @@ async fn handle_task(
             next = inbox.recv(), if bus_open => match next {
                 None => bus_open = false,
                 Some((other, other_direct)) => match cancel_target(&other, other_direct) {
-                    Some(id) if id == env.meta.id => {
-                        if other.meta.from != env.meta.from {
-                            warn!(task_id = %id, by = %other.meta.from, owner = %env.meta.from,
-                                  "cancel from someone other than the task's sender, ignoring");
-                        } else if let Some(tx) = cancel_tx.take() {
-                            info!(task_id = %id, by = %other.meta.from, "cancel requested");
-                            let _ = tx.send(());
+                    Some(id) => {
+                        if on_cancel(client, inbox, id, &other.meta.from, Some(&env)).await {
+                            if let Some(tx) = cancel_tx.take() {
+                                info!(task_id = %id, by = %other.meta.from, "cancel requested");
+                                let _ = tx.send(());
+                            }
                         }
                     }
-                    Some(id) => match inbox.take_queued(id, &other.meta.from) {
-                        Some(task) => publish_cancelled(client, &task).await,
-                        None => debug!(task_id = %id, "cancel for unknown task, ignoring"),
-                    },
-                    None => queue_or_reject(client, inbox, other, other_direct).await,
+                    None => queue_or_reject(client, inbox, other, other_direct, &env).await,
                 },
             },
         }
     };
 
+    inbox.forget(&env.meta.id);
     let outcome = match outcome {
         ExecOutcome::Done(output) => {
             info!(id = %env.meta.id, output_len = output.len(), "task completed");
