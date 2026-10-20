@@ -15,7 +15,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -60,6 +60,14 @@ jobs:
 
       - name: Python tests (isolated nats-server + hub-server)
         run: make test-py
+
+      # The same suites again with hub-server --require-bound-identity
+      # (iteration 2 / T1), then with --durable (JetStream; docs/DELIVERY.md).
+      - name: Full suite, bound identity
+        run: make test-bound
+
+      - name: Full suite, durable delivery
+        run: make test-durable
 
   # The embeddable transport-only build (no SurrealDB/RocksDB). Fast: no C++.
   no-storage:

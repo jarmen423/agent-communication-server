@@ -115,8 +115,11 @@ impl DurableStack {
         let mut cmd = Command::new(hub_server_bin());
         cmd.args(["--nats-url", &self.url, "--db-path", ""])
             .args(extra);
-        // `make test-bound`: the private hub enforces bound identity too.
-        if std::env::var_os("NATS_HUB_REQUIRE_BOUND").is_some() {
+        // `make test-bound`: the private hub enforces bound identity too
+        // (unless the test already asked for it; clap rejects a repeat).
+        if std::env::var_os("NATS_HUB_REQUIRE_BOUND").is_some()
+            && !extra.contains(&"--require-bound-identity")
+        {
             cmd.arg("--require-bound-identity");
         }
         cmd.env(
