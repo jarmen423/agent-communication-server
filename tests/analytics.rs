@@ -255,3 +255,68 @@ async fn test_time_range_filter() {
     let total: u64 = points.iter().map(|p| p.count).sum();
     assert_eq!(total, 1, "only the in-window message counts");
 }
+
+/// Scale + pushdown: 20k envelopes across 50 channels over ~7h. Under the
+/// old fetch-then-aggregate implementation every method below pulled all
+/// 20k `EnvelopeRecord`s (payload included) through `query_history`; the
+/// pushed-down queries return only group rows (≤120 buckets, ≤50
+/// channels) or six scalars. Correctness is asserted on the aggregates,
+/// and `src/analytics/surreal.rs`'s unit test asserts the query shape —
+/// together they pin the memory bound: nothing per-envelope leaves the DB.
+#[tokio::test]
+async fn test_large_dataset_aggregates() {
+    let a = setup().await;
+    let base = Utc::now() - Duration::hours(7);
+
+    // Seed 20k envelopes: 50 channels x 400, spread over ~7 hours.
+    const N: usize = 20_000;
+    let channels = 50;
+    for i in 0..N {
+        let e = env_at(
+            &format!("agent-{}", i % 200),
+            &format!("chan.{}", i % channels),
+            // Every 7th is an event — deliberately not aligned with the
+            // 200-agent / 50-channel modulus, so agent/channel/event splits
+            // aren't degenerate.
+            if i % 7 == 0 {
+                MessageKind::Event
+            } else {
+                MessageKind::Message
+            },
+            base + Duration::seconds((i % (7 * 3600)) as i64),
+            json!({"i": i, "event_type": "error"}),
+        );
+        a.storage().store_envelope(&e).await.unwrap();
+    }
+
+    let range = TimeRange::bounded(base - Duration::seconds(1), Utc::now());
+
+    // message_rate: every seeded envelope lands in a bucket.
+    let points = a.message_rate(&range, Interval::Hour).await.unwrap();
+    assert!(
+        points.len() <= 8,
+        "hours bounded, not rows: {}",
+        points.len()
+    );
+    let total: u64 = points.iter().map(|p| p.count).sum();
+    assert_eq!(total, N as u64);
+
+    // channel_hotspots: 50 channels regardless of 20k rows scanned.
+    let hot = a.channel_hotspots(&range, 5).await.unwrap();
+    assert_eq!(hot.len(), 5);
+    assert_eq!(hot[0].messages, 400, "each channel holds exactly 400");
+    let all = a.channel_hotspots(&range, 100).await.unwrap();
+    assert_eq!(all.len(), channels);
+
+    // error_rate: every event carries event_type "error".
+    let expected_events = (0..N).filter(|i| i % 7 == 0).count() as u64;
+    let errs = a.error_rate(&range, Interval::Hour).await.unwrap();
+    let err_total: u64 = errs.iter().map(|p| p.count).sum();
+    assert_eq!(err_total, expected_events);
+
+    // agent_activity: scalar counts only, no row load.
+    let act = a.agent_activity("agent-0", &range).await.unwrap();
+    assert_eq!(act.sent, 100, "200 agents share 20k evenly");
+    let agent0_events = (0..N).filter(|i| i % 200 == 0 && i % 7 == 0).count() as u64;
+    assert_eq!(act.events, agent0_events);
+}

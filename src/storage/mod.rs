@@ -205,6 +205,10 @@ pub trait Storage: Send + Sync {
 
     /// Health check.
     async fn ping(&self) -> Result<()>;
+
+    /// Downcast helper for backend-specific operations (e.g. SurrealDB
+    /// export/import, retention pruning). Implementations return `self`.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 // ── Module wiring ────────────────────────────────────────────
@@ -226,6 +230,12 @@ pub mod session;
 
 #[cfg(feature = "storage-surreal")]
 pub mod wave;
+
+#[cfg(feature = "storage-surreal")]
+pub mod retention;
+
+#[cfg(feature = "storage-surreal")]
+pub mod backup;
 
 #[cfg(feature = "storage-surreal")]
 pub mod surreal;
