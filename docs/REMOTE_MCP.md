@@ -151,7 +151,7 @@ confirmation prompt in ChatGPT, and Claude's directory requires the hints.
 | `delegate` | | | DM a task to a worker; returns `task_id` and `worker` at once |
 | `get_task_result` | ✔ | | terminal result, or `running`. `wait_secs` ≤ 50 (default 25); paged by `cursor` |
 | `cancel_task` | | ✔ | §4.2 cancel DM; waits ≤ 20 s for `cancelled` |
-| `read_inbox` | ✔ | | new DMs, oldest first; `wait_secs` ≤ 50. Each DM is returned once across turns and replicas |
+| `read_inbox` | | | new DMs, oldest first; `wait_secs` ≤ 50. **Consumes** them (acks the durable consumer): each DM is returned once across turns and replicas, so it is not marked read-only and hosts ask before running it. Acks happen before the HTTP response is sent; a response lost in transit loses those DMs (at-most-once per read) |
 | `start_session` / `send_to_session` | | | multi-turn session with a worker |
 | `session_replies` | ✔ | | session channel after `since_seq` (a stream sequence); returns `next_seq` |
 | `close_session` | | ✔ | `session_close` + record closed |

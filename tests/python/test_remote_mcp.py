@@ -130,9 +130,12 @@ def test_every_tool_has_title_and_hints():
         if a.readOnlyHint:
             assert not a.destructiveHint, tool.name
     by = {t.name: t for t in TOOLS}
-    for name in ("get_task_result", "read_inbox", "session_replies", "list_agents",
+    for name in ("get_task_result", "session_replies", "list_agents",
                  "get_history", "wave_status", "whoami"):
         assert by[name].annotations.readOnlyHint, name
+    # read_inbox acks the durable consumer (each DM is handed out once), so it
+    # must not be marked read-only: hosts skip confirmation for read-only tools.
+    assert not by["read_inbox"].annotations.readOnlyHint
     for name in ("cancel_task", "cancel_wave", "close_session"):
         assert by[name].annotations.destructiveHint, name
 

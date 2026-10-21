@@ -271,6 +271,11 @@ pub async fn wait_for_locks(
     timeout: Duration,
     poll: Duration,
 ) -> Result<WaitOutcome> {
+    // Compare exactly as the lock service does (trimmed scope, normalized
+    // paths), or `./src/a.rs` would look free while `src/a.rs` is held.
+    let scope = scope.trim();
+    let paths: Vec<String> = paths.iter().filter_map(|p| normalize_path(p)).collect();
+    let paths = paths.as_slice();
     let me = hub.identity().to_string();
     let mut events = hub.subscribe_channel(&lock_channel(scope)).await?;
     let deadline = tokio::time::Instant::now() + timeout;

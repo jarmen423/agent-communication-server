@@ -35,6 +35,16 @@ def _blocking(locks: list[dict], paths: list[str]) -> list[dict]:
             and any(_paths_overlap(p, lp) for p in paths for lp in l.get("paths", []))]
 
 
+def _normalize_path(raw: str) -> str | None:
+    """Mirror of nats_hub_client::locks::normalize_path (what the lock
+    service stores): trim, drop leading ``./`` and ``/``."""
+    p = raw.strip()
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip("/")
+    return p or None
+
+
 def _paths_overlap(a: str, b: str) -> bool:
     """Mirror of nats_hub_client::locks::paths_overlap."""
     return (a.rstrip("/") == b.rstrip("/")
@@ -90,8 +100,10 @@ async def _wait_for_files(args: dict) -> dict:
     Driven by channel.lock.<hash> events plus a periodic lock.list re-check,
     so a missed event can never hang the waiter.
     """
-    scope = args["scope"]
-    paths = args["paths"]
+    # Compare exactly as the lock service does, or "./src/a.rs" would look
+    # free while "src/a.rs" is held.
+    scope = args["scope"].strip()
+    paths = [p for p in (_normalize_path(x) for x in args["paths"]) if p]
     timeout = float(args["timeout"])
 
     first = await conn.api_request("lock.list", {"scope": scope})
@@ -104,7 +116,9 @@ async def _wait_for_files(args: dict) -> dict:
         return {"ok": True, "data": {"free": True, "scope": scope, "paths": paths}}
 
     nc = await conn.get_nc()
-    sub = await nc.subscribe(channel) if channel else None
+    # lock.list returns the channel name ("lock.<hash>"); its subject is
+    # channel.lock.<hash> (the only lock subject agents may subscribe to).
+    sub = await nc.subscribe(f"channel.{channel}") if channel else None
     try:
         deadline = asyncio.get_event_loop().time() + timeout
         while pending:
@@ -116,7 +130,8 @@ async def _wait_for_files(args: dict) -> dict:
                 )
             try:
                 if sub is not None:
-                    await asyncio.wait_for(sub.next_msg(), timeout=min(_WAIT_POLL_SECS, remaining))
+                    # next_msg has its own 1 s default timeout; pass ours.
+                    await sub.next_msg(timeout=min(_WAIT_POLL_SECS, remaining))
                 else:
                     await asyncio.sleep(min(_WAIT_POLL_SECS, remaining))
             except (asyncio.TimeoutError, TimeoutError):

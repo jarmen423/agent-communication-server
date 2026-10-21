@@ -125,3 +125,38 @@ def test_live_acquire_wait_release():
             await conn.close()
 
     asyncio.run(run())
+
+
+@live
+def test_live_wait_is_event_driven_and_normalized(monkeypatch):
+    """B's wait must (a) treat ' scope ' / './path' like the lock service does
+    (still blocked, not "free"), and (b) unblock on the lock.released event:
+    the poll interval is longer than the test allows, so only the event can
+    wake it."""
+    monkeypatch.setattr(hub_locks, "_WAIT_POLL_SECS", 60.0)
+
+    async def run():
+        try:
+            os.environ["NATS_HUB_IDENTITY"] = "pytest-c"
+            got = await hub_handlers.HANDLERS["lock_files"](
+                {"scope": "evt-repo", "paths": ["src/main.py"]})
+            assert got["ok"], got
+            lock_id = got["data"]["lock"]["lock_id"]
+
+            async def wait_free():
+                os.environ["NATS_HUB_IDENTITY"] = "pytest-d"
+                return await hub_locks._wait_for_files(
+                    {"scope": " evt-repo ", "paths": ["./src/main.py"], "timeout": 30})
+
+            waiter = asyncio.create_task(wait_free())
+            await asyncio.sleep(1.0)
+            assert not waiter.done(), f"normalized path looked free: {waiter.result()}"
+            os.environ["NATS_HUB_IDENTITY"] = "pytest-c"
+            rel = await hub_handlers.HANDLERS["release_files"]({"lock_id": lock_id})
+            assert rel["ok"], rel
+            res = await asyncio.wait_for(waiter, timeout=10)
+            assert res["ok"] and res["data"]["free"], res
+        finally:
+            await conn.close()
+
+    asyncio.run(run())

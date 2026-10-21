@@ -159,6 +159,11 @@ pub(super) async fn handle_http(
     Ok(())
 }
 
+/// Content-Security-Policy for everything the bridge serves.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+    img-src 'self' data: blob:; connect-src 'self' ws: wss:; object-src 'none'; \
+    base-uri 'none'; frame-ancestors 'none'";
+
 async fn write_http_response(
     stream: &mut TcpStream,
     status: u16,
@@ -166,9 +171,12 @@ async fn write_http_response(
     content_type: &str,
     body: &[u8],
 ) -> Result<()> {
-    // no-cache so visualizer HTML edits show up without fighting browser cache
+    // no-cache so visualizer HTML edits show up without fighting browser cache.
+    // CSP: the visualizer renders text from any agent on the bus, so scripts
+    // may only come from this origin (no inline script, no eval) — a missed
+    // escape can't turn into script running with the bridge token.
     let header = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store, max-age=0\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store, max-age=0\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: {CSP}\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes()).await?;

@@ -30,6 +30,10 @@ import nats_connect
 
 log = logging.getLogger("mcp_remote.pool")
 
+# A replaced or evicted connection may still be serving a call (a
+# get_task_result wait of up to WAIT_CAP = 50 s, an inbox fetch/ack), so it is
+# drained only after this grace period. Must stay well under REFRESH_BEFORE.
+DRAIN_GRACE = 70
 REFRESH_BEFORE = 300  # replace a connection whose JWT expires within this
 
 
@@ -79,7 +83,7 @@ class NatsPool:
             if not fresh:
                 await self._fetch_jwt(entry, access_token)
             if nc is not None and not nc.is_closed:
-                asyncio.ensure_future(_drain(nc))
+                asyncio.ensure_future(_drain_later(nc))
             entry.nc = await self._connect(identity, entry)
         await self._evict_over_cap()
         self._ensure_sweeper()
@@ -133,7 +137,7 @@ class NatsPool:
         for key, entry in by_age[: len(self._entries) - self.max_conns]:
             self._entries.pop(key, None)
             if entry.nc is not None:
-                asyncio.ensure_future(_drain(entry.nc))
+                asyncio.ensure_future(_drain_later(entry.nc))
 
     def _ensure_sweeper(self) -> None:
         if self._sweeper is None or self._sweeper.done():
@@ -156,6 +160,12 @@ class NatsPool:
         for entry in entries:
             if entry.nc is not None:
                 await _drain(entry.nc)
+
+
+async def _drain_later(nc: NATSClient, delay: float = DRAIN_GRACE) -> None:
+    """Drain ``nc`` after in-flight calls on it have had time to finish."""
+    await asyncio.sleep(delay)
+    await _drain(nc)
 
 
 async def _drain(nc: NATSClient) -> None:

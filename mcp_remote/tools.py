@@ -35,7 +35,9 @@ REMOTE_ANNOTATIONS = {
     "delegate": ("Delegate a task", False, False, False),
     "get_task_result": ("Get a task result", True, False, True),
     "cancel_task": ("Cancel a task", False, True, True),
-    "read_inbox": ("Read inbox", True, False, False),
+    # Not read-only: it acks the durable inbox consumer, so each message is
+    # handed out once. Hosts must not run it without the user's say-so.
+    "read_inbox": ("Read inbox (consumes messages)", False, False, False),
     "start_session": ("Start a session", False, False, False),
     "send_to_session": ("Send to a session", False, False, False),
     "session_replies": ("Read session replies", True, False, True),

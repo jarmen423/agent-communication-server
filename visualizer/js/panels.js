@@ -36,18 +36,28 @@ export function addTickerEvent(env) {
   if (snippet.length > 32) snippet = snippet.substring(0, 30) + '...';
 
   const entry = document.createElement('div');
-  entry.className = `ticker-entry kind-${kind}`;
+  entry.className = `ticker-entry kind-${String(kind).replace(/[^a-z_-]/gi, '')}`;
   
   // Calculate sender's style color
   const palette = agentPalette(sender);
   const colorHex = `rgb(${palette[0]}, ${palette[1]}, ${palette[2]})`;
 
-  entry.innerHTML = `
-    <span class="ticker-time">${time}</span>
-    <span class="kind-pill">${kind}</span>
-    <span class="ticker-sender" style="color:${colorHex}">${sender.substring(0, 12)}</span>
-    <span class="ticker-body">${snippet}</span>
-  `;
+  // Envelope fields are untrusted (any agent can broadcast): build the
+  // entry with textContent only, never innerHTML.
+  const span = (cls, text) => {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+  const senderEl = span('ticker-sender', String(sender).substring(0, 12));
+  senderEl.style.color = colorHex;
+  entry.append(
+    span('ticker-time', String(time)),
+    span('kind-pill', String(kind)),
+    senderEl,
+    span('ticker-body', snippet),
+  );
 
   ticker.insertBefore(entry, ticker.firstChild);
 

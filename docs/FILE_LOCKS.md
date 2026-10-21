@@ -105,3 +105,12 @@ lock_get`, `wait_for_locks(hub, api, scope, paths, timeout, poll)` —
   not secrets.
 - Advisory only: a malicious agent can ignore locks. Enforcement stays
   out-of-band (code review, CI).
+- **One hub-server per hub.** Lock state lives in hub-server's database.
+  With several hub-servers on separate DBs (allowed for routing, see
+  `DELIVERY.md`), each would keep its own locks, and a release could hit
+  the wrong one. Run locks against a single hub-server.
+- **No per-holder quota yet.** A bound agent can hold many locks (each up
+  to 24 h), and every acquire scans the scope under the service's write
+  lock. Fine for teams; a hosted tenant needs a cap (follow-up).
+- Waiters (`hub-lock wait`, `wait_for_files`) normalize the scope and paths
+  exactly like the service, so `./src/a.rs` waits on `src/a.rs`.
