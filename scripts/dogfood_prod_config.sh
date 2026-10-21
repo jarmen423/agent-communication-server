@@ -43,6 +43,16 @@ PYTHON_BIN="${PYTHON_BIN:-${REPO_ROOT}/.venv/bin/python3}"
 NATS_SERVER_BIN="${NATS_SERVER_BIN:-nats-server}"
 FAKE_BIN="${REPO_ROOT}/tests/python/fixtures/bin"
 
+OPERATOR=0
+if [[ "${1:-}" == --operator ]]; then
+    OPERATOR=1
+    if [[ -z "${NATS_HUB_OPERATOR_TEST_STACK:-}" ]]; then
+        exec "$REPO_ROOT/scripts/dev/operator_stack.sh" --nats-only "$0" --operator
+    fi
+    shift
+fi
+[[ $# -eq 0 ]] || { echo "Usage: $0 [--operator]" >&2; exit 2; }
+
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nats-dogfood-prod-XXXXXX")"
 CONF_PATH="${TMP_DIR}/nats.conf"
 AGENTS_PATH="${TMP_DIR}/agents.txt"
@@ -85,10 +95,12 @@ command -v "${NATS_SERVER_BIN}" >/dev/null || die "nats-server not on PATH (make
 
 TCP_PORT="${TCP_PORT:-$(free_port)}"
 URL="nats://127.0.0.1:${TCP_PORT}"
+(( OPERATOR )) && URL="$NATS_URL"
 echo "=== H1 dogfood: production config (hub-admin + --require-bound-identity) ==="
 echo "TMP_DIR=${TMP_DIR}  NATS=${URL}"
 
 # ── 1. agents file → hub-admin render-config → nats.conf ─────────────
+if (( ! OPERATOR )); then
 cat >"${AGENTS_PATH}" <<EOF
 # <id> <role> <secret> [ws-only] [extra subscribe channels]
 bob     orchestrator  pw:pw-bob
@@ -106,20 +118,31 @@ echo "[conf] rendered + validated ${CONF_PATH}"
 spawn nats "${NATS_SERVER_BIN}" -c "${CONF_PATH}"
 wait_for_port "${TCP_PORT}" "nats-server"
 
-spawn hub-server env NATS_USER=hub-server NATS_PASSWORD=pw-hub RUST_LOG="${HUB_LOG:-warn}" \
+fi
+
+HUB_DURABLE=()
+(( OPERATOR )) && HUB_DURABLE=(--durable)
+spawn hub-server env NATS_USER=hub-server NATS_PASSWORD=pw-hub NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/hub-server.creds}" RUST_LOG="${HUB_LOG:-warn}" \
     "${HUB_SERVER_BIN}" --nats-url "${URL}" --db-path "${TMP_DIR}/db" \
-    --require-bound-identity --wave-liveness-secs 60
+    --require-bound-identity --wave-liveness-secs 60 "${HUB_DURABLE[@]}"
+HUB_PID="${CHILD_PIDS[-1]}"
+if (( OPERATOR )); then
+    spawn hub-T_B env -u NATS_PASSWORD NATS_USER=hub-server \
+        NATS_CREDENTIALS_FILE="$OPERATOR_DIR/creds/T_B/hub-server.creds" NATS_HUB_IDENTITY=hub-server \
+        "$HUB_SERVER_BIN" --nats-url "$URL" --db-path "$TMP_DIR/db-b" \
+        --durable --require-bound-identity
+fi
 sleep 1.5
-kill -0 "${CHILD_PIDS[-1]}" 2>/dev/null || { cat "${LOG_DIR}/hub-server.log" >&2; die "hub-server exited early"; }
+kill -0 "${HUB_PID}" 2>/dev/null || { cat "${LOG_DIR}/hub-server.log" >&2; die "hub-server exited early"; }
 
 cd "${REPO_ROOT}"
-spawn echo-1 env NATS_USER=echo-1 NATS_PASSWORD=pw-echo PYTHONUNBUFFERED=1 \
+spawn echo-1 env NATS_USER=echo-1 NATS_PASSWORD=pw-echo NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/echo-1.creds}" PYTHONUNBUFFERED=1 \
     "${PYTHON_BIN}" echo_worker.py --identity echo-1 --nats-url "${URL}"
-spawn slow-1 env NATS_USER=slow-1 NATS_PASSWORD=pw-slow PYTHONUNBUFFERED=1 \
+spawn slow-1 env NATS_USER=slow-1 NATS_PASSWORD=pw-slow NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/slow-1.creds}" PYTHONUNBUFFERED=1 \
     PATH="${FAKE_BIN}:${PATH}" FAKE_CLAUDE_MODE=sleep FAKE_CLAUDE_PIDFILE="${TMP_DIR}/slow.pid" \
     "${PYTHON_BIN}" claude_worker.py --identity slow-1 --nats-url "${URL}" \
     --repo "${TMP_DIR}/work"
-spawn sup-1 env NATS_USER=sup-1 NATS_PASSWORD=pw-sup PYTHONUNBUFFERED=1 \
+spawn sup-1 env NATS_USER=sup-1 NATS_PASSWORD=pw-sup NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/sup-1.creds}" PYTHONUNBUFFERED=1 \
     "${PYTHON_BIN}" worker_supervisor.py --nats-url "${URL}" \
     --log-dir "${TMP_DIR}/sup-logs"
 echo "[start] hub-server + echo-1 + slow-1 + sup-1 (each as its own NATS user)"
@@ -151,7 +174,9 @@ async def connect(user):
     errs = []
     async def on_err(e):
         errs.append(str(e))
-    nc = await nats.connect(URL, user=user, password=f"pw-{user}", allow_reconnect=False,
+    auth = ({"user_credentials": f"{os.environ['OPERATOR_CREDS_DIR']}/{user}.creds"}
+            if os.environ.get("OPERATOR_CREDS_DIR") else {"user": user, "password": f"pw-{user}"})
+    nc = await nats.connect(URL, **auth, allow_reconnect=False,
                             error_cb=on_err, inbox_prefix=f"_INBOX.{user}")
     return nc, errs
 
@@ -335,6 +360,10 @@ async def main():
 asyncio.run(main())
 PY
 RC=$?
+if (( OPERATOR )); then
+    echo "=== Operator-mode tenant isolation (two durable hub-servers) ==="
+    "$PYTHON_BIN" -m pytest -q -s "$REPO_ROOT/tests/python/test_operator_isolation.py" || RC=1
+fi
 
 echo
 for f in hub-server echo-1 slow-1 sup-1; do

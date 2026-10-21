@@ -210,10 +210,22 @@ pub async fn connect_with_hub_opts(
     let mut co = async_nats::ConnectOptions::new();
 
     if let Some(creds_path) = &opts.credentials_file {
-        co = co
-            .credentials_file(creds_path)
-            .await
-            .with_context(|| format!("loading NATS credentials file at {:?}", creds_path))?;
+        // async-nats' credentials_file() snapshots both JWT and seed. The
+        // callback instead reloads one complete file on every authentication,
+        // including reconnect after JWT expiry. Writers must rename atomically.
+        let path = creds_path.clone();
+        co = async_nats::ConnectOptions::with_auth_callback(move |nonce| {
+            let path = path.clone();
+            async move {
+                let contents = tokio::fs::read_to_string(&path).await.map_err(|e| {
+                    async_nats::AuthError::new(format!(
+                        "cannot read NATS credentials file {}: {e}",
+                        path.display()
+                    ))
+                })?;
+                credentials_auth(&contents, &nonce)
+            }
+        });
     } else if let Some(seed) = &opts.nkey {
         co = co.nkey(seed.clone());
     } else if let (Some(user), Some(pass)) = (opts.user.as_ref(), opts.password.as_ref()) {
@@ -234,4 +246,28 @@ pub async fn connect_with_hub_opts(
     async_nats::connect_with_options(url, co)
         .await
         .with_context(|| format!("failed to connect to NATS at {url}"))
+}
+
+/// Parse a decorated credentials file without including secrets in errors.
+fn credentials_auth(
+    contents: &str,
+    nonce: &[u8],
+) -> Result<async_nats::Auth, async_nats::AuthError> {
+    let field = |marker: &str| {
+        contents
+            .lines()
+            .skip_while(|line| !line.contains(marker))
+            .nth(1)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let invalid = || async_nats::AuthError::new("invalid NATS credentials file");
+    let jwt = field("BEGIN NATS USER JWT").ok_or_else(invalid)?;
+    let seed = field("BEGIN USER NKEY SEED").ok_or_else(invalid)?;
+    let key = nkeys::KeyPair::from_seed(seed).map_err(|_| invalid())?;
+    let signature = key.sign(nonce).map_err(|_| invalid())?;
+    let mut auth = async_nats::Auth::new();
+    auth.jwt = Some(jwt.into());
+    auth.signature = Some(signature);
+    Ok(auth)
 }

@@ -33,6 +33,16 @@ BIN="${CARGO_TARGET_DIR}/debug"
 PYTHON_BIN="${PYTHON_BIN:-${REPO_ROOT}/.venv/bin/python3}"
 NATS_SERVER_BIN="${NATS_SERVER_BIN:-nats-server}"
 
+OPERATOR=0
+if [[ "${1:-}" == --operator ]]; then
+    OPERATOR=1
+    if [[ -z "${NATS_HUB_OPERATOR_TEST_STACK:-}" ]]; then
+        exec "$REPO_ROOT/scripts/dev/operator_stack.sh" --nats-only "$0" --operator
+    fi
+    shift
+fi
+[[ $# -eq 0 ]] || { echo "Usage: $0 [--operator]" >&2; exit 2; }
+
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nats-dogfood-durable-XXXXXX")"
 LOG_DIR="${TMP_DIR}/logs"
 mkdir -p "${LOG_DIR}" "${TMP_DIR}/db"
@@ -74,9 +84,11 @@ command -v "${NATS_SERVER_BIN}" >/dev/null || die "nats-server not on PATH (make
 
 PORT="$(free_port)"
 URL="nats://127.0.0.1:${PORT}"
+(( OPERATOR )) && URL="$NATS_URL"
 echo "=== W2-A dogfood: durable delivery (hub-admin --durable + --require-bound-identity) ==="
 echo "TMP_DIR=${TMP_DIR}  NATS=${URL}"
 
+if (( ! OPERATOR )); then
 cat >"${TMP_DIR}/agents.txt" <<EOF
 bob     orchestrator  pw:pw-bob
 carol   worker        pw:pw-carol
@@ -90,18 +102,20 @@ EOF
 spawn NATS_PID nats "${NATS_SERVER_BIN}" -c "${TMP_DIR}/nats.conf"
 wait_for_port "${PORT}"
 
+fi
+
 start_hub() {
-    spawn HUB_PID hub-server env NATS_USER=hub-server NATS_PASSWORD=pw-hub RUST_LOG="${HUB_LOG:-warn}" \
+    spawn HUB_PID hub-server env NATS_USER=hub-server NATS_PASSWORD=pw-hub NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/hub-server.creds}" RUST_LOG="${HUB_LOG:-warn}" \
         "${BIN}/hub-server" --nats-url "${URL}" --db-path "${TMP_DIR}/db" \
         --durable --require-bound-identity
 }
 start_echo() {
-    spawn ECHO_PID echo-1 env NATS_USER=echo-1 NATS_PASSWORD=pw-echo PYTHONUNBUFFERED=1 \
+    spawn ECHO_PID echo-1 env NATS_USER=echo-1 NATS_PASSWORD=pw-echo NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/echo-1.creds}" PYTHONUNBUFFERED=1 \
         "${PYTHON_BIN}" "${REPO_ROOT}/echo_worker.py" --identity echo-1 --nats-url "${URL}"
 }
 # delegate <args...> as bob; stdout = hub-delegate stdout
 delegate() {
-    NATS_USER=bob NATS_PASSWORD=pw-bob "${BIN}/hub-delegate" --nats-url "${URL}" \
+    NATS_USER=bob NATS_PASSWORD=pw-bob NATS_CREDENTIALS_FILE="${OPERATOR_CREDS_DIR:+${OPERATOR_CREDS_DIR}/bob.creds}" "${BIN}/hub-delegate" --nats-url "${URL}" \
         --from bob --to echo-1 "$@" 2>>"${LOG_DIR}/delegate.log"
 }
 
@@ -162,9 +176,13 @@ async def main():
     errs = []
     async def on_err(e):
         errs.append(str(e))
-    carol = await nats.connect(URL, user="carol", password="pw-carol",
+    def auth(user):
+        if os.environ.get("OPERATOR_CREDS_DIR"):
+            return {"user_credentials": f"{os.environ['OPERATOR_CREDS_DIR']}/{user}.creds"}
+        return {"user": user, "password": f"pw-{user}"}
+    carol = await nats.connect(URL, **auth("carol"),
                                inbox_prefix=b"_INBOX.carol", error_cb=on_err)
-    bob = await nats.connect(URL, user="bob", password="pw-bob", inbox_prefix=b"_INBOX.bob")
+    bob = await nats.connect(URL, **auth("bob"), inbox_prefix=b"_INBOX.bob")
 
     r = await carol.request("hub.delivery.carol.inbox", b"{}", timeout=3)
     check("3 carol attaches her own inbox", json.loads(r.data).get("ok") is True, r.data)

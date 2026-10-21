@@ -130,6 +130,54 @@ users with an unscoped key and explicit permissions. Decide in the spike.
 Private keys never leave the device. The control plane holds account signing
 keys (KMS-backed), never user keys.
 
+### H-0 results (2026-10-21)
+
+The operator spike provisions **nsc v2.15.0** (pinned release, SHA256 checked)
+and nats-server v2.15.0, with a full account resolver and two tenants. Both
+unchanged hub-servers run durable and require bound identity. The same
+`hub-admin` policy now emits config-mode allowlists and scoped signing-key
+JSON (`permission-template`); a frozen-policy unit test checks every role,
+including service responses and `hub-server`. No router, API, storage or
+delivery changes are needed.
+
+Observed: the production dogfood passed all 12 checks, including wave run
+and cancellation; the durable dogfood passed router outage, offline worker,
+consumer-permission and replay checks. Live isolation tests run both tenants
+with identical subjects and stream names. Even a tenant hub-server cannot
+publish into or observe the other account's `hub.*`, `channel.*`, `_INBOX.*`
+or delivery traffic; worker ACLs reject unauthorized subject families and
+`$SYS`. Each query API/history and `HUB_TASKS` direct read sees only its own
+tenant's records. See [`OPERATOR_MODE.md`](OPERATOR_MODE.md) for reproducible
+commands and the self-host setup.
+
+The 60-second credential lifecycle test passed with the same Rust client,
+Python worker process and MCP connection surviving expiry after atomic
+credential refresh. An unrefreshed JWT was rejected. Pushing the account
+revocation list disconnected an existing user and denied a fresh login.
+
+**Extra channels decision:** tenant-wide channels in role templates for
+hosted v1. `--channel` on `permission-template` expresses them using the
+same validation as config mode. Avoid unscoped exception keys in the hosted
+issuer; self-host config mode retains per-agent channel grants.
+
+**Operator/JWT decision:** keep the proposed design. Account updates can be
+pushed through the resolver and tenant clients authenticate without an
+online account service. Production should mint with maintained NATS JWT/
+NKey libraries and KMS-held role signing keys, accept only device-generated
+public user keys, and push account claims through the system API. NSC is
+only the reproducible spike/admin tool. Auth callout was not implemented or
+benchmarked, so H-0 does not claim an availability or latency comparison.
+
+**Surprises:** nats-server 2.15 expands `inbox-{{name()}}` as needed by our
+existing durable consumer names. JetStream quotas must exceed the sum of
+stream reservations (the three defaults reserve 1 GiB each). The tenant
+hub-server needs `NATS_USER=hub-server` as an inbox-prefix hint alongside
+its creds file, so its internal wave client also uses the service inbox.
+Rust async-nats snapshots credentials by default; the shared helper now
+reloads them on authentication. nats-py rereads files but closes permanently
+on an expiry error; the shared helper handles that exact event by
+reconnecting. Plugin copies are regenerated from the canonical helper.
+
 ## 4. The `acs` connector (public, Apache-2.0)
 
 A single static Rust binary built on the client crate (the client/server crate
@@ -302,7 +350,7 @@ The residual risks in `SECURITY.md` change meaning once a tenant is a team:
 
 | Phase | What | Repo | Exit criteria |
 |---|---|---|---|
-| **H-0 spike** | Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT; check remote-MCP connector support (OAuth, tool timeouts, plan/approval requirements) in claude.ai, ChatGPT and Grok | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decisions recorded here |
+| **H-0 spike** | Operator spike implemented: see §3 H-0 results and `OPERATOR_MODE.md` (remote-MCP research tracked separately as H-0b). Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT; check remote-MCP connector support (OAuth, tool timeouts, plan/approval requirements) in claude.ai, ChatGPT and Grok | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decisions recorded here |
 | **H-1 connector** | Client crate split; `acs` login (incl. headless/service key)/up/status/agent/mcp install against a stub control plane; creds refresh; packaging (brew, curl install) | public | `acs login` → `acs mcp install claude` → delegate a task on a local operator-mode stack; a bot host joins headless |
 | **H-1b remote MCP endpoint** | Streamable-HTTP MCP server backed by JetStream (stateless), OAuth against the stub control plane, turn-bounded waits | public | claude.ai (as a custom connector) delegates to a local worker and fetches the result in a later turn |
 | **H-2 control plane MVP** | Sign-up, tenant create (account JWT push + hub-server container), device-code flow, identity minting, revocation | private | A new user goes from sign-up to a delegated task with no manual steps |
