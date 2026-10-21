@@ -197,6 +197,34 @@ pub trait Storage: Send + Sync {
     /// List all tasks for a wave.
     async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>>;
 
+    // ── File Locks ───────────────────────────────────────────
+    //
+    // Advisory file locks (docs/FILE_LOCKS.md). Only hub-server's lock
+    // service writes; the `lock.*` query-API ops read through these. A row
+    // exists only while the lock is held — release and expiry delete it.
+
+    /// Store a lock record (acquire — the service checks conflicts first).
+    async fn create_lock(&self, lock: LockRecord) -> Result<()>;
+
+    /// Get one lock by id (expired rows may still be present until swept).
+    async fn get_lock(&self, lock_id: &str) -> Result<Option<LockRecord>>;
+
+    /// List locks, optionally filtered to one scope. Callers filter out
+    /// rows whose `expires_at` has passed (they are dead, pending sweep).
+    async fn list_locks(&self, scope: Option<&str>) -> Result<Vec<LockRecord>>;
+
+    /// Delete a lock (release, expiry). `false` when it didn't exist.
+    async fn delete_lock(&self, lock_id: &str) -> Result<bool>;
+
+    /// Extend a lock's expiry (`expires_at`) and record the TTL used.
+    /// `false` when the lock doesn't exist.
+    async fn renew_lock(
+        &self,
+        lock_id: &str,
+        ttl_secs: u64,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool>;
+
     // ── Lifecycle ───────────────────────────────────────────
 
     /// Initialize the schema (create tables, indexes, etc.).
@@ -223,6 +251,9 @@ mod envelopes;
 
 #[cfg(feature = "storage-surreal")]
 pub mod schema;
+
+#[cfg(feature = "storage-surreal")]
+pub mod locks;
 
 #[cfg(feature = "storage-surreal")]
 pub mod session;

@@ -12,8 +12,12 @@
 //! | `wave.update_task_status` | the caller orchestrates the wave, **or** is the task's worker and the wave is `running` (the orchestrator then applies it through its state machine) |
 //! | `session.create` | the new session's `orchestrator` is the caller **and** no session with that id exists for another orchestrator |
 //! | `session.update_status`, `session.set_backend_ctx` | the caller is the session's orchestrator or worker |
+//! | `lock.acquire` | `holder` is absent or equals the caller (the holder always is the caller) |
+//! | `lock.renew`, `lock.release` | the caller holds the lock |
 //!
 //! Admins (`--api-admin`) may do anything; any other write op stays admin-only.
+//! The lock service re-checks holdership after the gate, so the rule also
+//! holds on a permissive hub for bound callers.
 //!
 //! `create` ops are upserts in storage, so without the "existing id" rule a
 //! caller could re-create someone else's wave/session under its own name and
@@ -95,6 +99,20 @@ impl ApiAuthz {
                     .ok()
                     .flatten()
                     .is_some_and(|s| s.orchestrator == caller || s.worker == caller),
+                None => false,
+            },
+            "lock.acquire" => {
+                // A bound caller may only ever lock as itself; the service
+                // stamps the holder from the subject either way.
+                param("holder").is_none_or(|h| h == caller)
+            }
+            "lock.renew" | "lock.release" => match param("lock_id") {
+                Some(id) => storage
+                    .get_lock(id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|l| l.holder == caller),
                 None => false,
             },
             _ => false,

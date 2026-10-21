@@ -13,6 +13,7 @@ from typing import Any
 
 import hub_connection as conn
 from hub_buffers import hub
+from hub_locks import LOCK_HANDLERS
 from hub_primitives import summarize_env as _summarize_env
 from hub_providers import check_providers as _check_providers
 from hub_queries import QUERY_HANDLERS
@@ -294,4 +295,5 @@ HANDLERS = {
     "spawn_wave": _spawn_wave,
     "cancel_wave": _cancel_wave,
     **QUERY_HANDLERS,
+    **LOCK_HANDLERS,
 }

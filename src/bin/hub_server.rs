@@ -112,6 +112,13 @@ struct Args {
     #[arg(long)]
     wave_liveness_secs: Option<u64>,
 
+    /// Lock holder liveness TTL (seconds) for file locks: a holder silent
+    /// on hub.presence longer than this loses its locks. Falls back to env
+    /// NATS_HUB_LOCK_LIVENESS_SECS, then 90.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    lock_liveness_secs: Option<u64>,
+
     /// Envelope retention: prune history older than N days, in bounded
     /// batches from a background task. Off by default. Envelopes on
     /// channels a live wave/session still uses are never pruned.
@@ -501,6 +508,36 @@ async fn main() -> Result<()> {
                 Err(e) => eprintln!(
                     "[hub-server] wave orchestrator failed to start: {e:#} \
                      (wave.spawn/cancel ops will return errors)"
+                ),
+            }
+
+            // File-lock service: owns lock.* writes, presence expiry and
+            // lock events on channel.lock.<scope-hash> (docs/FILE_LOCKS.md).
+            let lock_liveness = args
+                .lock_liveness_secs
+                .or_else(|| {
+                    std::env::var("NATS_HUB_LOCK_LIVENESS_SECS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                })
+                .unwrap_or(nats_hub::locks::DEFAULT_LOCK_LIVENESS_SECS);
+            let lock_config = nats_hub::locks::LockConfig {
+                liveness_ttl: std::time::Duration::from_secs(lock_liveness),
+                require_bound_identity: args.require_bound_identity,
+            };
+            match nats_hub::locks::LockService::start(
+                storage.clone(),
+                &args.nats_url,
+                lock_config,
+            )
+            .await
+            {
+                Ok(_) => info_log(&format!(
+                    "file-lock service running (holder liveness TTL {lock_liveness}s)"
+                )),
+                Err(e) => eprintln!(
+                    "[hub-server] lock service failed to start: {e:#} \
+                     (lock.* ops will return errors)"
                 ),
             }
 

@@ -6,6 +6,7 @@ pub mod client;
 pub mod connect_opts;
 pub mod delivery;
 pub mod events;
+pub mod locks;
 pub mod protocol;
 pub mod query_api;
 pub mod query_api_client;
@@ -21,11 +22,15 @@ pub use connect_opts::HubConnectOptions;
 pub use events::{
     event_payload, event_summary, format_event_line, resolve_watch_target, WatchQuery, WatchTarget,
 };
+pub use locks::{
+    lock_channel, scope_hash, wait_for_locks, AcquireOptions, AcquireOutcome, LockList,
+    WaitOutcome, DEFAULT_TTL_SECS, LOCKS_IDENTITY, MAX_TTL_SECS, MIN_TTL_SECS,
+};
 pub use protocol::{subjects, Envelope, MessageKind, Meta};
 pub use query_api::{ApiRequest, ApiResponse};
 pub use query_api_client::ApiClient;
 pub use storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord,
-    WaveRecord, WaveTaskRecord,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, LockRecord, SessionFilter,
+    SessionRecord, WaveRecord, WaveTaskRecord,
 };
 pub use wave::{validate_tasks, WaveTaskInput};

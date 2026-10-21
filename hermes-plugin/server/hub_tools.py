@@ -8,6 +8,7 @@ don't assert identity.)
 
 from mcp.types import Tool
 
+from hub_locks import LOCK_TOOLS
 from hub_query_tools import QUERY_TOOLS
 
 MAX_WAIT_SECS = 3600  # cap for every blocking timeout argument
@@ -368,4 +369,4 @@ TOOLS = [
             },
         },
     ),
-] + QUERY_TOOLS
+] + QUERY_TOOLS + LOCK_TOOLS

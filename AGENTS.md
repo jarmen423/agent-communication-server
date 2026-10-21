@@ -197,6 +197,7 @@ Manual commands (against a running stack):
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
 | `hub-wave create/spawn/status/close/list` | Parallel wave orchestration |
+| `hub-lock acquire/renew/release/list/get/wait` | Advisory file locks across agents (`docs/FILE_LOCKS.md`) |
 | `hub-thread show/pending` | Reply chains and unanswered messages |
 | `hub-stats [--since DUR] [--agent ID] [--top-channels N] [--json]` | Rates, latency, activity, hotspots, error rate |
 | `hub-tui [--nats-url URL] [--refresh-secs N] [--alive-secs N] [--feed-cap N]` | Terminal dashboard (feature `tui`) |

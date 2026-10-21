@@ -124,8 +124,10 @@ pub fn require_valid_identity(identity: &str) -> anyhow::Result<()> {
 /// Identities the hub uses for its own components. `hub-admin` refuses to
 /// mint agent credentials for them, so no agent can pose as the router
 /// (`hub-server`, also the NATS service user), the wave orchestrator
-/// (`hub-orchestrator`) or the legacy visualizer bridge (`visualizer`).
-pub const RESERVED_IDENTITIES: &[&str] = &["hub-server", "hub-orchestrator", "visualizer"];
+/// (`hub-orchestrator`), the file-lock service (`hub-locks`) or the legacy
+/// visualizer bridge (`visualizer`).
+pub const RESERVED_IDENTITIES: &[&str] =
+    &["hub-server", "hub-orchestrator", "hub-locks", "visualizer"];
 
 /// True when `identity` is reserved for a hub component
 /// ([`RESERVED_IDENTITIES`]).

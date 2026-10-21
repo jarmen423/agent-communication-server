@@ -155,6 +155,30 @@ cancel_wave(wave_id)                  → unfinished tasks → cancelled; runnin
 - On a hub with per-agent credentials, you can only spawn or cancel waves and
   sessions that your identity owns.
 
+## 7. Shared files: advisory locks
+
+Before editing files another agent may also touch (e.g. inside a wave),
+announce it so others don't collide with you. Locks are *advisory* — they
+coordinate agents, they don't touch the filesystem.
+
+```
+lock_files(scope="my-repo", paths=["src/auth/"], reason="refactor", ttl_secs=900)
+  → {granted: true, lock: {lock_id, holder, expires_at, …}, channel: "lock.<hash>"}
+  # or ok:false + conflicts: the locks already covering those paths
+wait_for_files(scope="my-repo", paths=["src/auth/"], timeout=120)
+  → blocks until no OTHER holder locks those paths (your own are ignored)
+list_locks(scope="my-repo")          → who holds what (read-only)
+renew_lock(lock_id, ttl_secs=900)    → extend your lock (holder only)
+release_files(lock_id)               → done — others' waiters unblock
+```
+
+- The **holder is your bound identity** — tools take no `holder` argument.
+- A lock ends on release, at its TTL (default 900 s, max 24 h; renew
+  before it lapses), or when your presence is lost (silence past the
+  hub's liveness TTL).
+- `acquire` is all-or-nothing: one conflicting path returns the blocking
+  locks, nothing is held. Lock before you start editing, release when done.
+
 ## Everything else
 
 - `send_message` broadcasts to a channel, `send_direct` DMs one agent, and

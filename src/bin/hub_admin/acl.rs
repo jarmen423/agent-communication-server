@@ -111,6 +111,7 @@ fn subscribe_allow(identity: &str, role: &str, channels: &[String]) -> Vec<Strin
         "channel.task.>".into(),
         "channel.session.>".into(),
         "channel.wave.>".into(),
+        "channel.lock.>".into(), // file-lock notifications (W2-D, docs/FILE_LOCKS.md)
         format!("_INBOX.{identity}.>"), // own request-reply inbox only (C1)
     ];
     if role == "service" {
@@ -298,6 +299,7 @@ mod tests {
                         "channel.task.>".into(),
                         "channel.session.>".into(),
                         "channel.wave.>".into(),
+                        "channel.lock.>".into(),
                         format!("_INBOX.{identity}.>"),
                     ];
                     if role == "service" {

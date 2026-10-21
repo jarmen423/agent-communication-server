@@ -22,8 +22,8 @@ use crate::storage::surreal::Db;
 /// Current schema version, stored in `schema_meta:nats_hub`.
 /// v1 = the original schema (never actually applied: it used `AT` instead
 /// of `ON`). v2 = typed fields applied, native datetimes, reply/recipient
-/// indexes.
-pub const SCHEMA_VERSION: i64 = 2;
+/// indexes. v3 = the `locks` table (W2-D file locks).
+pub const SCHEMA_VERSION: i64 = 3;
 
 const TABLES: &[&str] = &[
     "DEFINE TABLE IF NOT EXISTS agents SCHEMALESS",
@@ -32,6 +32,7 @@ const TABLES: &[&str] = &[
     "DEFINE TABLE IF NOT EXISTS sessions SCHEMALESS",
     "DEFINE TABLE IF NOT EXISTS waves SCHEMALESS",
     "DEFINE TABLE IF NOT EXISTS wave_tasks SCHEMALESS",
+    "DEFINE TABLE IF NOT EXISTS locks SCHEMALESS",
     "DEFINE TABLE IF NOT EXISTS schema_meta SCHEMALESS",
 ];
 
@@ -45,6 +46,8 @@ const DATETIME_FIELDS: &[(&str, &str)] = &[
     ("sessions", "updated_at"),
     ("waves", "created_at"),
     ("wave_tasks", "created_at"),
+    ("locks", "created_at"),
+    ("locks", "expires_at"),
 ];
 
 /// Optional datetime columns (legacy rows used `""` for "unset").
@@ -121,6 +124,19 @@ const FIELDS_AND_INDEXES: &[&str] = &[
     "DEFINE FIELD OVERWRITE result       ON TABLE wave_tasks TYPE option<string>",
     "DEFINE FIELD OVERWRITE verify_result ON TABLE wave_tasks TYPE option<string>",
     "DEFINE INDEX IF NOT EXISTS idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status",
+    // File locks
+    "DEFINE FIELD OVERWRITE lock_id      ON TABLE locks TYPE string",
+    "DEFINE FIELD OVERWRITE scope        ON TABLE locks TYPE string",
+    "DEFINE FIELD OVERWRITE paths        ON TABLE locks TYPE array<string>",
+    "DEFINE FIELD OVERWRITE holder       ON TABLE locks TYPE string",
+    "DEFINE FIELD OVERWRITE reason       ON TABLE locks TYPE option<string>",
+    "DEFINE FIELD OVERWRITE task_id      ON TABLE locks TYPE option<string>",
+    "DEFINE FIELD OVERWRITE ttl_secs     ON TABLE locks TYPE int",
+    "DEFINE FIELD OVERWRITE created_at   ON TABLE locks TYPE datetime",
+    "DEFINE FIELD OVERWRITE expires_at   ON TABLE locks TYPE datetime",
+    "DEFINE INDEX IF NOT EXISTS idx_locks_scope   ON TABLE locks COLUMNS scope",
+    "DEFINE INDEX IF NOT EXISTS idx_locks_holder  ON TABLE locks COLUMNS holder",
+    "DEFINE INDEX IF NOT EXISTS idx_locks_expires ON TABLE locks COLUMNS expires_at",
     // Schema bookkeeping
     "DEFINE FIELD OVERWRITE version ON TABLE schema_meta TYPE int",
 ];
