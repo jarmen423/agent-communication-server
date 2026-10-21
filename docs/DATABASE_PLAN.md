@@ -348,6 +348,12 @@ that's the "longer retention" for terminal state. Wave tasks end with
 `done`/`failed`/`cancelled` + `completed_at`; tasks of a *running* wave are
 protected. `reply_to` edges die with their records (SurrealDB cascades them).
 
+**Known limits.** Ad-hoc `task.<uuid>` channels (`hub-delegate`, MCP) are
+not protected like waves and sessions: a delegated task running longer than
+`--retention-days` can lose its oldest channel history mid-run. Each pass
+lists all waves and sessions to build the protection set, which is fine
+while those tables stay small next to `envelopes`.
+
 ## Backup & restore (iteration 2)
 
 - **Hot backup**: `hub-server backup --identity <admin> [--name file.surql]`
