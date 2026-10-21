@@ -9,6 +9,8 @@
 
 #![allow(clippy::await_holding_lock)] // STACK_LOCK serializes whole live tests on purpose
 
+mod support;
+
 mod wave_support;
 
 use futures_util::StreamExt;
@@ -40,7 +42,7 @@ async fn wait_registered(reg: &mut async_nats::Subscriber, identity: &str, child
 }
 
 fn hub_worker_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_hub-worker"))
+    support::client_bin("hub-worker")
 }
 
 fn spawn_hub_worker(stack: &TestStack, identity: &str, execute: &str) -> Child {

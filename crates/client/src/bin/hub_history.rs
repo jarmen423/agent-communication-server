@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::{ApiClient, HistoryQuery};
+use nats_hub_client::{ApiClient, HistoryQuery};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     let resp = api
         .request("history.query", serde_json::to_value(&query)?)
         .await?;
-    let results: Vec<nats_hub::storage::EnvelopeRecord> = resp
+    let results: Vec<nats_hub_client::storage::EnvelopeRecord> = resp
         .get("envelopes")
         .and_then(|e| serde_json::from_value(e.clone()).ok())
         .unwrap_or_default();
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
 
     if args.tail {
         println!("\n--- live tail (Ctrl+C to stop) ---");
-        let client = nats_hub::HubClient::connect(&args.nats_url, "hub-history").await?;
+        let client = nats_hub_client::HubClient::connect(&args.nats_url, "hub-history").await?;
         let mut rx = client.subscribe_all().await?;
         while let Some(env) = rx.recv().await {
             let time = env.meta.timestamp.format("%H:%M:%S").to_string();

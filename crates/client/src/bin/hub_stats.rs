@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::ApiClient;
+use nats_hub_client::ApiClient;
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
 

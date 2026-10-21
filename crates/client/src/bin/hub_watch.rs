@@ -9,8 +9,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::events::{format_event_line, resolve_watch_target, WatchQuery};
-use nats_hub::{HubClient, MessageKind};
+use nats_hub_client::events::{format_event_line, resolve_watch_target, WatchQuery};
+use nats_hub_client::{HubClient, MessageKind};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]

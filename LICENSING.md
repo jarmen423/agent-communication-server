@@ -21,41 +21,26 @@ This page explains it in plain language. The license texts in
 | `mcp_server/`, the generated plugin copies `claude-code-plugin/`, `codex-plugin/`, `hermes-plugin/`, and the marketplace manifests `.claude-plugin/`, `.agents/plugins/` | Apache-2.0 |
 | Python workers and bridges: `worker_runtime.py`, `worker_events.py`, `worker_backends/`, every `*_worker.py`, `worker_supervisor.py`, `remote_agent_adapter.py`, `hub_delivery.py`, `nats_connect.py`, `telegram_bridge.py`, `discord_bridge.py` | Apache-2.0 |
 | Installers: `packaging/remote/`, `scripts/install_remote.sh` | Apache-2.0 |
-| Rust client: `src/lib.rs` (crate root), `src/protocol.rs`, `src/client.rs`, `src/client/**`, `src/connect_opts.rs`, `src/query_api_client.rs`, `src/events/**`, `src/tui/**` | Apache-2.0 |
-| Client CLIs: `src/bin/**` except the two server binaries below (`hub-delegate`, `hub-publish`, `hub-observe`, `hub-interact`, `hub-register`, `hub-agents`, `hub-worker`, `hub-history`, `hub-session`, `hub-watch`, `hub-wave`, `hub-thread`, `hub-stats`, `hub-tui`) | Apache-2.0 |
+| Rust client crate: `crates/client/**` (manifest, library, wire records, delivery helpers, wave validation, all client CLIs and TUI) | Apache-2.0 |
 | `config/provider_models.json` (model catalog read by the Python workers) | Apache-2.0 |
-| **Every other file under `src/**`**, which today means `src/router.rs`, `src/router/**`, `src/query_api.rs`, `src/query_api/**`, `src/orchestrator/**`, `src/storage/**`, `src/analytics/**` (including the live metrics), `src/ws_bridge/**`, `src/wave/**`, `src/delivery/**` | **BUSL-1.1** |
-| **Server binaries:** `src/bin/hub_server.rs`, `src/bin/hub_admin.rs`, `src/bin/hub_admin/**` | **BUSL-1.1** |
+| **Rust server crate:** `Cargo.toml`, `src/**` (router, query API, orchestrator, storage, analytics backends and metrics, WebSocket bridge, delivery server, merge gate, `hub-server`, `hub-admin`, and compatibility re-exports) | **BUSL-1.1** |
 | **Server assets and deployment:** `visualizer/**` (except the pet sprites below), `deploy/**`, `config/**` (except `provider_models.json`) | **BUSL-1.1** |
 | `visualizer/pets/**` (third-party Petdex sprites) | Not ours. See [below](#third-party-code-and-assets) |
-| Everything else: docs, tests, dev and dogfood scripts, CI, `packaging/release/`, build files (`Cargo.toml`, `Makefile`, `requirements*.txt`), planning notes | Apache-2.0 |
+| Everything else: docs, tests, dev and dogfood scripts, CI, `packaging/release/`, build files (`Cargo.lock`, `Makefile`, `requirements*.txt`), planning notes | Apache-2.0 |
 
-A new Rust file under `src/` is BUSL-1.1 unless it's added to the client
-list in `REUSE.toml`. A new file anywhere else is Apache-2.0.
+A new Rust file under `src/` is BUSL-1.1. Files under `crates/client/`
+are Apache-2.0, including newly added modules and binaries.
+
+**Cargo workspace.** `nats-hub-client` (`crates/client/Cargo.toml`, library
+`nats_hub_client`) declares Apache-2.0 and has no dependency on the server,
+SurrealDB or RocksDB. Its client CLIs and TUI use only Apache-2.0 project
+code. `nats-hub` (root `Cargo.toml`, library `nats_hub`) declares BUSL-1.1
+and depends on the client crate; it re-exports the moved public APIs for
+existing integrations. Use `nats-hub-client` for Apache-only embedding.
 
 **Release tarballs.** `hub-server` and `hub-admin` are BUSL-1.1. Every other
-`hub-*` binary and the Python remote-worker bundle are Apache-2.0, subject to
-the caveat in the next section. Tarballs ship `LICENSE`, `NOTICE`, this file
-and `LICENSES/`.
-
-### Until the crate split (H-1)
-
-The Rust code is still one crate (`nats_hub`). Its `Cargo.toml` therefore
-declares `Apache-2.0 AND BUSL-1.1`, and the client side still uses a few
-BUSL-1.1 files:
-
-- `src/client/durable.rs` and `src/client/catchup.rs` use `src/delivery/`
-  (`attach_inbox`, the client stream names, `inbox_consumer_name`, `header`);
-- `src/query_api_client.rs` uses `query_api::{subject, subject_bound, ApiResponse}`;
-- `hub-agents`, `hub-history`, `hub-thread`, `hub-session`, `hub-wave` and
-  `hub-tui` use the record types in `src/storage/types.rs`;
-- `hub-wave` uses `src/wave/validate.rs`, and `hub-tui` uses `analytics::DataPoint`.
-
-So the client binaries built from this crate today contain some BUSL-1.1
-code. The Additional Use Grant covers ordinary use of them, including in
-production. The H-1 client/server crate split (see
-[`docs/HOSTED_PLAN.md`](docs/HOSTED_PLAN.md)) moves these shared pieces into
-the Apache-2.0 client crate.
+`hub-*` binary and the Python remote-worker bundle are Apache-2.0. Tarballs
+ship `LICENSE`, `NOTICE`, this file and `LICENSES/`.
 
 ## What BUSL-1.1 means here
 

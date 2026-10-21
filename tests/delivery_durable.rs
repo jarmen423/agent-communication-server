@@ -4,6 +4,8 @@
 //! hub-server(s), so it runs the same under `make test`, `make test-bound`
 //! and `make test-durable`. Skipped when no nats-server binary is found.
 
+mod support;
+
 mod delivery_support;
 
 use std::time::Duration;
@@ -211,7 +213,7 @@ async fn task_result_survives_delegator_disconnect() {
 
     // Fire and forget: nobody listens on the task channel when the result
     // is published.
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_hub-delegate"))
+    let out = tokio::process::Command::new(support::client_bin("hub-delegate"))
         .args([
             "--nats-url",
             &stack.url,
@@ -237,7 +239,7 @@ async fn task_result_survives_delegator_disconnect() {
     assert_eq!(answered_id, task_id);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_hub-delegate"))
+    let out = tokio::process::Command::new(support::client_bin("hub-delegate"))
         .args([
             "--nats-url",
             &stack.url,

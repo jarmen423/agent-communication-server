@@ -2505,6 +2505,28 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "futures-util",
+ "nats-hub-client",
+ "nkeys",
+ "serde",
+ "serde_json",
+ "surrealdb",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "nats-hub-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "chrono",
+ "clap",
  "crossterm",
  "futures-util",
  "libc",
@@ -2512,10 +2534,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "surrealdb",
- "tempfile",
  "tokio",
- "tokio-tungstenite 0.24.0",
  "tracing",
  "tracing-subscriber",
  "uuid",

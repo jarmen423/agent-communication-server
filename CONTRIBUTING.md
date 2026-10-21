@@ -23,6 +23,7 @@ pinned, checksum-verified copy into `.tools/bin/`.
 > (`scripts/dev/bindgen_args.sh`). If you run bare `cargo` yourself, use:
 >
 > ```bash
+> source scripts/dev/lib.sh
 > export BINDGEN_EXTRA_CLANG_ARGS="$(scripts/dev/bindgen_args.sh)"
 > ```
 >
@@ -46,6 +47,23 @@ Optional extras:
 ```bash
 make setup-extras # ACP / Cursor / Telegram / Discord SDKs
 make lint         # cargo fmt --check + clippy
+```
+
+### Workspace layout
+
+The root package `nats-hub` is the BUSL-1.1 server crate. The Apache-2.0
+`nats-hub-client` package lives in `crates/client/` and has no SurrealDB or
+RocksDB dependency. It owns protocol/record types, client helpers, all client
+CLIs, and the optional TUI. Server and admin binaries stay in `src/bin/`.
+The server re-exports moved public APIs so `nats_hub::…` imports keep working.
+
+`make build`, test and lint targets cover both workspace members. Every binary
+still lands in `target/debug/` (or `target/release/`). A client-only build is:
+
+```bash
+source scripts/dev/lib.sh
+cargo build -p nats-hub-client --bins --features tui
+make check-no-storage
 ```
 
 ### Where things go
@@ -84,7 +102,7 @@ make lint         # cargo fmt --check + clippy
 
 ## 3. How tests work
 
-- `make test-rust` runs `scripts/dev/with_stack.sh cargo test --features tui`.
+- `make test-rust` runs `scripts/dev/with_stack.sh cargo test --workspace --features tui`.
   `with_stack.sh` starts a **private** `nats-server` on a random port and a
   `hub-server` with a temp DB, exports `NATS_URL`, runs the command, and tears
   everything down. It never touches `:4222` or your real DB.
@@ -101,12 +119,13 @@ make lint         # cargo fmt --check + clippy
   `nats://127.0.0.1:4222`). Never hard-code the port.
 - CI (`.github/workflows/ci.yml`) runs on every branch push: fmt, build, and
   both test suites the same way, plus a `no-storage` job
-  (`cargo check --lib --no-default-features --features no-storage`) for the
-  transport-only crate. Only `main` saves the Rust build cache; branches
+  (`make check-no-storage`) for every Apache client target (including TUI)
+  and the server library without persistence. The client dependency tree
+  is checked for server/SurrealDB/RocksDB dependencies. Only `main` saves the Rust build cache; branches
   restore it.
 - The release pipeline (`.github/workflows/release.yml`) dry-runs on any push
   that touches `packaging/**`, `scripts/install_remote.sh`, `Cargo.toml`,
-  `Cargo.lock` or the workflow itself. See [`docs/RELEASING.md`](docs/RELEASING.md).
+  `Cargo.lock`, `crates/client/**` or the workflow itself. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## 4. Run a local hub
 
@@ -147,13 +166,13 @@ lists which agent CLIs it can find. See `docs/WORKER_BACKENDS.md`.
 - Plugins: edit `mcp_server/`, then run `scripts/dev/sync_plugins.sh`. The
   `claude-code-plugin/`, `codex-plugin/` and `hermes-plugin/` copies are
   generated.
-- Releases: bump `Cargo.toml`, then tag `vX.Y.Z`. See [`docs/RELEASING.md`](docs/RELEASING.md).
+- Releases: bump both crate manifests and the client dependency version, then tag `vX.Y.Z`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 - Never commit machine-specific paths (`/home/<you>`, custom target dirs).
   Use repo-relative paths or env vars with sensible defaults.
 - Licensing: the repo is licensed by path, Apache-2.0 for the client and
   BUSL-1.1 for the server ([`LICENSING.md`](LICENSING.md), [`REUSE.toml`](REUSE.toml)).
-  A new Rust file under `src/` is BUSL-1.1 unless you add it to the client list
-  in `REUSE.toml`. Contributions are licensed under the license of the files
+  The server crate (`Cargo.toml`, `src/**`) is BUSL-1.1; the client crate
+  (`crates/client/**`) is Apache-2.0. Contributions are licensed under the license of the files
   they touch. External PRs can't be accepted until there is a CLA (future work).
 
 ## 6. Troubleshooting

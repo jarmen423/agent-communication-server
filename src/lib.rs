@@ -1,4 +1,8 @@
-//! # nats-hub
+//! # nats-hub server
+//!
+//! BUSL-1.1 server implementation. For Apache-2.0 messaging integrations,
+//! depend on `nats-hub-client`. Moved client APIs are re-exported here so
+//! existing `nats_hub::…` paths remain compatible.
 //!
 //! A NATS-based communication layer with control plane routing for
 //! agent-to-agent and human-to-agent messaging. Built in Rust with
@@ -63,21 +67,21 @@
 //! - `get_thread()` / `link_reply()` — conversation threading
 //! - `list_pending()` — unanswered messages for an agent
 
-pub mod client;
-pub mod connect_opts;
+pub use nats_hub_client::client;
+pub use nats_hub_client::connect_opts;
 pub mod delivery;
-pub mod events;
+pub use nats_hub_client::events;
 pub mod orchestrator;
-pub mod protocol;
+pub use nats_hub_client::protocol;
 pub mod query_api;
-pub mod query_api_client;
+pub use nats_hub_client::query_api_client;
 pub mod router;
 pub mod storage;
 pub mod wave;
 pub mod ws_bridge;
 
 #[cfg(feature = "tui")]
-pub mod tui;
+pub use nats_hub_client::tui;
 
 // ── Public API: core types ────────────────────────────────────
 
@@ -108,11 +112,9 @@ pub use storage::SurrealStorage;
 // no-storage` mode). The storage-dependent `Analytics` trait + `SurrealAnalytics`
 // re-exports below are gated.
 pub mod analytics;
+pub use analytics::{ActivityStats, ChannelStats, DataPoint, Interval, LatencyStats, TimeRange};
 #[cfg(feature = "storage-surreal")]
-pub use analytics::{
-    ActivityStats, Analytics, ChannelStats, DataPoint, Interval, LatencyStats, SurrealAnalytics,
-    TimeRange,
-};
+pub use analytics::{Analytics, SurrealAnalytics};
 
 // Always available — no storage dependency.
 pub use analytics::metrics::MetricsCollector;

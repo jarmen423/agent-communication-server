@@ -1,13 +1,15 @@
+[workspace]
+members = [".", "crates/client"]
+default-members = [".", "crates/client"]
+resolver = "2"
+
 [package]
 name = "nats-hub"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 description = "NATS-based communication layer with control plane routing for agent + human messaging"
-# Licensed by path (see LICENSING.md / REUSE.toml): the client side is Apache-2.0,
-# the server side BUSL-1.1. This crate holds both until the H-1 client/server
-# crate split, after which each crate declares one license.
-license = "Apache-2.0 AND BUSL-1.1"
+license = "BUSL-1.1"
 repository = "https://github.com/jarmen423/agent-communication-server"
 readme = "README.md"
 authors = ["Agent Memory Labs <josh@agentmemorylabs.com>"]
@@ -24,74 +26,11 @@ path = "src/bin/hub_server.rs"
 required-features = ["storage-surreal"]
 
 [[bin]]
-name = "hub-publish"
-path = "src/bin/hub_publish.rs"
-
-[[bin]]
-name = "hub-observe"
-path = "src/bin/hub_observe.rs"
-
-[[bin]]
-name = "hub-interact"
-path = "src/bin/hub_interact.rs"
-
-[[bin]]
-name = "hub-register"
-path = "src/bin/hub_register.rs"
-
-[[bin]]
-name = "hub-agents"
-path = "src/bin/hub_agents.rs"
-required-features = ["storage-surreal"]
-
-[[bin]]
-name = "hub-worker"
-path = "src/bin/hub_worker.rs"
-
-[[bin]]
-name = "hub-history"
-path = "src/bin/hub_history.rs"
-required-features = ["storage-surreal"]
-
-[[bin]]
-name = "hub-delegate"
-path = "src/bin/hub_delegate.rs"
-
-[[bin]]
-name = "hub-session"
-path = "src/bin/hub_session.rs"
-required-features = ["storage-surreal"]
-
-[[bin]]
-name = "hub-watch"
-path = "src/bin/hub_watch.rs"
-
-[[bin]]
-name = "hub-wave"
-path = "src/bin/hub_wave.rs"
-required-features = ["storage-surreal"]
-
-[[bin]]
-name = "hub-thread"
-path = "src/bin/hub_thread.rs"
-required-features = ["storage-surreal"]
-
-[[bin]]
-name = "hub-stats"
-path = "src/bin/hub_stats.rs"
-required-features = ["storage-surreal"]
-
-[[bin]]
-name = "hub-tui"
-path = "src/bin/hub_tui.rs"
-required-features = ["storage-surreal", "tui"]
-
-[[bin]]
 name = "hub-admin"
 path = "src/bin/hub_admin.rs"
 
-# ── Library dependencies (what downstream crates pull in) ──────
 [dependencies]
+nats-hub-client = { path = "crates/client", version = "0.1.0" }
 async-nats = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -111,17 +50,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # ── WebSocket bridge (for visualizer) ──────────────────────────
 tokio-tungstenite = "0.24"
 
-# ── TUI dashboard (optional, feature = "tui") ─────────────────
-ratatui = { version = "0.29", optional = true }
-crossterm = { version = "0.28", optional = true }
-
 # ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
-
-# hub-worker kills its command's process group with killpg (already in the
-# lock file via tokio/mio; now a direct dependency).
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
@@ -129,10 +59,10 @@ tempfile = "3"
 [features]
 default = ["storage-surreal"]
 storage-surreal = ["dep:surrealdb"]
-tui = ["dep:ratatui", "dep:crossterm"]
+tui = ["nats-hub-client/tui"]
 # No-storage mode: pure NATS transport, no persistence layer.
-# Use this when embedding nats-hub as a messaging dependency
-# without needing SurrealDB (e.g. ephemeral agents, testing).
+# Retained for existing server integrations; new messaging applications
+# should depend directly on the Apache-2.0 nats-hub-client crate.
 no-storage = []
 
 # ── Build profiles ─────────────────────────────────────────────

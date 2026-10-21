@@ -8,8 +8,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::storage::{AgentFilter, AgentRecord};
-use nats_hub::ApiClient;
+use nats_hub_client::storage::{AgentFilter, AgentRecord};
+use nats_hub_client::ApiClient;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]

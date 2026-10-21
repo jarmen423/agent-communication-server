@@ -24,8 +24,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if [[ -z "${NO_BUILD:-}" ]]; then
-  echo "==> building hub-server"
-  cargo build --quiet --bin hub-server
+  echo "==> building workspace binaries"
+  cargo build --quiet --workspace --bins
 fi
 
 port="$(free_port)"

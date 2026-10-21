@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
         default_hook(info);
     }));
 
-    nats_hub::tui::run(nats_hub::tui::TuiOptions {
+    nats_hub_client::tui::run(nats_hub_client::tui::TuiOptions {
         nats_url: args.nats_url,
         refresh_secs: args.refresh_secs,
         alive_secs: args.alive_secs,

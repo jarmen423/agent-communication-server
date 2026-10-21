@@ -7,7 +7,7 @@ DEV   := scripts/dev
 ENV   := source $(DEV)/lib.sh &&
 PY    := .venv/bin/python
 
-.PHONY: help doctor setup setup-extras build build-release test test-rust test-py test-bound test-durable lint fmt up clean-run clean prune
+.PHONY: help doctor setup setup-extras build build-release test test-rust test-py test-bound test-durable check-no-storage lint fmt up clean-run clean prune
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -22,15 +22,15 @@ setup-extras: ## setup + optional SDKs (ACP, Cursor, Telegram, Discord)
 	@$(DEV)/setup.sh --extras
 
 build: ## cargo build (all bins, incl. hub-tui)
-	@$(ENV) cargo build --bins --features tui
+	@$(ENV) cargo build --workspace --bins --features tui
 
 build-release: ## cargo build --release
-	@$(ENV) cargo build --release --bins --features tui
+	@$(ENV) cargo build --workspace --release --bins --features tui
 
 test: test-rust test-py ## Run all tests (Rust against a throwaway NATS + hub-server, then Python)
 
 test-rust: ## Rust tests against an isolated nats-server + hub-server (random port)
-	@$(DEV)/with_stack.sh cargo test --features tui
+	@$(DEV)/with_stack.sh cargo test --workspace --features tui
 
 test-bound: ## Full suite with --require-bound-identity (identity-bound subjects only)
 	@NATS_HUB_REQUIRE_BOUND=1 $(MAKE) --no-print-directory test
@@ -41,8 +41,11 @@ test-durable: ## Full suite with hub-server --durable (JetStream delivery; docs/
 test-py: ## Python tests (pytest) against an isolated nats-server + hub-server
 	@$(DEV)/with_stack.sh $(PY) -m pytest -q tests/python
 
+check-no-storage: ## Apache client (all targets) and server library without persistence
+	@$(DEV)/check_no_storage.sh
+
 lint: ## fmt check + clippy
-	@$(ENV) cargo fmt --all -- --check && cargo clippy --all-targets --features tui
+	@$(ENV) cargo fmt --all -- --check && cargo clippy --workspace --all-targets --features tui
 
 fmt: ## cargo fmt
 	@cargo fmt --all

@@ -238,7 +238,7 @@ install_from_source() {
   candidate="$script_dir"
   for i in 1 2 3 4 5; do
     [[ -n "$candidate" ]] || break
-    if [[ -f "$candidate/Cargo.toml" && -f "$candidate/src/bin/hub_delegate.rs" ]]; then
+    if [[ -f "$candidate/Cargo.toml" && -f "$candidate/crates/client/src/bin/hub_delegate.rs" ]]; then
       repo_root="$candidate"
       break
     fi

@@ -44,18 +44,19 @@ EXPECTED = {
     "scripts/install_remote.sh": APACHE,
     "config/provider_models.json": APACHE,
     # client: Rust
-    "src/lib.rs": APACHE,
-    "src/protocol.rs": APACHE,
-    "src/client.rs": APACHE,
-    "src/client/durable.rs": APACHE,
-    "src/connect_opts.rs": APACHE,
-    "src/query_api_client.rs": APACHE,
-    "src/events/mod.rs": APACHE,
-    "src/tui/ui/feed.rs": APACHE,
-    "src/bin/hub_delegate.rs": APACHE,
-    "src/bin/hub_worker/exec.rs": APACHE,
-    "src/bin/hub_tui.rs": APACHE,
+    "crates/client/src/lib.rs": APACHE,
+    "crates/client/src/protocol.rs": APACHE,
+    "crates/client/src/client.rs": APACHE,
+    "crates/client/src/client/durable.rs": APACHE,
+    "crates/client/src/connect_opts.rs": APACHE,
+    "crates/client/src/query_api_client.rs": APACHE,
+    "crates/client/src/events/mod.rs": APACHE,
+    "crates/client/src/tui/ui/feed.rs": APACHE,
+    "crates/client/src/bin/hub_delegate.rs": APACHE,
+    "crates/client/src/bin/hub_worker/exec.rs": APACHE,
+    "crates/client/src/bin/hub_tui.rs": APACHE,
     # server
+    "src/lib.rs": BUSL,
     "src/router.rs": BUSL,
     "src/router/mirror.rs": BUSL,
     "src/query_api.rs": BUSL,
@@ -64,7 +65,7 @@ EXPECTED = {
     "src/storage/surreal.rs": BUSL,
     "src/analytics/metrics.rs": BUSL,
     "src/ws_bridge/ws.rs": BUSL,
-    "src/wave/validate.rs": BUSL,
+    "crates/client/src/wave/validate.rs": APACHE,
     "src/delivery/attach.rs": BUSL,
     "src/bin/hub_server.rs": BUSL,
     "src/bin/hub_admin.rs": BUSL,
@@ -79,7 +80,15 @@ EXPECTED = {
     "tests/e2e_delegation.rs": APACHE,
     "scripts/dev/with_stack.sh": APACHE,
     "packaging/release/package.sh": APACHE,
-    "Cargo.toml": APACHE,
+    "Cargo.toml": BUSL,
+    "crates/client/Cargo.toml": APACHE,
+    "crates/client/src/storage/types.rs": APACHE,
+    "crates/client/src/query_api.rs": APACHE,
+    "crates/client/src/analytics.rs": APACHE,
+    "crates/client/src/delivery/attach.rs": APACHE,
+    "crates/client/src/delivery/config.rs": APACHE,
+    "crates/client/src/delivery/mod.rs": APACHE,
+    "crates/client/src/some_future_module.rs": APACHE,
     "some_future_worker.py": APACHE,
 }
 
@@ -144,7 +153,11 @@ def test_license_texts_are_pinned_spdx() -> None:
 
 def test_manifests_declare_the_split() -> None:
     cargo = tomllib.loads((REPO / "Cargo.toml").read_text())
-    assert cargo["package"]["license"] == "Apache-2.0 AND BUSL-1.1"
+    assert cargo["package"]["license"] == BUSL
+    client = tomllib.loads((REPO / "crates/client/Cargo.toml").read_text())
+    assert client["package"]["license"] == APACHE
+    assert "crates/client" in cargo["workspace"]["members"]
+    assert not {"surrealdb", "rocksdb", "nats-hub"} & client["dependencies"].keys()
     for rel in ("claude-code-plugin/.claude-plugin/plugin.json", "codex-plugin/.codex-plugin/plugin.json"):
         assert json.loads((REPO / rel).read_text())["license"] == APACHE, rel
     assert "license: Apache-2.0" in (REPO / "hermes-plugin/plugin.yaml").read_text().splitlines()

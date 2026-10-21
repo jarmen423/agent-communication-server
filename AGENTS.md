@@ -12,9 +12,9 @@ ownership (§6). The reply contract is in [`refocus.md`](refocus.md) §6.
 **nats-hub** is a NATS-based message hub for agent-to-agent and human-to-agent
 messaging. An orchestrator (a CLI, or an agent through the MCP plugin)
 delegates tasks to workers (Claude Code, Codex, Cursor, Hermes, …) on any
-machine, and gets results back under one reply contract. The core is a Rust
-crate (`nats_hub`, `async-nats` + tokio): a control-plane router, CLIs, an
-optional embedded SurrealDB mirror, a query API, a WebSocket bridge and a TUI.
+machine, and gets results back under one reply contract. The Rust core is a Cargo workspace: `nats_hub_client` (Apache-2.0)
+provides the transport, wire types, CLIs and TUI; `nats_hub` (BUSL-1.1)
+provides the router, storage, query API and WebSocket bridge.
 Workers, bridges and the MCP server are Python.
 
 ## Architecture
@@ -51,37 +51,39 @@ Browser ──ws://…/ws──▶ hub-server WS bridge ──▶ NATS (channel.
 ## Code Layout
 
 ```
+Cargo.toml                   — workspace + BUSL-1.1 nats-hub server crate
+crates/client/Cargo.toml      — Apache-2.0 nats-hub-client crate (no database)
+crates/client/src/
+├── lib.rs                   — public client API
+├── protocol.rs              — Envelope, Meta, MessageKind, subjects
+├── client.rs, client/       — HubClient, registry cache, replies, durable subscriptions
+├── connect_opts.rs          — NATS auth/TLS/env options
+├── query_api.rs             — API wire request/response and subject helpers
+├── query_api_client.rs      — ApiClient (NATS request/reply)
+├── storage/types.rs         — wire records and query/filter types; no backend
+├── analytics.rs             — analytics query parameters and result records
+├── delivery/                — attach client, headers, stream names, consumer names
+├── events/                  — progress events, formatting and watch targets
+├── wave/                    — pure validation and identifier helpers
+├── tui/                     — hub-tui dashboard (feature tui)
+└── bin/                     — every hub-* CLI except hub-server and hub-admin
 src/
-├── lib.rs                 — module root + public re-exports
-├── protocol.rs            — Envelope, Meta, MessageKind, `subjects` helpers
-├── client.rs              — HubClient (connect, send/DM/reply, subscribe, sessions, register/heartbeat) + AgentRegistry cache
-├── client/reply.rs        — reply-contract helpers (task result payloads, matching)
-├── connect_opts.rs        — HubConnectOptions (token / user+pass / creds / nkey / require_tls) + NATS_* env
-├── router.rs              — ControlPlane: subscribe hub.send.>, route, registry, presence
-├── router/routing.rs      — pure routing decision + capability RoutingTable
-├── router/mirror.rs       — bounded storage mirror (single writer, drop-and-count)
-├── router/tests.rs        — router unit tests (no NATS)
-├── query_api.rs           — hub.api.<op> request-reply server: dispatch + limits
-├── query_api/handlers.rs  — agent/envelope/history/thread/session/wave ops
-├── query_api/stats.rs     — stats.* ops (analytics)
-├── query_api_client.rs    — ApiClient used by CLIs/TUI (never opens the DB)
-├── events/                — structured progress events (MessageKind::Event): mod, display, watch targets
-├── wave/                  — wave validation (disjoint scopes, deps) + spawn orchestration
-├── analytics/             — Analytics trait + SurrealAnalytics (hub-stats); metrics.rs = live MetricsCollector (/metrics)
-├── ws_bridge/             — WebSocket bridge + static server for the visualizer: mod, ws, http, commands, config (token/Origin checks)
-├── storage/
-│   ├── mod.rs             — Storage trait
-│   ├── types.rs           — query/filter/record types
-│   ├── surreal.rs         — SurrealStorage (embedded RocksDB, or in-memory for tests)
-│   ├── schema.rs          — schema migration
-│   ├── agents.rs          — agent registry methods
-│   ├── envelopes.rs       — history + reply threading
-│   ├── session.rs         — session CRUD
-│   ├── wave.rs            — wave + wave_task CRUD
-│   └── dbtime.rs          — datetime helpers
-├── tui/                   — hub-tui (feature `tui`): mod (event loop), app, model, api, nats_live, event, handler, ui/
-└── bin/                   — one file per CLI (see CLI Reference)
+├── lib.rs                   — server modules + compatibility client re-exports
+├── router.rs, router/       — control plane, routing, bounded async mirror
+├── query_api.rs, query_api/ — dispatch, authz, handlers, scoped reads and stats
+├── orchestrator/            — persisted wave state machine and worker orchestration
+├── storage/                 — Storage trait, SurrealDB backend, retention, backup
+├── analytics/               — Analytics trait, SurrealAnalytics, live metrics
+├── delivery/                — stream/consumer setup, attach listener, replay rejection
+├── wave/                    — merge gate + client validation/identifier re-exports
+├── ws_bridge/               — authenticated WebSocket bridge and static server
+└── bin/                     — hub-server, hub-admin and its ACL helpers
 ```
+
+Server modules re-export the moved client APIs, preserving `nats_hub::…`
+imports. New integrations should depend directly on `nats-hub-client`.
+Both crates share this checkout's `target/debug/` binary directory.
+
 
 Python and JS (repo root):
 
@@ -157,6 +159,7 @@ make up        # local stack: nats-server :4222, hub-server + visualizer :9191, 
 Each checkout or worktree uses **its own `./target`**. Dependencies are shared
 through kache or sccache when installed. Never point two worktrees at one
 `CARGO_TARGET_DIR`. If you run `cargo` directly, first run
+`source scripts/dev/lib.sh` (the compile-cache wrapper), then
 `export BINDGEN_EXTRA_CLANG_ARGS="$(scripts/dev/bindgen_args.sh)"`, and keep
 that value stable: changing it rebuilds RocksDB. `scripts/dev/with_stack.sh <cmd>`
 wraps any command with a throwaway stack and exports `NATS_URL`.
@@ -246,13 +249,13 @@ over `wss://` (or `tls://`/`nats://` on a trusted network).
 - **File size**: keep files under ~400 LOC. Split into focused modules.
 - **Tests that need NATS** read `NATS_URL` and never hard-code `:4222`.
 - **Plugins**: edit `mcp_server/`, then run `scripts/dev/sync_plugins.sh`. Never edit the plugin copies.
-- **Licensing**: by path (`LICENSING.md`, `REUSE.toml`). Client code is Apache-2.0 and server code BUSL-1.1. A new Rust file under `src/` is BUSL-1.1 unless you add it to the client list in `REUSE.toml`. Don't add per-file license headers.
+- **Licensing**: by path (`LICENSING.md`, `REUSE.toml`). Client code is Apache-2.0 and server code BUSL-1.1. A new file under `src/` is BUSL-1.1; `crates/client/**` is Apache-2.0. Don't add per-file license headers.
 
 ## Testing
 
 ```bash
 make test        # both suites
-make test-rust   # = scripts/dev/with_stack.sh cargo test --features tui
+make test-rust   # = scripts/dev/with_stack.sh cargo test --workspace --features tui
 make test-py     # = scripts/dev/with_stack.sh .venv/bin/python -m pytest -q tests/python
 ```
 
@@ -285,15 +288,19 @@ in `tests/python/fixtures/`.
 
 | Flag | Description |
 |---|---|
-| `default` (= `storage-surreal`) | SurrealDB persistence |
-| `storage-surreal` | SurrealDB on embedded RocksDB; also the `Analytics` trait + `hub-stats` |
-| `no-storage` | Pure NATS transport, no persistence. `MetricsCollector` still available. Checked in CI |
-| `tui` | ratatui + crossterm for `hub-tui` (off by default) |
+| server `default` (= `storage-surreal`) | SurrealDB persistence |
+| server `storage-surreal` | SurrealDB on embedded RocksDB and `SurrealAnalytics` |
+| server `no-storage` | Compatibility server library without persistence; metrics still available |
+| client `tui` (forwarded by server) | ratatui + crossterm for `hub-tui` (off by default) |
+
+The client has no default features or storage feature. All its CLIs, including
+`hub-stats`, query the running server without linking its database. CI runs
+`make check-no-storage` for all client targets and the server library.
 
 ## Common Tasks
 
-- **Add a CLI**: add a file in `src/bin/`, register it under `[[bin]]` in `Cargo.toml` (with `required-features` if it needs storage), and use `HubClient`/`ApiClient`. The release workflow picks up every `hub-*` binary automatically.
-- **Add a message kind**: extend `MessageKind` in `protocol.rs` (serde rename).
+- **Add a CLI**: add a file in `crates/client/src/bin/`, register it under `[[bin]]` in `crates/client/Cargo.toml` (server/admin tools stay in `src/bin/` and root `Cargo.toml`), and use `HubClient`/`ApiClient`. The release workflow picks up every `hub-*` binary automatically.
+- **Add a message kind**: extend `MessageKind` in `crates/client/src/protocol.rs` (serde rename).
 - **Add a query-API op**: add a handler in `src/query_api/handlers.rs` and dispatch it in `query_api.rs`; expose it through `ApiClient` callers.
 - **Add a storage backend**: implement `Storage` in a new `src/storage/` module behind a feature flag.
 - **Add a worker type**: add a backend in `worker_backends/` and a thin `<name>_worker.py`, plus fake-CLI tests in `tests/python/`. See `docs/WORKER_BACKENDS.md`.

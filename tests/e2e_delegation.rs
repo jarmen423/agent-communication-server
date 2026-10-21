@@ -5,6 +5,8 @@
 //! `scripts/dev/with_stack.sh`, which sets `NATS_HUB_TEST_STACK=1` and
 //! `NATS_URL`. Without it every test skips.
 
+mod support;
+
 use nats_hub::client::is_task_result;
 use nats_hub::{ApiClient, Envelope, HubClient, MessageKind};
 use serde_json::json;
@@ -70,7 +72,7 @@ async fn spawn_worker(url: &str, identity: &str, mut cmd: Command) -> Child {
 }
 
 async fn spawn_rust_worker(url: &str, identity: &str, execute: &str, extra: &[&str]) -> Child {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hub-worker"));
+    let mut cmd = Command::new(support::client_bin("hub-worker"));
     cmd.args([
         "--identity",
         identity,
@@ -91,7 +93,7 @@ async fn delegate_and_observe(url: &str, worker: &str, prompt: &str) -> (Output,
     let mut all = observer.subscribe_all().await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let out = Command::new(env!("CARGO_BIN_EXE_hub-delegate"))
+    let out = Command::new(support::client_bin("hub-delegate"))
         .args(["--to", worker, "--prompt", prompt, "--nats-url", url])
         .args(["--from", &from, "--timeout", "30", "--verbose"])
         .output()

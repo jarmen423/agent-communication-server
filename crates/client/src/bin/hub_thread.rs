@@ -7,8 +7,8 @@
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use nats_hub::storage::EnvelopeRecord;
-use nats_hub::ApiClient;
+use nats_hub_client::storage::EnvelopeRecord;
+use nats_hub_client::ApiClient;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]

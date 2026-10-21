@@ -3,6 +3,8 @@
 //! `--prompt -`, Ctrl-C). Real binaries against a real router, so they only
 //! run under `scripts/dev/with_stack.sh` (NATS_HUB_TEST_STACK + NATS_URL).
 
+mod support;
+
 use nats_hub::client::is_task_result;
 use nats_hub::{Envelope, HubClient, MessageKind};
 use serde_json::json;
@@ -76,7 +78,7 @@ async fn spawn_worker(url: &str, identity: &str, mut cmd: Command) -> Child {
 }
 
 async fn spawn_rust_worker(url: &str, identity: &str, execute: &str) -> Child {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hub-worker"));
+    let mut cmd = Command::new(support::client_bin("hub-worker"));
     cmd.args([
         "--identity",
         identity,
@@ -159,7 +161,7 @@ async fn sigint(child: &Child) {
 }
 
 fn delegate_cmd(url: &str, worker: &str) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hub-delegate"));
+    let mut cmd = Command::new(support::client_bin("hub-delegate"));
     cmd.args([
         "--to",
         worker,
