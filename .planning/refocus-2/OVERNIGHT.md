@@ -89,3 +89,5 @@ after every state change.**
   - Low: waiter normalization, the remote `read_inbox` hint, pool drain grace, lock docs.
   - **Deferred to the H-1c merge** (stub files in flight): grant-family check on `/v1/credentials/nats`, persisted revocations, CIMD SSRF guard.
   - Merged main: lint, `make test` (301 Rust / 403 Py), `make test-remote-mcp` 3/3, smoke PASS.
+- **H-1c merged** (`e4f2469`). Review: credential minting is tied to device-owned identities and their registered public keys; local files are written atomically, 0600 in a 0700 dir. The deferred review items are done (grant-family recheck, persisted via grants; CIMD SSRF guard; tests added). Merged main, all modes: 303 Rust; 423/424/423 Py; operator + remote MCP + acs e2e 8/8; both dogfoods; reuse; smoke.
+- **Wave C live e2e: ALL PASS**, including a real Claude worker answering "pong" through acs → MCP (`scripts/dogfood_hosted.py`, transcript in `.planning/hosted/live-e2e-2026-10-21.md`). Docs pass done (README §D, AGENTS counts, HOSTED_PLAN status). A last independent review of the H-1c surface is running.
