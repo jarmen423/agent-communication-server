@@ -47,6 +47,7 @@ quick_tunnel() {  # quick_tunnel NAME PORT → prints the https URL
 
 issuer="${PUBLIC_ISSUER_URL:-}"
 resource="${PUBLIC_MCP_URL:-}"
+loopback=()  # loopback redirect URIs (MCP Inspector, local clients): local-only demos
 if [[ -z "$issuer" || -z "$resource" ]]; then
     if (( tunnel )) && command -v cloudflared >/dev/null 2>&1; then
         issuer="$(quick_tunnel cp "$cp_port")"
@@ -55,12 +56,13 @@ if [[ -z "$issuer" || -z "$resource" ]]; then
         (( tunnel )) && echo "cloudflared not found: local-only demo (claude.ai can't reach it)" >&2
         issuer="http://127.0.0.1:$cp_port"
         resource="http://127.0.0.1:$mcp_port/mcp"
+        loopback=(--allow-loopback-redirects)
     fi
 fi
 
 "$PY" -m stub_control_plane --port "$cp_port" --issuer "$issuer" --resource "$resource" \
     --nsc-home "$OPERATOR_DIR/nsc" --tenant T_A --state-file "$demo/state.json" \
-    --service-key-file "$demo/service.key" --allow-loopback-redirects \
+    --service-key-file "$demo/service.key" "${loopback[@]}" \
     >"$demo/stub-cp.log" 2>&1 &
 pids+=("$!")
 wait_port 127.0.0.1 "$cp_port" 20
@@ -86,6 +88,11 @@ cat <<EOF
 
   claude.ai: Customize → Connectors → "+" → Add custom connector → paste the
   connector URL → Connect. Then ask: "delegate 'hello' to echo-1 and get the result".
+
+  WARNING: consent auto-approves. While this runs, anyone who has these URLs
+  can connect as the dev user and delegate to tenant T_A's agents. Quick
+  tunnel URLs are hard to guess, not secret. Only dev data and the echo
+  worker live here; stop the demo when you're done.
 
   Ctrl-C to stop.
 EOF

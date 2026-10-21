@@ -265,6 +265,9 @@ protocol with the MCP SDK's own OAuth client.
   NATS JWT stays valid until it expires (≤ 1 h). The endpoint cuts the
   identity off within the access-token lifetime, because refresh and
   credential issue both stop.
+- **The demo is open while it runs.** Consent auto-approves, so anyone who
+  has the tunnel URLs can connect as the dev user. Run it with dev data only
+  and stop it afterwards.
 - **CIMD fetching** is https-only, but private address ranges aren't
   blocked (SSRF). A production authorization server must block them and
   honour cache headers.
