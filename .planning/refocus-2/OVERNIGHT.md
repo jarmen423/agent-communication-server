@@ -68,3 +68,7 @@ after every state change.**
 ## Log
 
 - 2026-10-21 ~02:30 UTC: plan written. W2-A, W2-B, H-0, H-0b and the license split were already merged (main `0d74bf5`). Launching wave A.
+- 2026-10-21 02:29 UTC: wave A launched.
+  - H-1a: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Ah1a-crate-split-r1` (codex gpt-6.1-sol high), worktree `/data/code/acs-wt/h1a-crate-split`.
+  - H-1b: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Ah1b-remote-mcp-r1` (claudeAgent_2 opus-5-5 high), worktree `/data/code/acs-wt/h1b-remote-mcp`.
+  - Heartbeat: scheduled task `overnight-heartbeat-2026-10-21`, hourly, bound to this thread. Delete it after wave C.
