@@ -1,0 +1,19 @@
+# Generate resolver.conf using `nsc generate config --nats-resolver`.
+# It contains the operator JWT, system account and resolver preload.
+# Set its `resolver.dir` to private persistent storage before starting NATS.
+# Include paths are relative to this file. See docs/OPERATOR_MODE.md.
+host: 127.0.0.1
+port: 4222
+include resolver.conf
+jetstream {
+  store_dir: "/var/lib/nats-hub/jetstream"
+  max_file_store: 100G
+  max_memory_store: 1G
+}
+# Add TLS before exposing a listener outside a trusted network:
+# tls {
+#   cert_file: "/etc/nats/tls/server.crt"
+#   key_file: "/etc/nats/tls/server.key"
+# }
+# Every account JWT must enable JetStream with its own limits.
+# No imports/exports: hub.*, channel.*, _INBOX.*, $JS.* stay account-local.

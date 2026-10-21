@@ -41,7 +41,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: .tools/bin
-          key: nats-server-${{ runner.os }}-${{ hashFiles('scripts/dev/install_nats_server.sh') }}
+          key: nats-server-${{ runner.os }}-${{ hashFiles('scripts/dev/install_nats_server.sh', 'scripts/dev/install_nsc.sh') }}
 
       - name: System deps (RocksDB build)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev
@@ -68,6 +68,13 @@ jobs:
 
       - name: Full suite, durable delivery
         run: make test-durable
+
+      - name: Operator mode (pinned nsc, scoped JWTs, tenants, credential lifecycle)
+        run: |
+          scripts/dev/install_nsc.sh
+          scripts/dev/operator_stack.sh .venv/bin/python -m pytest -q -s tests/python/test_operator_isolation.py tests/python/test_operator_credentials.py
+          STRICT_INTEGRATION=1 scripts/dogfood_prod_config.sh --operator
+          scripts/dogfood_durable.sh --operator
 
   # The embeddable transport-only build (no SurrealDB/RocksDB). Fast: no C++.
   no-storage:
