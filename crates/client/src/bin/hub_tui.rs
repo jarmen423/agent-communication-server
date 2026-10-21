@@ -25,6 +25,12 @@ struct Args {
     /// Max feed lines retained.
     #[arg(long, default_value_t = 500)]
     feed_cap: usize,
+
+    /// Caller identity for bound API subjects (`hub.api.<identity>.<op>`).
+    /// Required against `hub-server --require-bound-identity`; falls back
+    /// to env `NATS_HUB_IDENTITY`, then `hub-tui`.
+    #[arg(long)]
+    identity: Option<String>,
 }
 
 #[tokio::main]
@@ -54,6 +60,9 @@ async fn main() -> Result<()> {
         refresh_secs: args.refresh_secs,
         alive_secs: args.alive_secs,
         feed_cap: args.feed_cap,
+        identity: args
+            .identity
+            .or_else(|| std::env::var("NATS_HUB_IDENTITY").ok()),
     })
     .await
 }

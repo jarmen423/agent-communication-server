@@ -319,7 +319,7 @@ The client has no default features or storage feature. All its CLIs, including
 - `docs/SECURITY.md`, `docs/OPERATOR_HUB.md`, `docs/JOIN_HUB.md`, `docs/QUICK_START_REMOTE.md`: distributed hub + auth
 - `docs/REMOTE_INSTALL.md`, `docs/REMOTE_AGENTS.md`: remote workers
 - `docs/BRIDGES.md`: human bridges
-- `docs/VISUALIZER.md`, `docs/pets.md`: browser visualizer
+- `docs/VISUALIZER.md`, `docs/THEMES.md`: browser visualizer (ES modules, offline, themes, Playwright smoke)
 - `docs/PORTABILITY.md`: embedding, feature flags, Storage trait
 - `docs/RELEASING.md`: release workflow, dry runs, install from release
 - `docs/PRODUCT_VISION.md`, `docs/DATABASE_PLAN.md`: vision and persistence design

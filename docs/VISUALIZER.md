@@ -84,8 +84,8 @@ Then open http://127.0.0.1:9191/ in your browser.
 ### Viewing
 
 - **Live message feed** — all `channel.>` envelopes stream in real time
-- **Agent presence** — agents appear as animated sprites (from Petdex) or
-  octagonal chips when no sprite is available
+- **Agent presence** — agents appear as animated procedural sprites from
+  the active theme (see [Themes](#themes-agent-sprites))
 - **Status indicators** — working (green), idle (ready), error (red), closed (gray)
 - **Progress events** — streaming thought/message/tool updates appear as they
   arrive from ACP-backed workers
@@ -122,13 +122,49 @@ These hit `hub.worker.models` / `hub.worker.providers` on the supervisor and use
 `worker_backends/model_catalog.py` so every supported (and future configured)
 provider can supply its own list — not a hard-coded kilo/opencode table.
 
-### Pets (agent sprites)
+### Themes (agent sprites)
 
-Agent sprites come from Petdex installs under `visualizer/pets/<slug>/`. Each
-pet has a `spritesheet.webp` (192×208 cells, 6 frames per animation row). If no
-sprite loads, the visualizer falls back to an octagonal chip with a glyph.
+Agent sprites are drawn procedurally from a theme manifest
+(`visualizer/themes/<name>/theme.json`: variants with shape + palette, and
+per-status animation parameters). The default theme is original artwork for
+nats-hub (BUSL-1.1). See `docs/THEMES.md` for the manifest format and how to
+add a theme.
 
-See `docs/pets.md` for sprite format details.
+## Module layout and offline use
+
+The visualizer is plain ES modules under `visualizer/` — no build step:
+
+| Path | Role |
+|---|---|
+| `visualizer/index.html` | Page shell (DOM, CSS/module links) |
+| `visualizer/css/part*.css` | Styles (split by HUD / panels / dock / chat) |
+| `visualizer/js/state.js` | Constants, shared state, text helpers |
+| `visualizer/js/model.js` | Envelope → agent-event/chat classification |
+| `visualizer/js/ws.js` | WebSocket connection and envelope handling |
+| `visualizer/js/theme.js` | Theme manifest loading + procedural sprites |
+| `visualizer/js/agent.js`, `js/fx.js` | Agent rendering, particles/transmissions |
+| `visualizer/js/scene.js`, `js/layout.js` | p5 draw loop, floor layout, backgrounds |
+| `visualizer/js/panels.js`, `js/chat.js` | HUD, ticker, popup, chat panel |
+| `visualizer/js/dock.js`, `js/dock-models.js` | Agent spawn dock, live model picker |
+| `visualizer/js/main.js` | p5 entry points and UI wiring |
+| `visualizer/vendor/p5.min.js` | Vendored p5.js 1.11.3 (LGPL-2.1-or-later; checksum in `vendor/p5.VERSION`) |
+
+Everything is served by `hub-server --static-dir visualizer/` from the same
+origin, so the page works fully offline: the only runtime fetches are the
+page's own CSS/JS/theme JSON and the `/ws` WebSocket. No CDN or web-font
+requests are made.
+
+## Smoke test
+
+```bash
+cd tests/e2e_visualizer && npm ci && npx playwright install --with-deps chromium
+./run_smoke.sh        # throwaway stack + echo worker; load page, token
+                      # connect, agent appears, delegated message in feed;
+                      # screenshot → artifacts/default-theme.png
+./check_tui_bound.sh  # hub-tui against --require-bound-identity hub
+```
+
+Both run in CI (`.github/workflows/ci.yml`).
 
 ## Scene interaction
 

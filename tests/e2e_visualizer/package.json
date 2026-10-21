@@ -1,0 +1,13 @@
+{
+  "name": "nats-hub-e2e-visualizer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright smoke test for the nats-hub visualizer (offline, vendored p5).",
+  "type": "module",
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.49.1"
+  }
+}

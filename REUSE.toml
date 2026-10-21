@@ -38,10 +38,10 @@ precedence = "override"
 SPDX-FileCopyrightText = "2026 Agent Memory Labs"
 SPDX-License-Identifier = "Apache-2.0"
 
-# 5b. Visualizer pet sprites: third-party Petdex pets, not authored by
-#     Agent Memory Labs and not licensed by it. See the license file.
+# 5b. Vendored p5.js (visualizer): third-party, LGPL-2.1-or-later.
+#     Pinned 1.11.3; checksum in visualizer/vendor/p5.VERSION.
 [[annotations]]
-path = "visualizer/pets/**"
+path = "visualizer/vendor/**"
 precedence = "override"
-SPDX-FileCopyrightText = "NOASSERTION (third-party Petdex pet authors; provenance unverified)"
-SPDX-License-Identifier = "LicenseRef-Petdex-Unverified"
+SPDX-FileCopyrightText = "Copyright (c) 2014-2025 p5.js contributors and Lauren Lee McCarthy"
+SPDX-License-Identifier = "LGPL-2.1-or-later"

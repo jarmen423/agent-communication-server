@@ -1,0 +1,20 @@
+{
+  "name": "default",
+  "version": 1,
+  "description": "Original procedural robot theme for nats-hub. Drawn with canvas primitives; no third-party artwork.",
+  "license": "BUSL-1.1",
+  "cell": { "width": 64, "height": 70, "hitRadius": 27, "labelOffset": 41 },
+  "statusAnimations": {
+    "idle":    { "loopMs": 1100, "bobAmp": 2.5, "bobHz": 0.0016 },
+    "run":     { "loopMs": 620,  "bobAmp": 4.5, "bobHz": 0.004 },
+    "review":  { "loopMs": 900,  "bobAmp": 2,   "bobHz": 0.002, "tilt": 0.08 },
+    "failed":  { "loopMs": 1300, "bobAmp": 1,   "bobHz": 0.001, "shake": 1.6 },
+    "waiting": { "loopMs": 1400, "bobAmp": 1.5, "bobHz": 0.0012 }
+  },
+  "variants": [
+    { "id": "orb-bot",   "label": "Orb Bot",   "shape": "orb",   "body": "#2dd4bf", "accent": "#99f6e4", "eye": "#06281f" },
+    { "id": "hex-bot",   "label": "Hex Bot",   "shape": "hex",   "body": "#f59e0b", "accent": "#fde68a", "eye": "#2a1500" },
+    { "id": "cat-bot",   "label": "Cat Bot",   "shape": "cat",   "body": "#38bdf8", "accent": "#bae6fd", "eye": "#082f49" },
+    { "id": "ghost-bot", "label": "Ghost Bot", "shape": "ghost", "body": "#a3a380", "accent": "#e7e5c8", "eye": "#26261a" }
+  ]
+}

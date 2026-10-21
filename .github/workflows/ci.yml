@@ -64,6 +64,21 @@ jobs:
       - name: Python tests (isolated nats-server + hub-server)
         run: make test-py
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Visualizer: ES-module page loads offline (vendored p5), WS token
+      # connect, echo agent appears, delegated message in feed; hub-tui
+      # against a --require-bound-identity hub.
+      - name: Visualizer smoke + bound TUI (Playwright)
+        working-directory: tests/e2e_visualizer
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          ./run_smoke.sh
+          ./check_tui_bound.sh
+
       # The same suites again with hub-server --require-bound-identity
       # (iteration 2 / T1), then with --durable (JetStream; docs/DELIVERY.md).
       - name: Full suite, bound identity

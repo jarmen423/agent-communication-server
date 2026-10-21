@@ -37,12 +37,37 @@ pub struct TuiOptions {
     pub refresh_secs: u64,
     pub alive_secs: i64,
     pub feed_cap: usize,
+    /// Caller identity for bound API subjects. `None` falls back to env
+    /// `NATS_HUB_IDENTITY` (inside `ApiClient::connect`), then legacy.
+    pub identity: Option<String>,
+}
+
+/// Connect an `ApiClient` honouring the TUI identity: an explicit identity
+/// uses the bound subject `hub.api.<identity>.<op>` (required by
+/// `hub-server --require-bound-identity`); without one, `ApiClient::connect`
+/// still picks up `NATS_HUB_IDENTITY` from the environment.
+async fn connect_api(nats_url: &str, identity: &Option<String>) -> Result<ApiClient> {
+    match identity {
+        Some(id) => ApiClient::connect_with_identity(nats_url, id.clone()).await,
+        None => ApiClient::connect(nats_url).await,
+    }
+}
+
+/// Effective identity: explicit option, else a valid `NATS_HUB_IDENTITY`.
+fn effective_identity(opts: &TuiOptions) -> Option<String> {
+    if let Some(id) = &opts.identity {
+        return Some(id.clone());
+    }
+    std::env::var("NATS_HUB_IDENTITY")
+        .ok()
+        .filter(|i| crate::protocol::valid_identity(i))
 }
 
 /// Main entry point — sets up terminal, runs the event loop, restores on exit.
 pub async fn run(opts: TuiOptions) -> Result<()> {
     // ── Pre-flight: ping the query API (fail fast, before terminal) ──
-    let api = ApiClient::connect(&opts.nats_url)
+    let identity = effective_identity(&opts);
+    let api = connect_api(&opts.nats_url, &identity)
         .await
         .context("connect to NATS for query API")?;
     api.request("ping", serde_json::json!({}))
@@ -51,7 +76,7 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
     info!("query API ping ok");
 
     // ── Connect live NATS client ─────────────────────────────
-    let hub = HubClient::connect(&opts.nats_url, "hub-tui")
+    let hub = HubClient::connect(&opts.nats_url, identity.as_deref().unwrap_or("hub-tui"))
         .await
         .context("connect to NATS for live stream")?;
     let mut live_rx = nats_live::spawn_live_listener(&hub)
@@ -89,12 +114,13 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
     // ── Background: API refresh ticker (P1-1 reuse one client) ──
     let tick_tx = tx.clone();
     let ticker_url = opts.nats_url.clone();
+    let ticker_identity = identity.clone();
     let refresh_secs = opts.refresh_secs;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(refresh_secs));
         interval.tick().await; // first tick fires immediately; skip it
                                // P1-1: connect ONCE and reuse across ticks; reconnect lazily on error.
-        let mut api: Option<ApiClient> = ApiClient::connect(&ticker_url).await.ok();
+        let mut api: Option<ApiClient> = connect_api(&ticker_url, &ticker_identity).await.ok();
         loop {
             tokio::select! {
                 _ = interval.tick() => {}
@@ -102,7 +128,7 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
             }
             // Ensure a live client exists (lazy reconnect).
             if api.is_none() {
-                match ApiClient::connect(&ticker_url).await {
+                match connect_api(&ticker_url, &ticker_identity).await {
                     Ok(a) => api = Some(a),
                     Err(e) => {
                         let _ = tick_tx.send(AppEvent::SnapshotError(format!("connect: {e}")));
@@ -160,6 +186,7 @@ pub async fn run(opts: TuiOptions) -> Result<()> {
         &refresh_tx,
         &tx,
         &opts,
+        &identity,
     )
     .await;
 
@@ -182,6 +209,7 @@ async fn run_loop(
     refresh_tx: &mpsc::UnboundedSender<()>,
     tx: &mpsc::UnboundedSender<AppEvent>,
     opts: &TuiOptions,
+    identity: &Option<String>,
 ) -> Result<()> {
     // Draw once up front.
     terminal.draw(|frame| ui::draw(frame, app))?;
@@ -216,7 +244,7 @@ async fn run_loop(
                 }
 
                 // P1-3: lazy wave task fetch on selection change.
-                maybe_fetch_wave(app, tx, &mut last_wave_fetched, &opts.nats_url);
+                maybe_fetch_wave(app, tx, &mut last_wave_fetched, &opts.nats_url, &identity);
 
                 if draw_now || (is_tick && needs_redraw) {
                     terminal.draw(|frame| ui::draw(frame, app))?;
@@ -259,6 +287,7 @@ fn maybe_fetch_wave(
     tx: &mpsc::UnboundedSender<AppEvent>,
     last: &mut Option<String>,
     nats_url: &str,
+    identity: &Option<String>,
 ) {
     if app.focus != PanelFocus::Waves {
         return;
@@ -274,8 +303,9 @@ fn maybe_fetch_wave(
 
     let tx = tx.clone();
     let url = nats_url.to_string();
+    let identity = identity.clone();
     tokio::spawn(async move {
-        let Ok(api) = ApiClient::connect(&url).await else {
+        let Ok(api) = connect_api(&url, &identity).await else {
             return;
         };
         if let Ok((done, total)) = api::fetch_wave_task(&api, &wave_id).await {
