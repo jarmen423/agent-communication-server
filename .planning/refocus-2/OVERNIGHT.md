@@ -72,3 +72,4 @@ after every state change.**
   - H-1a: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Ah1a-crate-split-r1` (codex gpt-6.1-sol high), worktree `/data/code/acs-wt/h1a-crate-split`.
   - H-1b: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Ah1b-remote-mcp-r1` (claudeAgent_2 opus-5-5 high), worktree `/data/code/acs-wt/h1b-remote-mcp`.
   - Heartbeat: scheduled task `overnight-heartbeat-2026-10-21`, hourly, bound to this thread. Delete it after wave C.
+- 02:30 UTC: H-1a r1 on `codex` failed immediately: usage limit ("try again at 4:32 AM"), no changes made. Relaunched as r2 on `codex_2`: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Ah1a-crate-split-r2-codex2`. For later waves, `codex` (account 1) is out until about 04:32 local. Prefer `codex_2`/`codex_3` or Claude accounts 3 and 4.
