@@ -208,3 +208,29 @@ def test_standalone_installs_embedded_mcp_runtime(device_stack):
                 assert 'delegate_task' in [t.name for t in tools.tools]
     asyncio.run(initialize())
     acs(env, 'logout')
+
+
+def test_native_worker_receives_url_and_excludes_login_secrets(device_stack):
+    import shutil
+    env, tmp, _ = device_stack
+    headless_login(env)
+    acs(env, 'agent', 'add', 'native', '--role', 'worker')
+    bindir = tmp / 'native-bin'
+    bindir.mkdir()
+    connector = bindir / 'acs'
+    shutil.copy2(ACS, connector)
+    worker = bindir / 'hub-worker'
+    worker.write_text('#!' + sys.executable + '\nimport os,sys,json\n'
+        'print(json.dumps({"args":sys.argv[1:],"url":os.environ["NATS_URL"],'
+        '"identity":os.environ["NATS_HUB_IDENTITY"],"secret_present":'
+        'any(k in os.environ for k in ("ACS_SERVICE_KEY","NATS_NKEYS_SEED","NATS_TOKEN"))}))\n')
+    worker.chmod(0o700)
+    p = subprocess.run([str(connector), 'worker', 'run', 'hub-worker', '--identity', 'native',
+                        '--', '--execute', 'cat'], env={**env, 'ACS_SERVICE_KEY': 'must-not-be-inherited',
+                        'NATS_NKEYS_SEED': 'must-not-be-inherited', 'NATS_TOKEN': 'must-not-be-inherited'},
+                       capture_output=True, text=True, timeout=10)
+    assert p.returncode == 0, p.stderr
+    data = json.loads(p.stdout)
+    assert data['args'] == ['--identity', 'native', '--nats-url', data['url'], '--execute', 'cat']
+    assert data['identity'] == 'native' and data['secret_present'] is False
+    acs(env, 'logout')

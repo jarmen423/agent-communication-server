@@ -218,7 +218,11 @@ pub async fn worker(root: &Path, backend: &str, identity: &str, args: &[String])
         cmd.arg(script).arg("--identity").arg(id);
         cmd
     };
-    cmd.args(args)
+    // hub-worker's CLI default does not read NATS_URL; pass the selected
+    // tenant URL explicitly for both Rust and Python backends.
+    cmd.arg("--nats-url")
+        .arg(&state.nats_url)
+        .args(args)
         .env("NATS_URL", &state.nats_url)
         .env("NATS_CREDENTIALS_FILE", local::creds_path(root, id))
         .env("NATS_HUB_IDENTITY", id)

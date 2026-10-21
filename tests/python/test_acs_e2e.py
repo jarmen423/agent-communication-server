@@ -82,6 +82,15 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
                     data = json.loads(result.content[0].text)
                     assert data['ok'] and data['data']['reply']['result'] == 'echo: sca olleh', data
                     print('MCP delegate_task → device-echo: echo: sca olleh', flush=True)
+                    await asyncio.to_thread(acs, env, 'agent', 'add', 'device-native', '--role', 'worker')
+                    spawn('native', [str(ACS), 'worker', 'run', 'hub-worker', '--identity',
+                                     'device-native', '--', '--execute', 'cat'])
+                    await asyncio.sleep(1)
+                    native = await session.call_tool('delegate_task', {'to': 'device-native',
+                        'prompt': 'native worker', 'timeout': 20})
+                    assert not native.isError, native
+                    assert json.loads(native.content[0].text)['data']['reply']['result'].strip() == 'native worker'
+                    print('PASS acs worker run hub-worker uses the selected tenant URL: native worker', flush=True)
                     cred = root / 'creds/me.creds'
                     original = cred.read_text()
                     old = tmp_path / 'unrefreshed.creds'
