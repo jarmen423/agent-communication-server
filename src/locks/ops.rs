@@ -11,7 +11,9 @@ use uuid::Uuid;
 use super::{check_holder, resolve_holder, LockService};
 use crate::query_api::{resolve_limit, ApiResponse, Caller};
 use crate::storage::{LockRecord, Storage};
-use nats_hub_client::locks::{clamp_ttl, lock_channel, normalize_path, paths_conflict, DEFAULT_TTL_SECS};
+use nats_hub_client::locks::{
+    clamp_ttl, lock_channel, normalize_path, paths_conflict, DEFAULT_TTL_SECS,
+};
 
 /// Field limits — generous but bounded so one call can't smuggle a huge
 /// document into a replicated record.
@@ -141,9 +143,7 @@ impl LockService {
                     }
                 }
                 Some(_) => {
-                    return ApiResponse::err(format!(
-                        "path '{raw}' exceeds {MAX_PATH_LEN} chars"
-                    ))
+                    return ApiResponse::err(format!("path '{raw}' exceeds {MAX_PATH_LEN} chars"))
                 }
                 None => return ApiResponse::err(format!("path '{raw}' is empty")),
             }
@@ -235,15 +235,9 @@ impl LockService {
             },
         };
         let expires_at = Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
-        match self
-            .storage
-            .renew_lock(lock_id, ttl_secs, expires_at)
-            .await
-        {
+        match self.storage.renew_lock(lock_id, ttl_secs, expires_at).await {
             Ok(true) => {}
-            Ok(false) => {
-                return ApiResponse::err(format!("lock '{lock_id}' not found"))
-            }
+            Ok(false) => return ApiResponse::err(format!("lock '{lock_id}' not found")),
             Err(e) => return ApiResponse::err(e.to_string()),
         }
         let mut lock = lock;
@@ -269,9 +263,7 @@ impl LockService {
         }
         match self.storage.delete_lock(lock_id).await {
             Ok(true) => {}
-            Ok(false) => {
-                return ApiResponse::err(format!("lock '{lock_id}' not found"))
-            }
+            Ok(false) => return ApiResponse::err(format!("lock '{lock_id}' not found")),
             Err(e) => return ApiResponse::err(e.to_string()),
         }
         let forced = admin

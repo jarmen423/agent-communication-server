@@ -1,6 +1,7 @@
 //! File locks (W2-D): conflict rules, all-or-nothing acquire, concurrent
 //! single-winner, TTL and presence expiry, restart persistence, holder
 //! authz — plus live tests over a real nats-server + hub-server.
+#![allow(clippy::await_holding_lock)] // STACK_LOCK serializes live tests on purpose
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +66,12 @@ async fn acquire_conflicts_and_never_partially_grants() {
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0]["holder"], "alice");
     // "other.rs" was NOT granted: bob holds nothing.
-    assert!(s.list_locks(Some("repo")).await.unwrap().iter().all(|l| l.holder != "bob"));
+    assert!(s
+        .list_locks(Some("repo"))
+        .await
+        .unwrap()
+        .iter()
+        .all(|l| l.holder != "bob"));
 
     // Same holder may stack overlapping locks.
     let a2 = acquire(&svc, "alice", "repo", &["src/foo.rs"]).await;
@@ -102,7 +108,10 @@ async fn renew_and_release_are_holder_only() {
     let s = storage().await;
     let svc = service(&s);
     let r = acquire(&svc, "alice", "repo", &["x.rs"]).await;
-    let lock_id = r.data.unwrap()["lock"]["lock_id"].as_str().unwrap().to_string();
+    let lock_id = r.data.unwrap()["lock"]["lock_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Non-holder renew/release denied (caller identity ≠ holder).
     for op in ["lock.renew", "lock.release"] {
@@ -110,11 +119,19 @@ async fn renew_and_release_are_holder_only() {
             .handle_write(&bound("bob"), false, op, &json!({"lock_id": lock_id}))
             .await;
         assert!(!resp.ok, "{op} by non-holder must fail");
-        assert!(resp.error.as_ref().unwrap().contains("held by 'alice'"), "{resp:?}");
+        assert!(
+            resp.error.as_ref().unwrap().contains("held by 'alice'"),
+            "{resp:?}"
+        );
     }
     // Admin may renew/release (force).
     let admin = svc
-        .handle_write(&bound("admin-1"), true, "lock.release", &json!({"lock_id": lock_id}))
+        .handle_write(
+            &bound("admin-1"),
+            true,
+            "lock.release",
+            &json!({"lock_id": lock_id}),
+        )
         .await;
     assert!(admin.ok, "{:?}", admin.error);
     assert!(s.get_lock(&lock_id).await.unwrap().is_none());
@@ -180,13 +197,25 @@ async fn ttl_and_presence_expiry() {
     // Presence expiry: holder seen on hub.presence, then silent > ttl.
     let r = acquire(&svc, "ghost", "r", &["b"]).await;
     assert_eq!(r.data.unwrap()["granted"], true);
-    let hb = Envelope::new("ghost", "system", MessageKind::Control, json!({"identity": "ghost"}));
+    let hb = Envelope::new(
+        "ghost",
+        "system",
+        MessageKind::Control,
+        json!({"identity": "ghost"}),
+    );
     nats_hub::locks::note_presence(&svc, "hub.presence.ghost", &hb).await;
     nats_hub::locks::sweep_once(&svc).await;
-    assert_eq!(s.list_locks(Some("r")).await.unwrap().len(), 1, "fresh presence keeps lock");
+    assert_eq!(
+        s.list_locks(Some("r")).await.unwrap().len(),
+        1,
+        "fresh presence keeps lock"
+    );
     tokio::time::sleep(Duration::from_secs(4)).await; // liveness_ttl = 3s
     nats_hub::locks::sweep_once(&svc).await;
-    assert!(s.list_locks(Some("r")).await.unwrap().is_empty(), "presence lost → expired");
+    assert!(
+        s.list_locks(Some("r")).await.unwrap().is_empty(),
+        "presence lost → expired"
+    );
 
     // Never-seen holder: TTL only — survives the sweep while unexpired.
     let r = svc
@@ -227,7 +256,10 @@ async fn authz_gate_denies_non_holder_and_anonymous() {
     )
     .await;
     assert!(r.ok, "{:?}", r.error);
-    let lock_id = r.data.unwrap()["lock"]["lock_id"].as_str().unwrap().to_string();
+    let lock_id = r.data.unwrap()["lock"]["lock_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // bob can't release alice's lock; anonymous legacy can't write at all.
     let r = call(
@@ -236,14 +268,20 @@ async fn authz_gate_denies_non_holder_and_anonymous() {
         json!({"lock_id": lock_id}),
     )
     .await;
-    assert!(!r.ok && r.error.as_ref().unwrap().contains("forbidden"), "{r:?}");
+    assert!(
+        !r.ok && r.error.as_ref().unwrap().contains("forbidden"),
+        "{r:?}"
+    );
     let r = call(
         "hub.api.lock.release",
         "lock.release",
         json!({"lock_id": lock_id, "holder": "alice"}),
     )
     .await;
-    assert!(!r.ok && r.error.as_ref().unwrap().contains("forbidden"), "{r:?}");
+    assert!(
+        !r.ok && r.error.as_ref().unwrap().contains("forbidden"),
+        "{r:?}"
+    );
     // admin can (force).
     let r = call(
         "hub.api.admin-1.lock.release",
@@ -268,14 +306,22 @@ async fn live_lock_wait_release_and_events() {
         return;
     }
     let _g = STACK_LOCK.lock().unwrap();
-    let Some(stack) = TestStack::new().await else { return };
+    let Some(stack) = TestStack::new().await else {
+        return;
+    };
     let _hub = stack.start_hub();
     stack.wait_hub().await;
 
     // Agent A locks; agent B waits; events land on channel.lock.<hash>.
-    let api_a = ApiClient::connect_with_identity(&stack.nats_url, "agent-a").await.unwrap();
-    let hub_b = HubClient::connect(&stack.nats_url, "agent-b").await.unwrap();
-    let api_b = ApiClient::connect_with_identity(&stack.nats_url, "agent-b").await.unwrap();
+    let api_a = ApiClient::connect_with_identity(&stack.nats_url, "agent-a")
+        .await
+        .unwrap();
+    let hub_b = HubClient::connect(&stack.nats_url, "agent-b")
+        .await
+        .unwrap();
+    let api_b = ApiClient::connect_with_identity(&stack.nats_url, "agent-b")
+        .await
+        .unwrap();
 
     let out = api_a
         .lock_acquire("repo", &["src/main.rs".into()], Default::default())
@@ -305,7 +351,11 @@ async fn live_lock_wait_release_and_events() {
     tokio::time::sleep(Duration::from_millis(400)).await;
     api_a.lock_release(&lock_id, false).await.unwrap();
 
-    match tokio::time::timeout(Duration::from_secs(15), waiter).await.unwrap().unwrap() {
+    match tokio::time::timeout(Duration::from_secs(15), waiter)
+        .await
+        .unwrap()
+        .unwrap()
+    {
         nats_hub_client::locks::WaitOutcome::Free => {}
         other => panic!("waiter did not unblock: {other:?}"),
     }
@@ -326,10 +376,14 @@ async fn live_hub_restart_keeps_locks() {
         return;
     }
     let _g = STACK_LOCK.lock().unwrap();
-    let Some(stack) = TestStack::new().await else { return };
+    let Some(stack) = TestStack::new().await else {
+        return;
+    };
     let mut hub = stack.start_hub();
     stack.wait_hub().await;
-    let api = ApiClient::connect_with_identity(&stack.nats_url, "agent-a").await.unwrap();
+    let api = ApiClient::connect_with_identity(&stack.nats_url, "agent-a")
+        .await
+        .unwrap();
     let out = api
         .lock_acquire("repo", &["x.rs".into()], Default::default())
         .await

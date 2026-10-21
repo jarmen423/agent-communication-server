@@ -139,7 +139,11 @@ fn locks_from(v: Option<&Value>) -> Vec<LockRecord> {
     v.and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .filter_map(|r| lock_from(r).map_err(|e| tracing::warn!(%e, "bad lock row")).ok())
+                .filter_map(|r| {
+                    lock_from(r)
+                        .map_err(|e| tracing::warn!(%e, "bad lock row"))
+                        .ok()
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -170,7 +174,10 @@ impl ApiClient {
             params["holder"] = json!(h);
         }
         let data = self.request("lock.acquire", params).await?;
-        let granted = data.get("granted").and_then(Value::as_bool).unwrap_or(false);
+        let granted = data
+            .get("granted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let lock = data.get("lock").map(lock_from).transpose()?;
         Ok(AcquireOutcome {
             granted,
@@ -192,7 +199,10 @@ impl ApiClient {
             params["ttl_secs"] = json!(t);
         }
         let data = self.request("lock.renew", params).await?;
-        data.get("lock").map(lock_from).transpose()?.context("lock.renew: no lock in response")
+        data.get("lock")
+            .map(lock_from)
+            .transpose()?
+            .context("lock.renew: no lock in response")
     }
 
     /// `lock.release {lock_id}` — release your own lock; admins may also
@@ -225,7 +235,9 @@ impl ApiClient {
 
     /// `lock.get {lock_id}` — `None` when the lock is gone or expired.
     pub async fn lock_get(&self, lock_id: &str) -> Result<Option<LockRecord>> {
-        let data = self.request("lock.get", json!({"lock_id": lock_id})).await?;
+        let data = self
+            .request("lock.get", json!({"lock_id": lock_id}))
+            .await?;
         match data.get("lock") {
             Some(v) if !v.is_null() => Ok(Some(lock_from(v)?)),
             _ => Ok(None),
@@ -235,7 +247,12 @@ impl ApiClient {
 
 /// Locks in `locks` that conflict with `paths` in `scope`, ignoring the
 /// caller's own locks (waiting on yourself is a deadlock by definition).
-fn blocking_locks(my_identity: &str, scope: &str, paths: &[String], locks: &[LockRecord]) -> Vec<LockRecord> {
+fn blocking_locks(
+    my_identity: &str,
+    scope: &str,
+    paths: &[String],
+    locks: &[LockRecord],
+) -> Vec<LockRecord> {
     locks
         .iter()
         .filter(|l| l.holder != my_identity && paths_conflict(scope, paths, l))
@@ -261,8 +278,11 @@ pub async fn wait_for_locks(
     while !pending.is_empty() {
         // Wait for the next lock event or the periodic re-check — whichever
         // first; the poll alone guarantees progress without events.
-        let _ = tokio::time::timeout_at(deadline.min(tokio::time::Instant::now() + poll), events.recv())
-            .await;
+        let _ = tokio::time::timeout_at(
+            deadline.min(tokio::time::Instant::now() + poll),
+            events.recv(),
+        )
+        .await;
         if tokio::time::Instant::now() >= deadline {
             return Ok(WaitOutcome::TimedOut(pending));
         }

@@ -161,8 +161,8 @@ impl LockService {
         self.seed_liveness().await;
 
         // Often enough to catch a dead holder near its TTL.
-        let period = (self.config.liveness_ttl / 3)
-            .clamp(Duration::from_secs(1), Duration::from_secs(10));
+        let period =
+            (self.config.liveness_ttl / 3).clamp(Duration::from_secs(1), Duration::from_secs(10));
         let mut sweep = tokio::time::interval(period);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 

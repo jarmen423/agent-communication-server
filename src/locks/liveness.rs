@@ -88,7 +88,9 @@ impl LockService {
         {
             let holders: HashSet<&str> = locks.iter().map(|l| l.holder.as_str()).collect();
             let mut inner = self.inner.lock().await;
-            inner.last_seen.retain(|id, _| holders.contains(id.as_str()));
+            inner
+                .last_seen
+                .retain(|id, _| holders.contains(id.as_str()));
         }
         let ttl = self.config.liveness_ttl;
         for lock in locks {
@@ -117,7 +119,9 @@ impl LockService {
                     .await;
                 }
                 Ok(false) => {}
-                Err(e) => warn!(error = %e, lock_id = %lock.lock_id, "lock service: expiry delete failed"),
+                Err(e) => {
+                    warn!(error = %e, lock_id = %lock.lock_id, "lock service: expiry delete failed")
+                }
             }
         }
     }

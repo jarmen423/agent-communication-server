@@ -214,7 +214,10 @@ async fn main() -> Result<()> {
                 .context("wait needs an identity: pass --from or set NATS_HUB_IDENTITY")?;
             let hub = HubClient::connect(&args.nats_url, &identity).await?;
             let api = ApiClient::connect_with_identity(&args.nats_url, &identity).await?;
-            eprintln!("waiting on [{}] in scope {scope} (up to {timeout_secs}s)", paths.join(", "));
+            eprintln!(
+                "waiting on [{}] in scope {scope} (up to {timeout_secs}s)",
+                paths.join(", ")
+            );
             match wait_for_locks(
                 &hub,
                 &api,

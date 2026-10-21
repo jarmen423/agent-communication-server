@@ -525,12 +525,8 @@ async fn main() -> Result<()> {
                 liveness_ttl: std::time::Duration::from_secs(lock_liveness),
                 require_bound_identity: args.require_bound_identity,
             };
-            match nats_hub::locks::LockService::start(
-                storage.clone(),
-                &args.nats_url,
-                lock_config,
-            )
-            .await
+            match nats_hub::locks::LockService::start(storage.clone(), &args.nats_url, lock_config)
+                .await
             {
                 Ok(_) => info_log(&format!(
                     "file-lock service running (holder liveness TTL {lock_liveness}s)"
