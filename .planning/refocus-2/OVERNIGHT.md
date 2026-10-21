@@ -1,5 +1,67 @@
 # Overnight run 2026-10-21: orchestrator handoff
 
+## ☀️ Morning summary (written 05:15 UTC)
+
+**Everything planned for tonight is merged, verified and pushed** (`main` at
+`51b7a93` plus this summary). Nothing in the plan is left undone.
+
+| Task | Agent | Result |
+|---|---|---|
+| H-1a crate split | Codex (account 2; account 1 hit its usage limit) | `crates/client` (Apache: client, CLIs, TUI, no DB) + `nats-hub` (BUSL server); license caveat gone |
+| H-1b remote MCP endpoint | Claude account 2 | `mcp_remote/` (streamable HTTP, OAuth, stateless over JetStream) + DEV `stub_control_plane/` |
+| W2-C visualizer | Muse | ES modules, offline (vendored p5), **Petdex sprites replaced** by an original theme, Playwright smoke, TUI on bound hubs |
+| W2-D file locks | Devin | advisory locks: `lock.*` API, `hub-lock`, MCP tools, persisted, presence expiry |
+| H-1c `acs` connector | Codex (account 2) | `acs login/up/agent/mcp install/worker run`, stub device flow, refresh daemon |
+
+**Two independent security reviews** (all merged code, then the `acs` surface).
+Fixed and regression-tested:
+- **High: stored XSS in the visualizer feed.** It predated tonight. Fixed,
+  plus a strict CSP; the smoke test now broadcasts a payload.
+- **Medium: lock waiters got no events.** Wrong subject, and a hidden 1 s poll.
+- **Medium: the MCP service key could mint devices.** Separate admin key now.
+- **Medium: `acs mcp install` / `worker run` ran code from the current
+  directory.** Now explicit only.
+- **Low:** stub grant-family recheck and CIMD SSRF guard; remote `read_inbox`
+  hint; pool drain grace; waiter path normalization; inbox-prefix order.
+
+Other orchestrator catches during merges:
+- `backup.export` wrote to any host path (W2-B, earlier).
+- `hub-locks` wasn't reserved in the stub, so an agent could have forged lock
+  events. A drift test now guards it.
+
+**Live end-to-end, real output: ALL PASS** (`scripts/dogfood_hosted.sh
+--real-worker claude`; transcript in `.planning/hosted/live-e2e-2026-10-21.md`):
+- **Tenant journey:** acs login → agent add → mcp install → delegate to echo
+  **and a real Claude Code worker ("pong")** → two-task wave → file lock
+  contended by two agents → backup/restore.
+- **Remote MCP:** OAuth plus two stateless replicas.
+- **Visualizer:** smoke test including XSS/CSP.
+
+**Final gates on main:**
+- lint; `make test` / `test-bound` / `test-durable` (303 Rust; 423/424/423 Py)
+- no-storage + client-dependency guard; `reuse lint`
+- operator isolation and credential expiry; `acs` e2e; remote MCP e2e
+- both dogfoods
+
+**For you to do / decide:**
+1. **Try it as a real claude.ai or ChatGPT connector.** Install `cloudflared`,
+   then run `make demo-remote-mcp`; it prints the URL to paste into "Add
+   custom connector". Not possible here (no public URL or browser).
+2. **Your own e2e:** `scripts/dogfood_hosted.sh [--real-worker claude]`, or
+   by hand per README §D and `docs/ACS_CONNECTOR.md`.
+3. **Next phases need decisions** (`docs/HOSTED_PLAN.md` §11): a private repo
+   for the control plane (H-2); cloud and region for H-3; control-plane
+   language; pricing unit.
+4. **Known limits are documented, not fixed:**
+   - same-user trust domain for `acs` creds;
+   - NATS JWTs outlive revocation by up to 1 h;
+   - no per-holder lock quota;
+   - remote `read_inbox` is at-most-once.
+
+   See `docs/ACS_CONNECTOR.md`, `docs/FILE_LOCKS.md` and `docs/REMOTE_MCP.md`.
+
+---
+
 Josh is offline overnight. He authorized running the rest of the wave plan
 without checking in, and will check in in the morning for live e2e testing.
 This file holds the plan and its state, so any orchestrator session (or this
@@ -91,3 +153,4 @@ after every state change.**
   - Merged main: lint, `make test` (301 Rust / 403 Py), `make test-remote-mcp` 3/3, smoke PASS.
 - **H-1c merged** (`e4f2469`). Review: credential minting is tied to device-owned identities and their registered public keys; local files are written atomically, 0600 in a 0700 dir. The deferred review items are done (grant-family recheck, persisted via grants; CIMD SSRF guard; tests added). Merged main, all modes: 303 Rust; 423/424/423 Py; operator + remote MCP + acs e2e 8/8; both dogfoods; reuse; smoke.
 - **Wave C live e2e: ALL PASS**, including a real Claude worker answering "pong" through acs → MCP (`scripts/dogfood_hosted.py`, transcript in `.planning/hosted/live-e2e-2026-10-21.md`). Docs pass done (README §D, AGENTS counts, HOSTED_PLAN status). A last independent review of the H-1c surface is running.
+- 05:15 UTC: `acs` review fixes (`51b7a93`). Final gates and `scripts/dogfood_hosted.sh --real-worker claude`: ALL PASS. Morning summary written. Heartbeat deleted.
