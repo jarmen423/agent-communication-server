@@ -45,8 +45,8 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use nats_hub::client::{is_task_result, task_channel_for, ChannelCatchUp};
-use nats_hub::{Envelope, HubClient, MessageKind};
+use nats_hub_client::client::{is_task_result, task_channel_for, ChannelCatchUp};
+use nats_hub_client::{Envelope, HubClient, MessageKind};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;

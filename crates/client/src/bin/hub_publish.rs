@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use nats_hub::{Envelope, MessageKind};
+use nats_hub_client::{Envelope, MessageKind};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
 
     let kind = parse_kind(&args.kind)?;
 
-    let client = nats_hub::HubClient::connect(&args.nats_url, &args.from).await?;
+    let client = nats_hub_client::HubClient::connect(&args.nats_url, &args.from).await?;
     let mut env = Envelope::new(args.from.clone(), args.channel.clone(), kind, payload);
     if let Some(recipient) = &args.to {
         env = env.to(recipient.clone());

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::HubClient;
+use nats_hub_client::HubClient;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]

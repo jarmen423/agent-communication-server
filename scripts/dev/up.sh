@@ -20,7 +20,7 @@ PY="${PYTHON:-$REPO_ROOT/.venv/bin/python}"
 
 if [[ -z "${NO_BUILD:-}" ]]; then
   echo "==> cargo build (hub-server + CLIs)"
-  cargo build --quiet --bins
+  cargo build --quiet --workspace --bins
 fi
 
 pids=()

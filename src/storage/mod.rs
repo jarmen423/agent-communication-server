@@ -13,8 +13,7 @@ use async_trait::async_trait;
 
 use crate::protocol::Envelope;
 
-mod types;
-pub use types::*;
+pub use nats_hub_client::storage::*;
 
 // ── Limits ───────────────────────────────────────────────────
 

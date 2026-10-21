@@ -12,8 +12,8 @@
 //! Session actions are gated by [`Sessions::admit`]: only the session's owner
 //! (the sender of its `session_start`) may send to or close it (C5).
 
-use nats_hub::client::{looks_like_task_result, task_channel};
-use nats_hub::{Envelope, MessageKind};
+use nats_hub_client::client::{looks_like_task_result, task_channel};
+use nats_hub_client::{Envelope, MessageKind};
 use std::collections::{HashMap, VecDeque};
 use tracing::warn;
 

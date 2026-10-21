@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::HubClient;
+use nats_hub_client::HubClient;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -57,11 +57,11 @@ async fn main() -> Result<()> {
         } else {
             let ts = env.meta.timestamp.format("%H:%M:%S");
             let kind = match env.meta.kind {
-                nats_hub::MessageKind::Message => "MSG",
-                nats_hub::MessageKind::Control => "CTL",
-                nats_hub::MessageKind::Human => "HUM",
-                nats_hub::MessageKind::Status => "STS",
-                nats_hub::MessageKind::Event => "EVT",
+                nats_hub_client::MessageKind::Message => "MSG",
+                nats_hub_client::MessageKind::Control => "CTL",
+                nats_hub_client::MessageKind::Human => "HUM",
+                nats_hub_client::MessageKind::Status => "STS",
+                nats_hub_client::MessageKind::Event => "EVT",
             };
             let dest = env.meta.to.as_deref().unwrap_or("*");
             let payload_str = if let Some(text) = env.payload.get("text").and_then(|v| v.as_str()) {

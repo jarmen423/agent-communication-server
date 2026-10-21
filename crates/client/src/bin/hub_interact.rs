@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use nats_hub::{Envelope, HubClient, MessageKind};
+use nats_hub_client::{Envelope, HubClient, MessageKind};
 use std::io::{self, BufRead, Write};
 use tracing_subscriber::EnvFilter;
 

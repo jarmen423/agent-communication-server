@@ -13,8 +13,8 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nats_hub::wave::{validate_tasks, WaveTaskInput};
-use nats_hub::{ApiClient, HubClient, MessageKind, WaveRecord, WaveTaskRecord};
+use nats_hub_client::wave::{validate_tasks, WaveTaskInput};
+use nats_hub_client::{ApiClient, HubClient, MessageKind, WaveRecord, WaveTaskRecord};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -115,11 +115,11 @@ async fn create_wave(
 
     // Publish the manifest on the wave channel (informational).
     let client = HubClient::connect(nats_url, from).await?;
-    let wave_channel = nats_hub::subjects::wave_channel_name(&wave_id);
+    let wave_channel = nats_hub_client::subjects::wave_channel_name(&wave_id);
     let manifest = serde_json::json!({
         "action": "wave_manifest", "wave_id": &wave_id, "goal": goal, "tasks": inputs,
     });
-    let env = nats_hub::Envelope::new(from, &wave_channel, MessageKind::Control, manifest);
+    let env = nats_hub_client::Envelope::new(from, &wave_channel, MessageKind::Control, manifest);
     client.send(&env).await?;
     println!("{wave_id}");
     client.drain().await?;

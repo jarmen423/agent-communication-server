@@ -82,10 +82,12 @@ impl StreamLimits {
     }
 }
 
-/// Default stream names.
+pub use nats_hub_client::delivery::config::{
+    client_inbox_stream, client_tasks_stream, DEFAULT_INBOX_STREAM, DEFAULT_TASKS_STREAM,
+};
+
+/// Default ingress stream name.
 pub const DEFAULT_INGRESS_STREAM: &str = "HUB_INGRESS";
-pub const DEFAULT_INBOX_STREAM: &str = "HUB_INBOX";
-pub const DEFAULT_TASKS_STREAM: &str = "HUB_TASKS";
 /// The shared durable consumer every hub-server pulls ingress from.
 pub const DEFAULT_ROUTER_CONSUMER: &str = "router";
 
@@ -190,25 +192,6 @@ pub const TASKS_SUBJECTS: &[&str] = &["channel.task.>", "channel.wave.>", "chann
 /// token (it is embedded in `$JS.API.*` subjects and in ACLs).
 pub fn valid_name(name: &str) -> bool {
     crate::protocol::valid_identity(name)
-}
-
-/// Client-side names (agents don't read the hub's config file): env
-/// `NATS_HUB_INBOX_STREAM` / `NATS_HUB_TASKS_STREAM`, else the defaults.
-/// The attach reply from hub-server overrides the inbox stream.
-pub fn client_inbox_stream() -> String {
-    env_name("NATS_HUB_INBOX_STREAM", DEFAULT_INBOX_STREAM)
-}
-
-/// See [`client_inbox_stream`].
-pub fn client_tasks_stream() -> String {
-    env_name("NATS_HUB_TASKS_STREAM", DEFAULT_TASKS_STREAM)
-}
-
-fn env_name(var: &str, default: &str) -> String {
-    std::env::var(var)
-        .ok()
-        .filter(|v| valid_name(v))
-        .unwrap_or_else(|| default.to_string())
 }
 
 #[cfg(test)]

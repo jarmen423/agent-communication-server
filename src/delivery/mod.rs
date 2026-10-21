@@ -29,8 +29,7 @@ pub use config::{
     client_inbox_stream, client_tasks_stream, DeliveryConfig, StorageKind, StreamLimits,
 };
 
-/// Header JetStream dedupes on (within the stream's duplicate window).
-pub const MSG_ID_HEADER: &str = "Nats-Msg-Id";
+pub use nats_hub_client::delivery::{header, inbox_consumer_name, MSG_ID_HEADER};
 
 /// Prefix of the `Nats-Msg-Id` the router stamps on what it stores. A
 /// message on ingress that carries it is a replay of something the hub
@@ -46,23 +45,6 @@ const JETSTREAM_EMITTED_HEADERS: &[&str] = &[
     "Nats-Time-Stamp",
     "Nats-Last-Sequence",
 ];
-
-/// First value of header `name`, matched case-insensitively. (async-nats
-/// keys well-known headers as "standard" names when parsed off the wire
-/// but as custom ones when built from a `&str`, so `HeaderMap::get(&str)`
-/// misses wire-parsed `Nats-*` headers.)
-pub fn header<'a>(headers: &'a async_nats::HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(k, _)| AsRef::<str>::as_ref(*k).eq_ignore_ascii_case(name))
-        .and_then(|(_, v)| v.first())
-        .map(|v| v.as_str())
-}
-
-/// Durable consumer name of one identity's inbox.
-pub fn inbox_consumer_name(identity: &str) -> String {
-    format!("inbox-{identity}")
-}
 
 /// The `Nats-Msg-Id` the router stores a routed envelope under. Namespaced
 /// by the (subject-bound) sender, so one identity can't suppress another's

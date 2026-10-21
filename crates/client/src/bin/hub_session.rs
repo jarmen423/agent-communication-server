@@ -12,8 +12,8 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use nats_hub::storage::{SessionFilter, SessionRecord};
-use nats_hub::{ApiClient, HubClient, MessageKind};
+use nats_hub_client::storage::{SessionFilter, SessionRecord};
+use nats_hub_client::{ApiClient, HubClient, MessageKind};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -179,7 +179,7 @@ async fn create_session(
         );
     }
 
-    let env = nats_hub::Envelope::new(
+    let env = nats_hub_client::Envelope::new(
         from.to_string(),
         &session_channel,
         MessageKind::Message,

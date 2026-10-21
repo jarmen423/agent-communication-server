@@ -6,6 +6,8 @@
 //! - `hub-delegate` cancels the task when it times out, and ignores a result
 //!   from anyone but the worker it delegated to (C5).
 
+mod support;
+
 use nats_hub::client::is_task_result;
 use nats_hub::{Envelope, HubClient, MessageKind};
 use serde_json::json;
@@ -75,7 +77,7 @@ async fn spawn_hanging_worker(url: &str, identity: &str, pidfile: &Path, extra: 
     );
     let probe = HubClient::connect(url, uniq("probe")).await.unwrap();
     let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_hub-worker"))
+    let child = Command::new(support::client_bin("hub-worker"))
         .args([
             "--identity",
             identity,
@@ -276,7 +278,7 @@ async fn e2e_delegate_timeout_cancels_the_task() {
     let pidfile = scratch("grandchild.pid");
     let _w = spawn_hanging_worker(&url, &worker, &pidfile, &[]).await;
 
-    let child = Command::new(env!("CARGO_BIN_EXE_hub-delegate"))
+    let child = Command::new(support::client_bin("hub-delegate"))
         .args([
             "--to",
             &worker,
@@ -315,7 +317,7 @@ async fn e2e_delegate_ignores_result_from_non_worker() {
     let mut inbox = worker.subscribe_inbox().await.unwrap();
     let mallory = HubClient::connect(&url, uniq("mallory")).await.unwrap();
 
-    let child = Command::new(env!("CARGO_BIN_EXE_hub-delegate"))
+    let child = Command::new(support::client_bin("hub-delegate"))
         .args([
             "--to",
             &worker_id,
@@ -366,7 +368,7 @@ async fn e2e_rust_worker_ignores_session_send_from_non_owner() {
     let worker = uniq("sess-worker");
     let probe = HubClient::connect(&url, uniq("probe")).await.unwrap();
     let mut reg = probe.subscribe_subject("hub.register.*").await.unwrap();
-    let _w = Command::new(env!("CARGO_BIN_EXE_hub-worker"))
+    let _w = Command::new(support::client_bin("hub-worker"))
         .args([
             "--identity",
             &worker,

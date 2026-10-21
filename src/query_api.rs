@@ -14,7 +14,6 @@
 
 use anyhow::Result;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -31,64 +30,13 @@ mod write_authz;
 pub use authz::{ApiAuthz, Caller, Scope};
 use handlers::*;
 
-/// NATS subject prefix for query API.
-pub const API_PREFIX: &str = "hub.api";
+pub use nats_hub_client::query_api::*;
 
 /// Rows returned by list operations when the request has no `limit`.
 pub const DEFAULT_LIMIT: usize = 100;
 
 /// Largest `limit` a list operation accepts; above this the request fails.
 pub const MAX_LIMIT: usize = 1000;
-
-/// Build a legacy query API subject: `hub.api.<operation>`.
-pub fn subject(operation: &str) -> String {
-    format!("{API_PREFIX}.{operation}")
-}
-
-/// Build a bound query API subject: `hub.api.<identity>.<operation>`.
-pub fn subject_bound(identity: &str, operation: &str) -> String {
-    format!("{API_PREFIX}.{identity}.{operation}")
-}
-
-/// Generic request envelope from CLI tools.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ApiRequest {
-    /// Operation name (matches the subject suffix).
-    pub op: String,
-    /// Operation-specific parameters.
-    #[serde(default)]
-    pub params: Value,
-}
-
-/// Generic response from hub-server.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApiResponse {
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl ApiResponse {
-    pub fn ok(data: Value) -> Self {
-        Self {
-            ok: true,
-            data: Some(data),
-            error: None,
-        }
-    }
-    pub fn err(msg: impl Into<String>) -> Self {
-        Self {
-            ok: false,
-            data: None,
-            error: Some(msg.into()),
-        }
-    }
-    pub fn to_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).unwrap_or_else(|_| b"{\"ok\":false}".to_vec())
-    }
-}
 
 /// Resolve `params.limit`: absent/null → [`DEFAULT_LIMIT`]; must be an
 /// integer in `1..=MAX_LIMIT`, otherwise the request fails with a clear error.

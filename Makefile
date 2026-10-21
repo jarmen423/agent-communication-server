@@ -22,15 +22,15 @@ setup-extras: ## setup + optional SDKs (ACP, Cursor, Telegram, Discord)
 	@$(DEV)/setup.sh --extras
 
 build: ## cargo build (all bins, incl. hub-tui)
-	@$(ENV) cargo build --bins --features tui
+	@$(ENV) cargo build --workspace --bins --features tui
 
 build-release: ## cargo build --release
-	@$(ENV) cargo build --release --bins --features tui
+	@$(ENV) cargo build --workspace --release --bins --features tui
 
 test: test-rust test-py ## Run all tests (Rust against a throwaway NATS + hub-server, then Python)
 
 test-rust: ## Rust tests against an isolated nats-server + hub-server (random port)
-	@$(DEV)/with_stack.sh cargo test --features tui
+	@$(DEV)/with_stack.sh cargo test --workspace --features tui
 
 test-bound: ## Full suite with --require-bound-identity (identity-bound subjects only)
 	@NATS_HUB_REQUIRE_BOUND=1 $(MAKE) --no-print-directory test
@@ -42,7 +42,7 @@ test-py: ## Python tests (pytest) against an isolated nats-server + hub-server
 	@$(DEV)/with_stack.sh $(PY) -m pytest -q tests/python
 
 lint: ## fmt check + clippy
-	@$(ENV) cargo fmt --all -- --check && cargo clippy --all-targets --features tui
+	@$(ENV) cargo fmt --all -- --check && cargo clippy --workspace --all-targets --features tui
 
 fmt: ## cargo fmt
 	@cargo fmt --all
