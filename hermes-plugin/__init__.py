@@ -116,6 +116,7 @@ ACTIONS = [
     "create_wave", "spawn_wave", "list_waves", "get_wave",
     "list_wave_tasks", "get_wave_task", "wave_status", "cancel_wave",
     "get_analytics",
+    "lock_files", "release_files", "renew_lock", "list_locks", "wait_for_files",
 ]
 
 
