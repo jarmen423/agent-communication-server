@@ -82,7 +82,8 @@ class Stack:
         self.env = {**{k: v for k, v in os.environ.items() if not k.startswith("NATS_")},
                     "NATS_URL": self.nats_url, "ACS_HOME": str(self.acs_home),
                     "ACS_NO_KEYRING": "1", "ACS_SERVER": self.server,
-                    "ACS_WORKER_DIR": str(REPO), "PYTHONUNBUFFERED": "1"}
+                    "ACS_WORKER_DIR": str(REPO), "PYTHONUNBUFFERED": "1",
+                    "ACS_MCP_SERVER": str(REPO / "mcp_server" / "nats_hub_mcp.py")}
         self.hub: subprocess.Popen | None = None
 
     def spawn(self, name: str, args: list[str], extra: dict | None = None) -> subprocess.Popen:

@@ -86,15 +86,19 @@ state. The config uses absolute credential/runtime paths, so tests can launch
 exactly what it generates. TOML comments are retained; YAML/JSON formatting
 may be normalized. Invalid config types fail without overwriting the file.
 
-In a checkout, the installer discovers `mcp_server/nats_hub_mcp.py` and the
-repo's venv. Set `ACS_MCP_SERVER`/`--server` and `ACS_PYTHON`/`--python` to use
-an existing runtime. A standalone binary embeds the canonical Python modules,
+The installer never adopts code from the current directory: the interpreter
+and script it finds are written into the agent's config and run on every
+session with the identity's credentials. It looks next to the `acs` binary
+and in `~/.local/share/nats-hub/remote` (the worker bundle). To use a checkout,
+say so explicitly with `ACS_MCP_SERVER`/`--server` (and optionally
+`ACS_PYTHON`/`--python`). A standalone binary embeds the canonical Python modules,
 writes them under `ACS_HOME/mcp/server`, and creates a private venv with pinned
 nats-py and the MCP dependencies. This first install needs Python 3.10+ with
 venv/pip and network access. It does not embed a Python interpreter.
 
 `acs worker run <backend> --identity <id> -- <extra args>` wraps an existing
-Python worker; set `ACS_WORKER_DIR` to the worker bundle/checkout directory and
+Python worker from `ACS_WORKER_DIR`, or by default from the worker bundle in
+`~/.local/share/nats-hub/remote` (never the current directory), and
 optionally `ACS_PYTHON`. `hub-worker` uses the sibling binary or PATH and
 accepts its usual extra flags, for example `-- --execute cat`. The wrapper
 sets the same NATS environment as MCP and transfers signals/exit status to
@@ -114,7 +118,7 @@ The existing OAuth/MCP routes remain unchanged. Device endpoints are:
 - `DELETE /v1/device/identities/<id>`: revoke an owned identity.
 - `POST /v1/credentials/nats`: device bearer token plus `{identity, public_key}`;
   no endpoint service key. Tenant, device, revocation and registered key are checked.
-- `POST /device/service-key`: DEV admin bootstrap with `X-ACS-Service-Key`;
+- `POST /device/service-key`: DEV admin bootstrap with `X-ACS-Admin-Key` (from `--admin-key-file`, default `<service-key-file>.admin`; deliberately not the MCP endpoint's service key);
   returns a new device and its one-time displayed secret. `DELETE` with
   `{device}` and the same admin header revokes that bot device and key.
 
@@ -135,3 +139,27 @@ proves the same Rust HubClient and Python MCP/worker survive expiry, rejects
 an unrefreshed copy, and confirms identity removal prevents renewal. The
 unit/CLI tests also cover service keys, device/tenant boundaries, refresh
 rotation/replay and preservation of all three clients' unrelated settings.
+
+## Known limits (security review, 2026-10-21)
+
+- **One OS user = one trust domain.** Every identity's seed (`creds/*.creds`)
+  and, without a keychain, the device refresh token live under `ACS_HOME`,
+  readable by any process of that user. An LLM worker with shell access can
+  read the orchestrator's credentials. Run untrusted workers as a separate
+  OS user or in a container that only gets its own `.creds`.
+- **Revocation is not instant for issued credentials.** `acs agent rm` and
+  `acs logout` stop renewal; NATS JWTs already issued stay valid until they
+  expire (stub default 1 h). The production control plane should push
+  account revocations.
+- **Refresh rotation is strict.** A refresh token replayed after a lost
+  response revokes the device (no grace window yet).
+- **`acs login --key KEY`** puts the key on the command line (visible in
+  `/proc`); prefer `ACS_SERVICE_KEY`.
+- **Config files.** Merging rewrites `~/.claude.json` / `~/.codex/config.toml`
+  / `~/.hermes/config.yaml` through a temp file and rename: a symlinked
+  config becomes a regular file, YAML comments are dropped, and a concurrent
+  write by the agent itself can be lost.
+- **The stub's device flow is DEV ONLY**: `/device/verify` approves on GET,
+  user codes are short and unthrottled, and identity names are never
+  reusable. Production needs an authenticated, CSRF-protected approval page,
+  rate limits and quotas.

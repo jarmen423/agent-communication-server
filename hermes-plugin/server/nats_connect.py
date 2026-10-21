@@ -134,12 +134,14 @@ def inbox_prefix_for(
     """Request-reply inbox prefix for a connection (contract C1).
 
     ``_INBOX.<id>`` where ``<id>`` is the first valid identity among: the
-    NATS ``user``, the explicit ``identity``, the credential JWT's ``name``
-    permission key, the connection ``name``
-    (workers pass their identity as the name), and ``NATS_HUB_IDENTITY``.
+    NATS ``user``, the credential JWT's ``name`` (the permission key: NATS
+    only lets this connection subscribe to ``_INBOX.<name>.>``), the
+    explicit ``identity``, the connection ``name`` (workers pass their
+    identity as the name), and ``NATS_HUB_IDENTITY``. Same order as the
+    Rust ``HubConnectOptions::inbox_prefix``.
     ``None`` when none applies — nats-py then uses its default ``_INBOX``.
     """
-    for candidate in (user, identity, credentials_identity(credentials_file), name, _env("NATS_HUB_IDENTITY")):
+    for candidate in (user, credentials_identity(credentials_file), identity, name, _env("NATS_HUB_IDENTITY")):
         ok = _valid(candidate)
         if ok:
             return f"_INBOX.{ok}"

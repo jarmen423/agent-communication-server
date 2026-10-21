@@ -44,6 +44,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--state-file", help="persist clients/identities/refresh tokens (0600)")
     p.add_argument("--service-key-file", required=True,
                    help="shared secret for the MCP endpoint; created (0600) if missing")
+    p.add_argument("--admin-key-file",
+                   help="DEV admin key for /device/service-key (default: <service-key-file>.admin; "
+                        "created 0600 if missing). Separate from the MCP endpoint's service key, "
+                        "so a compromised endpoint can't mint devices")
     p.add_argument("--allow-redirect-uri", action="append", default=[],
                    help="extra exact redirect URI to allow (repeatable)")
     p.add_argument("--allow-loopback-redirects", action="store_true",
@@ -95,6 +99,7 @@ def build(args: argparse.Namespace) -> tuple[StubConfig, Store, TokenIssuer]:
         issuer = TokenIssuer(cfg.issuer)
         store.signing_key_pem = issuer.private_pem()
     store.service_key = _service_key(Path(args.service_key_file))
+    store.admin_key = _service_key(Path(args.admin_key_file or f"{args.service_key_file}.admin"))
     store.save()
     return cfg, store, issuer
 

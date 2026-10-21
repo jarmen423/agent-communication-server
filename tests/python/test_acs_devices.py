@@ -7,7 +7,7 @@ import pytest
 from stub_control_plane.devices import DEVICE_GRANT
 from stub_control_plane.nats_issuer import decode_jwt, new_user_seed
 from stub_control_plane.store import Store
-from test_stub_cp import ISSUER, RESOURCE, SERVICE_KEY, make
+from test_stub_cp import ADMIN_KEY, ISSUER, RESOURCE, SERVICE_KEY, make
 import nkeys
 
 
@@ -115,7 +115,12 @@ def test_service_keys_and_device_revocation():
         http, *_ = make()
         async with http:
             assert (await http.post('/device/service-key')).status_code == 401
-            admin = {'x-acs-service-key': SERVICE_KEY}
+            # The MCP endpoint's service key is not an admin credential.
+            assert (await http.post('/device/service-key',
+                                    headers={'x-acs-service-key': SERVICE_KEY})).status_code == 401
+            assert (await http.post('/device/service-key',
+                                    headers={'x-acs-admin-key': SERVICE_KEY})).status_code == 401
+            admin = {'x-acs-admin-key': ADMIN_KEY}
             key = (await http.post('/device/service-key', headers=admin)).json()
             form = {'grant_type': 'service_key', 'key': key['key']}
             t = (await http.post('/device/token', data=form)).json()
@@ -141,7 +146,9 @@ def test_jwt_inbox_hint_and_explicit_override(tmp_path, monkeypatch):
     path.write_text(f'-----BEGIN NATS USER JWT-----\nx.{payload}.y\n')
     assert credentials_identity(str(path)) == 'hub-server'
     assert inbox_prefix_for(credentials_file=str(path), name='logical-client') == '_INBOX.hub-server'
-    assert inbox_prefix_for(credentials_file=str(path), identity='explicit') == '_INBOX.explicit'
+    # The credential name is the permission key and wins (same as Rust).
+    assert inbox_prefix_for(credentials_file=str(path), identity='explicit') == '_INBOX.hub-server'
+    assert inbox_prefix_for(identity='explicit') == '_INBOX.explicit'
     path.write_text('BEGIN NATS USER JWT\nx.bad!.y\n')
     assert credentials_identity(str(path)) is None
 

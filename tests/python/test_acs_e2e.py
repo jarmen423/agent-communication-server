@@ -33,7 +33,8 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
         op = Path(os.environ['OPERATOR_DIR'])
         env = {**{k: v for k, v in os.environ.items() if not k.startswith('NATS_')},
                'NATS_URL': os.environ['NATS_URL'], 'ACS_HOME': str(root),
-               'ACS_NO_KEYRING': '1', 'ACS_SERVER': server, 'PYTHONUNBUFFERED': '1'}
+               'ACS_NO_KEYRING': '1', 'ACS_SERVER': server, 'PYTHONUNBUFFERED': '1',
+               'ACS_MCP_SERVER': str(REPO / 'mcp_server/nats_hub_mcp.py'), 'ACS_WORKER_DIR': str(REPO)}
         procs, logs = [], []
 
         def spawn(name, args, extra=None, pipe=False):

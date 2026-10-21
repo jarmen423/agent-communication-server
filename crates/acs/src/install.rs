@@ -29,10 +29,12 @@ async fn runtime(
 ) -> Result<(PathBuf, PathBuf)> {
     // Checkout/bundle discovery is runtime-only: never bake a build-machine path
     // into the distributed binary. Released binaries accept ACS_MCP_SERVER.
+    // The current directory is deliberately NOT searched: the discovered
+    // interpreter + script are written into the agent's MCP config and run on
+    // every session with the identity's credentials, so running `acs mcp
+    // install` inside an untrusted checkout must not adopt its code.
     let exe = std::env::current_exe()?;
-    let cwd = std::env::current_dir()?;
     let roots = [
-        Some(cwd),
         exe.parent().map(Path::to_path_buf),
         local::home()
             .ok()
@@ -197,12 +199,19 @@ pub async fn worker(root: &Path, backend: &str, identity: &str, args: &[String])
         {
             bail!("unknown worker backend");
         }
-        let repo = std::env::var_os("ACS_WORKER_DIR")
-            .map(PathBuf::from)
-            .unwrap_or(std::env::current_dir()?);
+        // Like `mcp install`, never run code from the current directory by
+        // default: the worker gets this identity's credentials.
+        let repo = match std::env::var_os("ACS_WORKER_DIR") {
+            Some(dir) => PathBuf::from(dir),
+            None => local::home()?.join(".local/share/nats-hub/remote"),
+        };
         let script = repo.join(format!("{backend}_worker.py"));
         if !script.is_file() {
-            bail!("worker runtime not found; set ACS_WORKER_DIR to its directory");
+            bail!(
+                "worker runtime not found in {}; install the worker bundle \
+                 (packaging/remote/install.sh) or set ACS_WORKER_DIR to a trusted checkout",
+                repo.display()
+            );
         }
         let py = std::env::var_os("ACS_PYTHON")
             .map(PathBuf::from)

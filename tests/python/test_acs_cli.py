@@ -35,8 +35,11 @@ def device_stack(tmp_path):
     keyfile.chmod(0o600)
     port = free_port()
     url = f'http://127.0.0.1:{port}'
+    # acs never adopts code from the current directory; point it at this
+    # checkout explicitly (as a developer would).
     env = {**os.environ, 'ACS_HOME': str(tmp_path / 'acs'), 'ACS_NO_KEYRING': '1',
-           'ACS_SERVER': url}
+           'ACS_SERVER': url, 'ACS_MCP_SERVER': str(REPO / 'mcp_server/nats_hub_mcp.py'),
+           'ACS_WORKER_DIR': str(REPO)}
     logfile = (tmp_path / 'cp.log').open('w')
     proc = subprocess.Popen([sys.executable, '-m', 'stub_control_plane', '--port', str(port),
                              '--resource', url + '/mcp', '--tenant-key-file', str(keyfile),
@@ -136,7 +139,7 @@ def test_headless_login_agents_install_preserves_config_and_logout(device_stack)
 def test_service_key_login_rotation_and_reserved_identity(device_stack):
     env, tmp, url = device_stack
     key = httpx.post(url + '/device/service-key', headers={
-        'x-acs-service-key': (tmp / 'admin.key').read_text().strip()}).json()['key']
+        'x-acs-admin-key': (tmp / 'admin.key.admin').read_text().strip()}).json()['key']
     env = {**env, 'ACS_SERVICE_KEY': key}
     assert key not in acs(env, 'login').stdout
     acs(env, 'agent', 'add', 'hub-server', ok=False)
@@ -195,7 +198,8 @@ def test_standalone_installs_embedded_mcp_runtime(device_stack):
     # Run away from the repo; use an explicitly installed Python interpreter.
     # The binary must supply all canonical modules without a source checkout.
     p = subprocess.run([str(ACS), 'mcp', 'install', 'claude', '--home', str(home),
-                        '--python', sys.executable], cwd=home, env={**env, 'HOME': str(home)},
+                        '--python', sys.executable], cwd=home,
+                       env={**{k: v for k, v in env.items() if k != 'ACS_MCP_SERVER'}, 'HOME': str(home)},
                        text=True, capture_output=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
     config = json.loads((home / '.claude.json').read_text())['mcpServers']['nats-hub']

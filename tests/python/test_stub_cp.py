@@ -27,6 +27,7 @@ ISSUER = "http://127.0.0.1:9300"
 RESOURCE = "http://127.0.0.1:9400/mcp"
 CLAUDE = "https://claude.ai/api/mcp/auth_callback"
 SERVICE_KEY = "k" * 43
+ADMIN_KEY = "a" * 43
 
 
 def _seed(prefix):
@@ -44,6 +45,7 @@ def make(**cfg):
                         tenants={"T_A": keys}, **cfg)
     store = Store()
     store.service_key = SERVICE_KEY
+    store.admin_key = ADMIN_KEY
     issuer = TokenIssuer(ISSUER)
     app = create_app(config, store, issuer)
     http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=ISSUER)

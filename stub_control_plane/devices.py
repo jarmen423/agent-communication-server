@@ -155,11 +155,12 @@ class Devices:
         return error(400, "invalid_grant", "device credential revoked, expired or unknown")
 
     async def service_key(self, request):
-        # DEV ONLY admin bootstrap: the endpoint's existing service key is
-        # privileged. Ordinary devices cannot create credentials for others.
-        supplied = request.headers.get("x-acs-service-key", "")
-        if not self.store.service_key or not hmac.compare_digest(
-                supplied.encode(), self.store.service_key.encode()):
+        # DEV ONLY admin bootstrap, gated by its own admin key: the MCP
+        # endpoint's service key must not be enough to mint devices (that
+        # endpoint is internet-facing). Devices can't create keys for others.
+        supplied = request.headers.get("x-acs-admin-key", "")
+        if not self.store.admin_key or not hmac.compare_digest(
+                supplied.encode(), self.store.admin_key.encode()):
             return error(401, "invalid_client", "admin service key required")
         if request.method == "POST":
             device = self.create()

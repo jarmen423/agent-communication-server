@@ -72,6 +72,7 @@ class Store:
         self.counters: dict[str, int] = {}  # "<tenant>/<prefix>" → last n
         self.signing_key_pem: str | None = None
         self.service_key: str | None = None
+        self.admin_key: str | None = None  # /device/service-key only; never persisted
         if self.path and self.path.exists():
             self._load()
 
