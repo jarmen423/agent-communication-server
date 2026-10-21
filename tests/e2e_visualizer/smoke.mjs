@@ -56,6 +56,21 @@ await page.waitForFunction(
 );
 console.log('ok: delegated message visible in feed');
 
+// UI path: open the AGENTS dock, open chat for echo-1, send a task through
+// the bridge (ensure_worker + send_message), and see the echo reply.
+await page.click('#agent-dock-toggle');
+await page.click('#agent-roster-list [data-identity="echo-1"]');
+await page.waitForSelector('#session-detail.open', { timeout: 10000 });
+await page.fill('#chat-input', 'ui smoke hello');
+const rowsBefore = await page.locator('#chat-messages .chat-row').count();
+await page.click('#chat-send');
+// New worker progress/terminal rows stream into the conversation.
+await page.waitForFunction(
+  (n) => document.querySelectorAll('#chat-messages .chat-row').length > n,
+  rowsBefore, { timeout: 30000 },
+);
+console.log('ok: chat task via UI shows in conversation');
+
 if (external.length) throw new Error(`external network fetches: ${external.join(', ')}`);
 console.log('ok: no external network fetches');
 
