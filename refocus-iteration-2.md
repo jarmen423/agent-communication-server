@@ -105,6 +105,9 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done (verified + merged) · �
 | W2-C | Visualizer/observability to 100% | wave 2 | — | ⬜ | |
 | W2-D | File-lock broadcast (new feature) | wave 2 | — | ⬜ | |
 | H-0 | Hosted spike: operator mode, scoped signing keys, tenant isolation | Codex (gpt-6.1-sol) + research subagent | `iter2/h0-operator` | ✅ | Merged 2026-10-21. `hub-admin permission-template` (one policy for config mode and scoped keys); `scripts/dev/operator_stack.sh` (pinned nsc, two tenants); isolation + 60 s credential expiry/revocation tests; both dogfoods pass with `--operator`; CI runs operator mode. Decisions: operator/JWT (no callout), tenant-wide extra channels — `docs/HOSTED_PLAN.md` §3 "H-0 results". H-0b web-chat MCP research in §4b. Follow-up: derive the inbox prefix from the creds' JWT name instead of the `NATS_USER=hub-server` hint. |
+| H-1a | Crate split: Apache client crate + BUSL server crate | Codex (gpt-6.1-sol) | `iter2/h1a-crate-split` | 🟡 | Brief: `.planning/refocus-2/H-1a-crate-split.md`. Overnight plan: `.planning/refocus-2/OVERNIGHT.md`. |
+| H-1b | Remote MCP endpoint (web chat apps) + dev stub control plane | Claude (opus-5-5, account 2) | `iter2/h1b-remote-mcp` | 🟡 | Brief: `.planning/refocus-2/H-1b-remote-mcp.md`. |
+| H-1c | `acs` connector | Codex | — | ⬜ | Wave B, after H-1a + H-1b. |
 
 **Wave 1 integration (orchestrator, `iter2/integration`).** Merging T1 + T2 turned up three bugs that neither task's own tests caught. All are fixed with regression tests:
 1. **Missed heartbeats.** The wave orchestrator only listened on legacy `hub.presence`, so it missed T1's bound heartbeats and would fail live long tasks after the liveness TTL. It now subscribes to both, taking the identity from the subject (`subscribe_subject_tagged`). Regression: `bound_heartbeats_keep_long_running_task_alive`.
