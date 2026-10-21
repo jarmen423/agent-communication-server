@@ -168,6 +168,20 @@ pub async fn serve_ws_bridge(
     }
 }
 
+/// True when a request targets the WebSocket endpoint. Only the exact
+/// `/ws` path (query string ignored) counts, plus an `Upgrade: websocket`
+/// request to a path that does not name a static file — so a static asset
+/// whose path merely contains `/ws` (e.g. the visualizer's `js/ws.js`
+/// module) is still served as a file.
+fn is_websocket_request(path: &str, has_upgrade_header: bool) -> bool {
+    let path_part = path.split(['?', '#']).next().unwrap_or(path);
+    if path_part == "/ws" {
+        return true;
+    }
+    let last_segment = path_part.rsplit('/').next().unwrap_or(path_part);
+    has_upgrade_header && !last_segment.contains('.')
+}
+
 async fn handle_connection(
     stream: TcpStream,
     state: Arc<BridgeState>,
@@ -177,13 +191,8 @@ async fn handle_connection(
     let n = stream.peek(&mut peek_buf).await?;
     let request = String::from_utf8_lossy(&peek_buf[..n]);
 
-    let is_ws = request.contains("Upgrade: websocket")
-        || request.contains("upgrade: websocket")
-        || request
-            .lines()
-            .next()
-            .map(|l| l.contains("/ws"))
-            .unwrap_or(false);
+    let has_upgrade = request.contains("Upgrade: websocket")
+        || request.contains("upgrade: websocket");
 
     let path = request
         .lines()
@@ -191,9 +200,27 @@ async fn handle_connection(
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/");
 
-    if is_ws || path == "/ws" {
+    if is_websocket_request(path, has_upgrade) {
         ws::handle_websocket(stream, state, peer).await
     } else {
         http::handle_http(stream, path, &state).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_websocket_request;
+
+    #[test]
+    fn websocket_path_classification() {
+        assert!(is_websocket_request("/ws", false));
+        assert!(is_websocket_request("/ws?token=abc", false));
+        // Static assets containing "/ws" are files, not upgrades.
+        assert!(!is_websocket_request("/js/ws.js", false));
+        assert!(!is_websocket_request("/js/ws.js", true));
+        assert!(!is_websocket_request("/index.html", true));
+        assert!(!is_websocket_request("/", false));
+        // A bare upgrade to a non-file path still counts.
+        assert!(is_websocket_request("/", true));
     }
 }

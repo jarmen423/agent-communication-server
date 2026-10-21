@@ -24,8 +24,8 @@ This page explains it in plain language. The license texts in
 | Rust client crate: `crates/client/**` (manifest, library, wire records, delivery helpers, wave validation, all client CLIs and TUI) | Apache-2.0 |
 | `config/provider_models.json` (model catalog read by the Python workers) | Apache-2.0 |
 | **Rust server crate:** `Cargo.toml`, `src/**` (router, query API, orchestrator, storage, analytics backends and metrics, WebSocket bridge, delivery server, merge gate, `hub-server`, `hub-admin`, and compatibility re-exports) | **BUSL-1.1** |
-| **Server assets and deployment:** `visualizer/**` (except the pet sprites below), `deploy/**`, `config/**` (except `provider_models.json`) | **BUSL-1.1** |
-| `visualizer/pets/**` (third-party Petdex sprites) | Not ours. See [below](#third-party-code-and-assets) |
+| **Server assets and deployment:** `visualizer/**` (except the vendored p5.js below), `deploy/**`, `config/**` (except `provider_models.json`) | **BUSL-1.1** |
+| `visualizer/vendor/**` (vendored p5.js 1.11.3) | LGPL-2.1-or-later. See [below](#third-party-code-and-assets) |
 | Everything else: docs, tests, dev and dogfood scripts, CI, `packaging/release/`, build files (`Cargo.lock`, `Makefile`, `requirements*.txt`), planning notes | Apache-2.0 |
 
 A new Rust file under `src/` is BUSL-1.1. Files under `crates/client/`

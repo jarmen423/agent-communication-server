@@ -1,4 +1,6 @@
 import { S, agents } from './state.js';
+import { showToast } from './state.js';
+import { showSessionDetail } from './chat.js';
 import { agentPalette, extractEnvelopeBody, prettySnippet, formatUptime, STATUS_LABELS } from './state.js';
 export function setWsBadge(state) {
   const badge = document.getElementById('ws-badge');

@@ -9,6 +9,10 @@ import { modelsForProvider, defaultModelForProvider, requestModels, ingestModels
 export { ingestModels, fillModelPicker, readModelPicker, syncModelCustomVisibility, requestModels, modelsForProvider, defaultModelForProvider, modelOptionsHtml };
 // Agent dock — provider-first spawn wizard (provider -> name+variant -> floor -> chat).
 // Instances persist in localStorage nats-hub.instances.
+export let view = 'home'; // home | providers | create
+export let selectedProviderId = null;
+export let selectedPetSlug = null;
+export let wired = false;
 export const LS_PROVIDERS = 'nats-hub.providers';
 export const LS_INSTANCES = 'nats-hub.instances';
 
@@ -25,6 +29,51 @@ export const DEFAULT_PROVIDERS = [
     { id: 'opencode-acp', label: 'OpenCode ACP', monogram: 'OA', color: '#54a0ff', blurb: 'OpenCode ACP stdio', backend: 'acp', defaultModel: 'opencode/deepseek-v4-flash-free' },
     { id: 'echo', label: 'Echo', monogram: 'Ec', color: '#94a3b8', blurb: 'Dogfood reverse worker', backend: 'sdk', defaultModel: null },
   ];
+
+export function esc(s) {
+    if (escapeHtml) return escapeHtml(s);
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+export function providers() {
+    let list = DEFAULT_PROVIDERS.slice();
+    try {
+      const raw = localStorage.getItem(LS_PROVIDERS);
+      if (!raw) return list;
+      const enabled = JSON.parse(raw);
+      if (!Array.isArray(enabled) || !enabled.length) return list;
+      const set = new Set(enabled.map(String));
+      const filtered = DEFAULT_PROVIDERS.filter((p) => set.has(p.id));
+      return filtered.length ? filtered : list;
+    } catch (_) {
+      return list;
+    }
+  }
+
+export function loadInstances() {
+    try {
+      const raw = localStorage.getItem(LS_INSTANCES);
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.filter((i) => i && i.identity) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+export function saveInstances(list) {
+    try {
+      localStorage.setItem(LS_INSTANCES, JSON.stringify(list));
+    } catch (_) { /* quota */ }
+  }
+
+export function providerById(id) {
+    return DEFAULT_PROVIDERS.find((p) => p.id === id) || null;
+  }
 
 export function slugifyName(name) {
     return String(name || '')

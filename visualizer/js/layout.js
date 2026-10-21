@@ -1,6 +1,7 @@
 import { S, agents } from './state.js';
 import { Theme } from './theme.js';
 import { showToast } from './state.js';
+import { layoutAgents } from './scene.js';
 export function loadPositionsMap() {
   try {
     const raw = localStorage.getItem(POS_STORAGE_KEY);
@@ -232,7 +233,7 @@ export function compressImageFileToDataUrl(file) {
   });
 }
 
-async function handleBackgroundFile(file) {
+export async function handleBackgroundFile(file) {
   if (!file) return;
   if (!file.type || !file.type.startsWith('image/')) {
     showToast('Pick an image file', true);

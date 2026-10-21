@@ -1,5 +1,6 @@
 import { S, envelopes, optimisticChatHtml } from './state.js';
 import { extractEnvelopeBody, prettySnippet } from './state.js';
+import { escapeHtml } from './state.js';
 export const OPERATOR_SENDERS = new Set([
   'josh', 'operator', 'human', 'you', 'arcade', 'hub', 'ui', 'nats-hub', 'broadcast',
 ]);

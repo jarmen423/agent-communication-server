@@ -2,6 +2,7 @@ import { S, agents, reducedMotion, COLORS, STATUS_LABELS, BUBBLE_MAX_W, MAX_BUBB
 import { agentPalette } from './state.js';
 import { Theme } from './theme.js';
 import { wrapText } from './layout.js';
+import { agentGlyph } from './state.js';
 export class Agent {
   constructor(identity) {
     this.identity = identity;

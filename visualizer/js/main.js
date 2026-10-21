@@ -8,6 +8,7 @@ import { placeAgent, clampAgentToFloor, saveAgentPosition, applySavedPosition, r
 import { showToast } from './state.js';
 import { showActionPopup, popupAction } from './panels.js';
 import { showSessionDetail, closeModal, sendChatMessage, applyChatModel, updateChatSendEnabled, refreshAgentRoster } from './chat.js';
+import { setAgentRosterOpen } from './chat.js';
 import { BG_STORAGE_KEY, AGENT_HOLD_MS, AGENT_DRAG_PX } from './state.js';
 export function preload() {
   Theme.preloadAll();

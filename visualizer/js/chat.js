@@ -10,7 +10,9 @@ export function closeModal() {
 }
 
 import { S, agents, envelopes, optimisticChatHtml, STATUS_LABELS } from './state.js';
-import { classifyChatRole, extractEnvelopeBody, prettySnippet } from './model.js';
+import { classifyChatRole } from './model.js';
+import { formatChatBubble, formatOptimisticYouBubble } from './model.js';
+import { extractEnvelopeBody, prettySnippet } from './state.js';
 import { showToast, agentPalette } from './state.js';
 import * as Dock from './dock.js';
 export function refreshOpenLogIfNeeded(env) {

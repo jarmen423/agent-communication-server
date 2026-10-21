@@ -1,61 +1,14 @@
 // Dock model picker: live per-provider model lists via the WS bridge.
 import { S } from './state.js';
 import { escapeHtml } from './state.js';
+function esc(s) { return escapeHtml(String(s)); }
+import { providerById } from './dock.js';
   // Live model lists come from supervisor via WS `list_models` → hub.worker.models.
   // Provider catalog is provider-agnostic (kilo/opencode/cursor/agy/hermes/… + config).
   // Cache shape: { models:[{value,label}], reason?, source?, loading?, loadedAt }
 export const modelCache = Object.create(null);
 export const modelWaiters = Object.create(null); // providerId → [resolve]
 
-  let view = 'home'; // home | providers | create
-  let selectedProviderId = null;
-  let selectedPetSlug = null;
-  let wired = false;
-
-export function esc(s) {
-    if (escapeHtml) return escapeHtml(s);
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-export function providers() {
-    let list = DEFAULT_PROVIDERS.slice();
-    try {
-      const raw = localStorage.getItem(LS_PROVIDERS);
-      if (!raw) return list;
-      const enabled = JSON.parse(raw);
-      if (!Array.isArray(enabled) || !enabled.length) return list;
-      const set = new Set(enabled.map(String));
-      const filtered = DEFAULT_PROVIDERS.filter((p) => set.has(p.id));
-      return filtered.length ? filtered : list;
-    } catch (_) {
-      return list;
-    }
-  }
-
-export function loadInstances() {
-    try {
-      const raw = localStorage.getItem(LS_INSTANCES);
-      if (!raw) return [];
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr.filter((i) => i && i.identity) : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
-export function saveInstances(list) {
-    try {
-      localStorage.setItem(LS_INSTANCES, JSON.stringify(list));
-    } catch (_) { /* quota */ }
-  }
-
-export function providerById(id) {
-    return DEFAULT_PROVIDERS.find((p) => p.id === id) || null;
-  }
 
 export function modelsForProvider(providerId) {
     const entry = modelCache[providerId];
