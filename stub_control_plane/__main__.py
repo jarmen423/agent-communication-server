@@ -51,6 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--allow-http-cimd", action="store_true",
                    help="tests: accept http://127.0.0.1 client ID metadata URLs")
     p.add_argument("--access-ttl", type=int, default=900)
+    p.add_argument("--nats-url", default="nats://127.0.0.1:4222")
     p.add_argument("--nats-ttl", type=int, default=3600)
     p.add_argument("--access-log", action="store_true")
     p.add_argument("--insecure-dev-public", action="store_true",
@@ -86,7 +87,7 @@ def build(args: argparse.Namespace) -> tuple[StubConfig, Store, TokenIssuer]:
         extra_redirect_uris=args.allow_redirect_uri,
         allow_loopback_redirects=args.allow_loopback_redirects,
         allow_http_cimd=args.allow_http_cimd, access_ttl=args.access_ttl,
-        nats_ttl=args.nats_ttl)
+        nats_ttl=args.nats_ttl, nats_url=args.nats_url)
     store = Store(args.state_file)
     if store.signing_key_pem:
         issuer = TokenIssuer.from_pem(cfg.issuer, store.signing_key_pem)
