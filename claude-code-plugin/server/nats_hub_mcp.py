@@ -16,7 +16,6 @@ Arguments are validated against each tool's schema (``hub_validate``).
 """
 
 import asyncio
-import json
 import os
 import sys
 
@@ -64,11 +63,10 @@ elif (ident := _default_identity()) is not None:
 else:
     IDENTITY_SOURCE = None
 
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import CallToolResult, TextContent, Tool
 
 import hub_connection as conn
+from hub_app import build_server
 from hub_tools import TOOLS
 from hub_handlers import HANDLERS as _RAW_HANDLERS
 from hub_validate import validated_handlers
@@ -94,36 +92,7 @@ async def _whoami(args: dict) -> dict:
 # also for the Hermes plugin, which calls HANDLERS directly.
 HANDLERS = validated_handlers(TOOLS, {**_RAW_HANDLERS, "whoami": _whoami})
 
-server = Server("nats-hub")
-
-
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    return TOOLS
-
-
-# validate_input=False: HANDLERS already validate (with actionable messages),
-# and the same path must cover Hermes, which bypasses the MCP SDK.
-@server.call_tool(validate_input=False)
-async def call_tool(name: str, arguments: dict) -> CallToolResult:
-    handler = HANDLERS.get(name)
-    if handler is None:
-        return CallToolResult(
-            content=[TextContent(type="text", text=(
-                f"Unknown tool: {name}. Available: {', '.join(sorted(HANDLERS))}"))],
-            isError=True,
-        )
-    try:
-        result = await handler(arguments or {})
-        return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(result, indent=2, default=str))],
-            isError=not result.get("ok", True),
-        )
-    except Exception as e:
-        return CallToolResult(
-            content=[TextContent(type="text", text=f"Error: {e}")],
-            isError=True,
-        )
+server = build_server("nats-hub", TOOLS, HANDLERS)
 
 
 async def main() -> None:

@@ -8,16 +8,24 @@ client (``NATS_URL``, ``NATS_TOKEN``, ``NATS_CA_FILE``, …).
 
 The connection is lazy: the first tool call connects. Module import never
 touches the network, so tool schemas load fine without a running bus.
+
+Transports: the stdio server uses the env identity and one process-wide
+connection. A multi-identity transport (``mcp_remote/``, streamable HTTP)
+wraps each tool call in :func:`bound`, which makes :func:`identity` and
+:func:`get_nc` (and so ``publish``/``api_request``/``envelope``) answer for
+that call's authenticated identity instead. The tool handlers don't change.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, Iterator
 
 import nats
 from nats.aio.client import Client as NATSClient
@@ -29,14 +37,52 @@ _nc: NATSClient | None = None
 _connect_lock = asyncio.Lock()
 
 
+class Binding:
+    """One tool call's identity and connection (see :func:`bound`)."""
+
+    __slots__ = ("identity", "get_nc")
+
+    def __init__(self, ident: str, get_nc: Callable[[], Awaitable[NATSClient]]) -> None:
+        self.identity = ident
+        self.get_nc = get_nc
+
+
+_binding: contextvars.ContextVar[Binding | None] = contextvars.ContextVar(
+    "nats_hub_binding", default=None)
+
+
+@contextlib.contextmanager
+def bound(ident: str, get_nc: Callable[[], Awaitable[NATSClient]]) -> Iterator[Binding]:
+    """Run the enclosed tool call as ``ident`` on the connection ``get_nc``
+    returns. The caller (a transport) is responsible for having
+    authenticated ``ident``; it is validated as a NATS token here."""
+    import nats_connect
+
+    binding = Binding(nats_connect.validate_identity(ident), get_nc)
+    token = _binding.set(binding)
+    try:
+        yield binding
+    finally:
+        _binding.reset(token)
+
+
+def is_bound() -> bool:
+    """True inside :func:`bound` (a multi-identity transport's tool call)."""
+    return _binding.get() is not None
+
+
 def identity() -> str:
     """The orchestrator identity stamped on every envelope.
 
+    Inside :func:`bound` it is the bound identity. Otherwise
     ``NATS_HUB_IDENTITY`` is required — fail loudly instead of silently
     impersonating ``mcp-server`` or whatever a caller passes as ``from``.
     Must be a valid single NATS token (`[A-Za-z0-9_-]+`): it is embedded in
     the bound subjects this client publishes on (contract §4.1).
     """
+    binding = _binding.get()
+    if binding is not None:
+        return binding.identity
     ident = os.environ.get("NATS_HUB_IDENTITY", "").strip()
     if not ident:
         raise RuntimeError(
@@ -60,6 +106,10 @@ def check_from_arg(args: dict) -> str | None:
     """
     claimed = args.get("from") or args.get("orchestrator")
     if claimed is not None and claimed != identity():
+        if is_bound():
+            return (f"from={claimed!r} does not match the authenticated identity "
+                    f"{identity()!r} — identity comes from the access token, "
+                    "not arguments")
         return (
             f"from={claimed!r} does not match NATS_HUB_IDENTITY "
             f"{identity()!r} — identity comes from the environment, not arguments"
@@ -77,8 +127,12 @@ def generation() -> int:
 
 
 async def get_nc() -> NATSClient:
-    """Lazily connect to NATS with auth/TLS via the vendored connect_nats."""
+    """Lazily connect to NATS with auth/TLS via the vendored connect_nats
+    (or the bound call's connection, see :func:`bound`)."""
     global _nc, _generation
+    binding = _binding.get()
+    if binding is not None:
+        return await binding.get_nc()
     async with _connect_lock:
         if _nc is None or _nc.is_closed:
             import nats_connect
