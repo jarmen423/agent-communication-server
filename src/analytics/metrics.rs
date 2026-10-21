@@ -119,6 +119,12 @@ pub struct MetricsCollector {
     /// Counted whether or not `--require-bound-identity` is on, so an
     /// operator can watch the migration to bound identity drain to zero.
     pub unbound_sends_total: AtomicU64,
+    /// Rows deleted by the retention pruner (envelopes + session/wave/task
+    /// records), summed across passes.
+    pub retention_pruned_total: AtomicU64,
+    /// Retention passes that failed (the pruner logs the error and keeps
+    /// running — alert on this instead of missing silent failure).
+    pub retention_pass_errors_total: AtomicU64,
 }
 
 /// Map a [`MessageKind`] to a stable index into `by_kind`.
@@ -182,6 +188,17 @@ impl MetricsCollector {
     /// Legacy-subject arrivals so far.
     pub fn unbound_sends(&self) -> u64 {
         self.unbound_sends_total.load(Ordering::Relaxed)
+    }
+
+    /// Count `n` rows deleted by a retention pass. Non-blocking.
+    pub fn record_pruned(&self, n: u64) {
+        self.retention_pruned_total.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Count a failed retention pass. Non-blocking.
+    pub fn record_prune_error(&self) {
+        self.retention_pass_errors_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Render the Prometheus text exposition format.
@@ -256,6 +273,22 @@ impl MetricsCollector {
         out.push_str(&format!(
             "natshub_unbound_sends_total {}\n",
             self.unbound_sends_total.load(Ordering::Relaxed)
+        ));
+
+        // Retention pruner
+        out.push_str(
+            "# HELP natshub_retention_pruned_total Rows deleted by the retention pruner\n",
+        );
+        out.push_str("# TYPE natshub_retention_pruned_total counter\n");
+        out.push_str(&format!(
+            "natshub_retention_pruned_total {}\n",
+            self.retention_pruned_total.load(Ordering::Relaxed)
+        ));
+        out.push_str("# HELP natshub_retention_pass_errors_total Retention passes that failed\n");
+        out.push_str("# TYPE natshub_retention_pass_errors_total counter\n");
+        out.push_str(&format!(
+            "natshub_retention_pass_errors_total {}\n",
+            self.retention_pass_errors_total.load(Ordering::Relaxed)
         ));
 
         out
