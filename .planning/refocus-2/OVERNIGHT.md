@@ -74,3 +74,7 @@ after every state change.**
   - Heartbeat: scheduled task `overnight-heartbeat-2026-10-21`, hourly, bound to this thread. Delete it after wave C.
 - 02:30 UTC: H-1a r1 on `codex` failed immediately: usage limit ("try again at 4:32 AM"), no changes made. Relaunched as r2 on `codex_2`: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Ah1a-crate-split-r2-codex2`. For later waves, `codex` (account 1) is out until about 04:32 local. Prefer `codex_2`/`codex_3` or Claude accounts 3 and 4.
 - 03:5x UTC: **H-1a merged** (`8375f31` + board). Codex 2 delivered with all gates green. Merged main reverified: lint, `make test` 287 Rust / 355 Py, no-storage, operator suite 4/4, `reuse lint` OK. Orchestrator tweak: dropped the "surrealdb" keyword from the client crate. Wave B tasks that only need H-1a (W2-D, W2-C) launch now; H-1c waits for H-1b.
+- Wave B (partial) launched against main `028524f`:
+  - W2-D: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Aw2d-file-locks-r1` (acpRegistry_devin swe-2-high), worktree `/data/code/acs-wt/w2d-file-locks`.
+  - W2-C: taskId `node:delegated-task:command%3Amcp%3Aa1b83716-7188-494a-b103-917c16a5ab8e%3Adelegate-task%3Aw2c-visualizer-r1` (muse muse-wonder-1.0), worktree `/data/code/acs-wt/w2c-visualizer`.
+  - H-1c waits for H-1b. H-1b's branch was created before the crate split; rebase or merge main when integrating, since it touches no Rust.
