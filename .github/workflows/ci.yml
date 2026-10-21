@@ -79,6 +79,9 @@ jobs:
           STRICT_INTEGRATION=1 scripts/dogfood_prod_config.sh --operator
           scripts/dogfood_durable.sh --operator
 
+      - name: Remote MCP endpoint e2e (operator stack, OAuth, two replicas)
+        run: scripts/dev/operator_stack.sh .venv/bin/python -m pytest -q -s tests/python/test_remote_mcp_e2e.py
+
   # The embeddable transport-only build (no SurrealDB/RocksDB). Fast: no C++.
   no-storage:
     runs-on: ubuntu-latest

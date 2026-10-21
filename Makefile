@@ -7,7 +7,7 @@ DEV   := scripts/dev
 ENV   := source $(DEV)/lib.sh &&
 PY    := .venv/bin/python
 
-.PHONY: help doctor setup setup-extras build build-release test test-rust test-py test-bound test-durable check-no-storage lint fmt up clean-run clean prune
+.PHONY: help doctor setup setup-extras build build-release test test-rust test-py test-bound test-durable test-remote-mcp demo-remote-mcp check-no-storage lint fmt up clean-run clean prune
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -37,6 +37,12 @@ test-bound: ## Full suite with --require-bound-identity (identity-bound subjects
 
 test-durable: ## Full suite with hub-server --durable (JetStream delivery; docs/DELIVERY.md)
 	@NATS_HUB_DURABLE=1 $(MAKE) --no-print-directory test
+
+test-remote-mcp: ## Remote MCP endpoint e2e on an operator-mode stack (docs/REMOTE_MCP.md)
+	@scripts/dev/operator_stack.sh $(PY) -m pytest -q -s tests/python/test_remote_mcp_e2e.py
+
+demo-remote-mcp: ## Run the remote MCP endpoint + dev stub control plane (scripts/dev/remote_mcp_demo.sh --help)
+	@scripts/dev/remote_mcp_demo.sh
 
 test-py: ## Python tests (pytest) against an isolated nats-server + hub-server
 	@$(DEV)/with_stack.sh $(PY) -m pytest -q tests/python

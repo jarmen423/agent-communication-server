@@ -259,6 +259,43 @@ approves it with their ACS login.
 - Code: public (Apache-2.0, it's a client) but it runs only as part of the
   hosted service.
 
+**Built (H-1b, 2026-10-21; details in [`REMOTE_MCP.md`](REMOTE_MCP.md)):**
+
+- **`mcp_remote/`** is the endpoint: stateless streamable HTTP, no
+  `Mcp-Session-Id`. Results and session replies are read back from
+  `HUB_TASKS` (`DIRECT.GET`) and the inbox from the identity's durable
+  `inbox-<id>` consumer, so any replica answers any call. It requires
+  `hub-server --durable`.
+  - Turn-bounded tools: `delegate` returns at once; `get_task_result` waits
+    ≤ 50 s and pages results at ≤ 100k characters with an offset cursor.
+  - Every tool has a title and read-only/destructive hints. Shared tools
+    reuse the `mcp_server/` handlers, now behind a pluggable transport
+    (`hub_connection.bound`, `hub_app.build_server`).
+- **OAuth.** The endpoint is the resource server: `401` + `resource_metadata`
+  and RFC 9728 metadata. Access tokens are **EdDSA JWTs** verified offline
+  against the control plane's JWKS, which keeps the control plane off the
+  tool-call path. They are 15 min, so revocation lags by at most that.
+  - The token's `acs_tenant`/`acs_identity` is the only source of identity.
+  - The endpoint generates a user nkey per identity and gets a scoped
+    `orchestrator` user JWT for it from the control plane
+    (`POST /v1/credentials/nats`), the same shape as a device in §3.
+- **`stub_control_plane/`** is a **DEV ONLY** authorization server, to be
+  replaced by the private control plane with the same HTTP API. It has:
+  - RFC 8414 metadata, DCR, CIMD;
+  - PKCE S256, auto-approved consent, refresh rotation with reuse detection;
+  - a redirect allowlist with the claude.ai and ChatGPT callbacks;
+  - `claude-web-<n>`-style identities, one per connector install;
+  - NATS user JWTs signed with the tenant's scoped role key (Python `nkeys`).
+- **Tests.** The e2e test runs on the H-0 operator stack with two endpoint
+  replicas and the MCP SDK's OAuth client: DCR → authorize → token, then
+  delegate/result, inbox, paging, sessions and a wave across separate HTTP
+  sessions. `scripts/dev/remote_mcp_demo.sh` prints the URL for claude.ai's
+  "Add custom connector" when `cloudflared` is available. A live claude.ai
+  run was not possible in the build environment.
+- **Gaps** (listed in `REMOTE_MCP.md`): no login/consent UI or KMS, no SSRF
+  guard on CIMD fetches, ChatGPT callback shapes not checked live, no MCP
+  Events push.
+
 ## 5. Per-tenant hub-server
 
 - **One container per tenant**, running

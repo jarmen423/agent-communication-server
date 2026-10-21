@@ -116,6 +116,8 @@ mcp_server/                — CANONICAL orchestrator MCP server (edit here)
     hub_handlers.py, hub_queries.py    tool handlers
     hub_buffers.py, hub_primitives.py  subscriptions, buffers, reply-contract matcher
     hooks/session_start.py, skills/nats-hub/SKILL.md
+mcp_remote/                — hosted remote MCP endpoint (streamable HTTP + OAuth, stateless over JetStream; docs/REMOTE_MCP.md)
+stub_control_plane/        — DEV-ONLY OAuth authorization server + NATS credential minting for mcp_remote (and later `acs`)
 claude-code-plugin/, codex-plugin/, hermes-plugin/   — generated copies: scripts/dev/sync_plugins.sh (--check in tests)
 .claude-plugin/marketplace.json, .agents/plugins/    — marketplace manifests
 ```
@@ -323,5 +325,6 @@ The client has no default features or storage feature. All its CLIs, including
 - `docs/PRODUCT_VISION.md`, `docs/DATABASE_PLAN.md`: vision and persistence design
 - `docs/HOSTED_PLAN.md`: hosted ACS (tenancy, auth, `acs` connector, phases)
 - `docs/DELIVERY.md`: durable delivery (JetStream, `--durable`)
+- `docs/REMOTE_MCP.md`: remote MCP endpoint for web chat apps (claude.ai, ChatGPT, Grok) + dev stub control plane
 - `docs/archive/`: finished phase plans and handoffs (historical; see its README)
 - `LICENSING.md`: the license split by path (Apache-2.0 client, BUSL-1.1 server); `REUSE.toml` is the machine-readable map

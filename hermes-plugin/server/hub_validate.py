@@ -91,6 +91,9 @@ def _hint(msg: str) -> str:
         return (f"{msg} — cannot reach NATS at {url}. Start the bus (`make up`) "
                 "or set NATS_URL / NATS_TOKEN / TLS env for this MCP server.")
     if "authorization" in low or "permissions violation" in low:
+        if conn.is_bound():
+            return (f"{msg} — the bus rejected {conn.identity()}'s credentials "
+                    "or permissions.")
         return (f"{msg} — the bus rejected this identity's credentials or "
                 "permissions; check NATS_TOKEN / NATS_USER / NATS_CREDS for "
                 f"{os.environ.get('NATS_HUB_IDENTITY', '<unset>')}.")
