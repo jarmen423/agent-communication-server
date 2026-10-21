@@ -83,3 +83,9 @@ after every state change.**
 - **W2-C merged** (Muse delivered with all criteria met). Checks: vendored p5 SHA-256 matches cdnjs; ws_bridge `/ws` change reviewed (auth unchanged); screenshot viewed. Merged main: lint, `make test` (288 Rust, 385 Py), reuse, Playwright smoke PASS (needs `npm ci` + `npx playwright install chromium` in `tests/e2e_visualizer` first), TUI bound PASS. The third-party sprites are gone. Still running: W2-D, H-1c.
 - **W2-D merged.** Orchestrator work: resolved the `hub_tools.py` conflict with H-1b's annotations and annotated the 5 lock tools; the stub's identity rules now reserve `hub-locks` and `lock`, with a Rust drift test (`tests/python/test_stub_identity_rules_sync.py`). **H-1c must keep that file in sync when it merges.** Merged main, all modes: 301 Rust; 402/403/402 Py; operator + remote MCP 7/7; smoke PASS. Remaining: H-1c, then wave C.
 - Wave C step 1 started early: a read-only integration review (Claude subagent) of `0d74bf5..68f3e78`. H-1c gets its own review at merge.
+- **Integration review done; fixes in `623eb27`.**
+  - High, stored XSS in the visualizer ticker: fixed, plus a strict CSP; the smoke test now has an XSS + CSP regression that fails without the fix.
+  - Medium, `wait_for_files` wrong subject plus a hidden 1 s poll: fixed, with an event-only test.
+  - Low: waiter normalization, the remote `read_inbox` hint, pool drain grace, lock docs.
+  - **Deferred to the H-1c merge** (stub files in flight): grant-family check on `/v1/credentials/nats`, persisted revocations, CIMD SSRF guard.
+  - Merged main: lint, `make test` (301 Rust / 403 Py), `make test-remote-mcp` 3/3, smoke PASS.
