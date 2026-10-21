@@ -181,9 +181,33 @@ approves it with their ACS login.
 - **Turn-bounded waits.** Chat apps cap how long one tool call may run, so
   `delegate` returns a task id quickly and `wait_for_task` waits only up to
   that cap. A later turn picks up the result.
-- **To verify per platform (H-0):** which apps accept remote MCP connectors
-  with OAuth on which plans, their tool-call timeouts, and whether they
-  need a published/approved app for non-developer users.
+- **Per-platform facts (H-0b research, 2026-10-21; sources in
+  `.planning/hosted/H-0b-web-mcp.md`):**
+
+  | | claude.ai | ChatGPT | Grok |
+  |---|---|---|---|
+  | Custom remote MCP by URL | yes ("custom connectors"), Free (1) and every paid plan | yes ("custom MCP server" plugin, Work chats); write tools on Business/Enterprise/Edu, Plus/Pro unclear | yes ("custom MCP connectors"), all users |
+  | Auth | OAuth per the MCP auth spec (DCR, CIMD or pre-registered), PKCE S256; no-auth allowed | OAuth 2.1 (CIMD preferred, DCR, predefined), PKCE S256; mixed per-tool auth | OAuth pop-up; details not documented |
+  | Transport | streamable HTTP (SSE legacy) | streamable HTTP + SSE | not documented for grok.com |
+  | Tool-call timeout | 240 s; results ~150k chars | not official (forum: ~60 s) | not documented |
+  | Directory | Connectors Directory (automated scan → "Community", review → "Verified") | shared ChatGPT/Codex plugin directory, reviewed | curated catalog, no submission found |
+
+  **What this means for the design:**
+  - Build one streamable-HTTP endpoint.
+  - The OAuth server needs CIMD and DCR, PKCE S256, RFC 9728 resource
+    metadata, a `401` + `WWW-Authenticate` response, and refresh rotation.
+  - `delegate` returns a task id within seconds. Assume about 60 s per call
+    at most.
+  - Results are fetched by polling (`get_task_result`, `read_inbox`) in a
+    later turn.
+  - Mark every read tool `readOnlyHint` so it runs without a confirmation
+    prompt. Claude's directory also requires a `title` and the hint
+    annotations on every tool.
+  - Page long outputs.
+  - Distribute through the Claude directory first, ChatGPT plugin
+    submission second, and Grok/Gemini/Perplexity as custom URLs.
+  - Later: ChatGPT's MCP Events (webhooks) could push results instead of
+    polling.
 - Code: public (Apache-2.0, it's a client) but it runs only as part of the
   hosted service.
 
