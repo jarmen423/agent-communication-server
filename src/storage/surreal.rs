@@ -18,10 +18,10 @@ use surrealdb::Surreal;
 use tracing::{debug, info};
 
 use crate::protocol::Envelope;
-use crate::storage::{agents, envelopes, schema, session, wave};
+use crate::storage::{agents, envelopes, locks, schema, session, wave};
 use crate::storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
-    WaveRecord, WaveTaskRecord, MAX_THREAD_DEPTH,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, LockRecord, SessionFilter,
+    SessionRecord, Storage, WaveRecord, WaveTaskRecord, MAX_THREAD_DEPTH,
 };
 
 /// Embedded SurrealDB client handle (what [`SurrealStorage::from_client`]
@@ -220,6 +220,33 @@ impl Storage for SurrealStorage {
 
     async fn list_wave_tasks(&self, wave_id: &str) -> Result<Vec<WaveTaskRecord>> {
         wave::list_wave_tasks(&self.db, wave_id).await
+    }
+
+    // ── File Locks ───────────────────────────────────────────
+
+    async fn create_lock(&self, lock: LockRecord) -> Result<()> {
+        locks::create_lock(&self.db, lock).await
+    }
+
+    async fn get_lock(&self, lock_id: &str) -> Result<Option<LockRecord>> {
+        locks::get_lock(&self.db, lock_id).await
+    }
+
+    async fn list_locks(&self, scope: Option<&str>) -> Result<Vec<LockRecord>> {
+        locks::list_locks(&self.db, scope).await
+    }
+
+    async fn delete_lock(&self, lock_id: &str) -> Result<bool> {
+        locks::delete_lock(&self.db, lock_id).await
+    }
+
+    async fn renew_lock(
+        &self,
+        lock_id: &str,
+        ttl_secs: u64,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        locks::renew_lock(&self.db, lock_id, ttl_secs, expires_at).await
     }
 
     // ── Lifecycle ───────────────────────────────────────────

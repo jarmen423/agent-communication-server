@@ -71,6 +71,7 @@ pub use nats_hub_client::client;
 pub use nats_hub_client::connect_opts;
 pub mod delivery;
 pub use nats_hub_client::events;
+pub mod locks;
 pub mod orchestrator;
 pub use nats_hub_client::protocol;
 pub mod query_api;
@@ -100,8 +101,8 @@ pub use router::{ControlPlane, RoutingTable};
 // work against `dyn Storage`). Only the SurrealDB backend is feature-gated.
 
 pub use storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, SessionFilter, SessionRecord, Storage,
-    WaveRecord, WaveTaskRecord,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, LockRecord, SessionFilter,
+    SessionRecord, Storage, WaveRecord, WaveTaskRecord,
 };
 
 #[cfg(feature = "storage-surreal")]

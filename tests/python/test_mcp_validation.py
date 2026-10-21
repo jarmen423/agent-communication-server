@@ -54,6 +54,11 @@ SAMPLE_ARGS: dict[str, dict] = {
     "wave_status": {"wave_id": "wv1"},
     "cancel_wave": {"wave_id": "wv1"},
     "get_analytics": {"metric": "latency", "secs": 60},
+    "lock_files": {"scope": "repo", "paths": ["src/a.py"]},
+    "release_files": {"lock_id": "l1"},
+    "renew_lock": {"lock_id": "l1"},
+    "list_locks": {"scope": "repo"},
+    "wait_for_files": {"scope": "repo", "paths": ["src/a.py"], "timeout": 0.01},
 }
 
 

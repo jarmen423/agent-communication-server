@@ -214,6 +214,32 @@ impl SessionFilter {
     }
 }
 
+// ── File-lock Types ─────────────────────────────────────────
+
+/// A persisted file lock — an advisory "I'm working on these paths"
+/// announcement shared by agents editing the same repo (see
+/// `docs/FILE_LOCKS.md`). Held until released, until `expires_at`, or until
+/// the holder's presence is lost (the hub's liveness TTL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockRecord {
+    pub lock_id: String,
+    /// Coordination namespace: a repo or project key (free string, e.g. a
+    /// git remote or repo path). Locks only conflict within one scope.
+    pub scope: String,
+    /// Repo-relative files, or directory prefixes ending in `/`.
+    pub paths: Vec<String>,
+    /// Lock owner — stamped from the caller's bound identity by the hub,
+    /// never trusted from the payload.
+    pub holder: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    pub ttl_secs: u64,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
 // ── Wave Types ───────────────────────────────────────────────
 
 /// A persisted wave record — parallel tasks with disjoint write scopes.

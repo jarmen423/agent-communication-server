@@ -64,6 +64,10 @@ name = "hub-thread"
 path = "src/bin/hub_thread.rs"
 
 [[bin]]
+name = "hub-lock"
+path = "src/bin/hub_lock.rs"
+
+[[bin]]
 name = "hub-stats"
 path = "src/bin/hub_stats.rs"
 

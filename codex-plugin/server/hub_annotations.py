@@ -50,6 +50,11 @@ ANNOTATIONS: dict[str, tuple[str, bool, bool, bool]] = {
     "list_wave_tasks": ("List wave tasks", True, False, True),
     "get_wave_task": ("Get wave task", True, False, True),
     "get_analytics": ("Hub analytics", True, False, True),
+    "lock_files": ("Lock files (advisory)", False, False, False),
+    "release_files": ("Release file locks", False, False, True),
+    "renew_lock": ("Renew a file lock", False, False, True),
+    "list_locks": ("List file locks", True, False, True),
+    "wait_for_files": ("Wait until files are free", True, False, True),
 }
 
 # Tools that never touch the bus.

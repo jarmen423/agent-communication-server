@@ -9,10 +9,12 @@ from __future__ import annotations
 import re
 
 _VALID = re.compile(r"^[A-Za-z0-9_-]+$")
-# src/query_api/authz.rs OP_NAMESPACES and src/protocol.rs RESERVED_IDENTITIES.
+# Mirrors src/query_api/authz.rs OP_NAMESPACES and
+# crates/client/src/protocol.rs RESERVED_IDENTITIES; tests/python/
+# test_stub_identity_rules_sync.py fails if they drift.
 OP_NAMESPACES = frozenset({"wave", "session", "agent", "history", "thread",
-                           "envelope", "stats", "ping", "backup"})
-RESERVED = frozenset({"hub-server", "hub-orchestrator", "visualizer"})
+                           "envelope", "stats", "ping", "backup", "lock"})
+RESERVED = frozenset({"hub-server", "hub-orchestrator", "hub-locks", "visualizer"})
 
 
 def check_identity(name: str) -> str:

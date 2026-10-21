@@ -189,7 +189,12 @@ pub async fn handle_request_authorized(
         }
     }
 
-    let resp = if scope != Scope::Full && scoped_reads::is_scoped_list(op) {
+    let resp = if op.starts_with("lock.") {
+        // File locks: the holder identity comes only from the resolved
+        // caller (bound subject), never the payload. Writes go to the
+        // hub-server lock service; reads go straight to storage.
+        crate::locks::dispatch_op(storage.as_ref(), &caller, authz, op, &req.params).await
+    } else if scope != Scope::Full && scoped_reads::is_scoped_list(op) {
         // Over-fetch so invisible rows don't shorten the caller's page.
         scoped_reads::fetch_visible(storage, &req, op, scope).await
     } else {
