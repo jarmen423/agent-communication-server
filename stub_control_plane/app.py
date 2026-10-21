@@ -14,12 +14,12 @@ OAuth authorization server for the remote MCP endpoint (``mcp_remote/``):
 | ``POST /v1/credentials/nats`` | NATS user JWT for the token's identity and the caller's public nkey |
 | ``GET /healthz`` | liveness |
 
-``/v1/credentials/nats`` is the extension point for the ``acs`` connector
-(H-1c): today a caller presents an access token issued for an MCP resource
-plus the endpoint's service key; a device-code flow (RFC 8628,
-``/device/code`` + ``/device/token``, reserved) would issue tokens whose
-audience is the control plane itself, accepted here without the service key
-for per-device identities.
+Device routes (DEV ONLY): ``POST /device/code``, ``POST /device/token``,
+``GET|POST /device/verify`` (auto-approve), ``POST|DELETE /device/service-key``
+(admin bootstrap), ``GET|DELETE /v1/device``, and
+``POST /v1/device/identities`` / ``DELETE /v1/device/identities/{identity}``.
+Device access tokens target this control plane and mint only their own
+registered identity/key pairs, without the MCP endpoint service key.
 """
 
 from __future__ import annotations
@@ -36,10 +36,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .devices import Devices
 from .config import SCOPE, StubConfig
 from .provider import StubProvider
 from .store import Store
-from .tokens import IDENTITY_CLAIM, TENANT_CLAIM, TokenIssuer
+from .tokens import GRANT_CLAIM, IDENTITY_CLAIM, TENANT_CLAIM, TokenIssuer
 
 log = logging.getLogger("stub_control_plane")
 
@@ -55,6 +56,7 @@ def _error(status: int, error: str, description: str) -> JSONResponse:
 
 
 def create_app(cfg: StubConfig, store: Store, issuer: TokenIssuer) -> Starlette:
+    devices = Devices(cfg, store, issuer)
     provider = StubProvider(cfg, store, issuer)
     issuer_url = AnyHttpUrl(cfg.issuer)
     registration = ClientRegistrationOptions(enabled=True, valid_scopes=[SCOPE],
@@ -85,28 +87,45 @@ def create_app(cfg: StubConfig, store: Store, issuer: TokenIssuer) -> Starlette:
         return RedirectResponse(target, status_code=302, headers=_NO_STORE)
 
     async def nats_credentials(request: Request) -> Response:
-        key = request.headers.get("x-acs-service-key", "")
-        if not store.service_key or not hmac.compare_digest(key.encode(),
-                                                            store.service_key.encode()):
-            return _error(401, "invalid_client", "service key required")
         auth = request.headers.get("authorization", "")
         if not auth.lower().startswith("bearer "):
             return _error(401, "invalid_token", "bearer access token required")
-        claims = issuer.verify(auth[7:].strip(), audience=cfg.resources)
-        if claims is None or claims.get("jti") in provider.revoked_jtis:
-            return _error(401, "invalid_token", "access token invalid or expired")
-        if SCOPE not in str(claims.get("scope", "")).split():
-            return _error(403, "insufficient_scope", f"scope {SCOPE} required")
-        tenant, name = claims.get(TENANT_CLAIM), claims.get(IDENTITY_CLAIM)
-        ident = store.identity(str(tenant), str(name))
+        try:
+            body = await request.body()
+            data = json.loads(body) if len(body) <= MAX_BODY else {}
+            public_key = data.get("public_key")
+        except (ValueError, AttributeError):
+            return _error(400, "invalid_request", "JSON object required")
+        device = devices.authenticate(request)
+        if device:
+            tenant, name = device["tenant"], data.get("identity")
+            ident = store.identity(tenant, str(name))
+            if (not ident or ident.revoked or ident.kind != "device"
+                    or ident.client_id != device["id"]
+                    or data.get("tenant", tenant) != tenant
+                    or public_key not in ident.nats_public_keys):
+                return _error(403, "access_denied", "identity/key not owned by this device")
+        else:
+            key = request.headers.get("x-acs-service-key", "")
+            if not store.service_key or not hmac.compare_digest(key.encode(), store.service_key.encode()):
+                return _error(401, "invalid_client", "service key required")
+            claims = issuer.verify(auth[7:].strip(), audience=cfg.resources)
+            if claims is None or claims.get("jti") in provider.revoked_jtis:
+                return _error(401, "invalid_token", "access token invalid or expired")
+            if SCOPE not in str(claims.get("scope", "")).split():
+                return _error(403, "insufficient_scope", f"scope {SCOPE} required")
+            # The grant (refresh-token family) must still be live: a stolen
+            # access token can't keep minting NATS creds once the family was
+            # revoked (refresh-token reuse, /revoke, identity revoked).
+            # Grants are persisted, so this survives a stub restart.
+            grant = store.grants.get(str(claims.get(GRANT_CLAIM, "")))
+            if not provider.grant_active(grant):
+                return _error(401, "invalid_token", "grant revoked or unknown")
+            tenant, name = claims.get(TENANT_CLAIM), claims.get(IDENTITY_CLAIM)
+            ident = store.identity(str(tenant), str(name))
         keys = cfg.tenants.get(str(tenant))
         if ident is None or ident.revoked or keys is None:
             return _error(403, "access_denied", "identity revoked or unknown")
-        body = await request.body()
-        try:
-            public_key = json.loads(body)["public_key"] if len(body) <= MAX_BODY else None
-        except (ValueError, KeyError, TypeError):
-            public_key = None
         try:
             user_jwt, expires_at = keys.mint_user(
                 identity=ident.identity, user_public_key=str(public_key),
@@ -140,6 +159,7 @@ def create_app(cfg: StubConfig, store: Store, issuer: TokenIssuer) -> Starlette:
         Route("/healthz", healthz, methods=["GET"]),
         Route("/", index, methods=["GET"]),
     ]
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes + devices.routes())
+    app.state.devices = devices
     app.state.provider = provider
     return app

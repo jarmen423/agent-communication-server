@@ -52,6 +52,7 @@ Browser ──ws://…/ws──▶ hub-server WS bridge ──▶ NATS (channel.
 
 ```
 Cargo.toml                   — workspace + BUSL-1.1 nats-hub server crate
+crates/acs/                  — Apache-2.0 acs device CLI, credential daemon, MCP installer
 crates/client/Cargo.toml      — Apache-2.0 nats-hub-client crate (no database)
 crates/client/src/
 ├── lib.rs                   — public client API
@@ -187,6 +188,8 @@ Manual commands (against a running stack):
 
 | Command | Description |
 |---|---|
+| `acs login/logout/status/up/down` | Device login, status and per-identity credential renewal |
+| `acs agent add/rm`, `acs mcp install claude\|codex\|hermes`, `acs worker run` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
 | `hub-server [--db-path PATH] [--metrics-addr ADDR] [--ws-addr ADDR --static-dir DIR]` | Router + query API; optional Prometheus `/metrics` and WS bridge/visualizer |
 | `hub-publish --channel CH [--to AGENT] [--kind KIND] --from ID --message MSG` | Send a message (broadcast or DM) |
 | `hub-observe [--channel CH]` | Watch messages (read-only, live) |

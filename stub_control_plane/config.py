@@ -42,6 +42,7 @@ class StubConfig:
     refresh_ttl: int = 30 * 86400
     code_ttl: int = 300
     nats_ttl: int = 3600
+    nats_url: str = "nats://127.0.0.1:4222"
 
     def __post_init__(self) -> None:
         self.issuer = self.issuer.rstrip("/")

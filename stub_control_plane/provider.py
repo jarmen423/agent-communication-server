@@ -21,8 +21,11 @@ URIs that match the client's registration, client authentication, RFC 8707
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import time
 import uuid
+from urllib.parse import urlparse
 
 import httpx
 from mcp.server.auth.provider import (
@@ -102,6 +105,10 @@ class StubProvider:
         cached = self._cimd.get(url)
         if cached and cached[0] > time.time():
             return cached[1]
+        # Unauthenticated callers choose this URL (/authorize?client_id=…):
+        # never let it reach private, loopback or link-local addresses.
+        if not self.cfg.allow_http_cimd and not await _public_host(url):
+            return None
         try:
             async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as http:
                 resp = await http.get(url, headers={"Accept": "application/json"})
@@ -200,7 +207,7 @@ class StubProvider:
         access = self.issuer.mint(
             subject=grant.subject, client_id=grant.client_id, audience=grant.resource,
             scopes=scopes, tenant=grant.tenant, identity=grant.identity,
-            ttl_secs=self.cfg.access_ttl)
+            ttl_secs=self.cfg.access_ttl, grant=family)
         refresh = opaque_token(32)
         self.store.add_refresh(refresh, family, int(time.time()) + self.cfg.refresh_ttl)
         return OAuthToken(access_token=access.token, token_type="Bearer",
@@ -262,3 +269,19 @@ class StubProvider:
             self.store.revoke_family(token.family)
         elif isinstance(token, StubAccess) and token.jti:
             self.revoked_jtis.add(token.jti)
+
+
+async def _public_host(url: str) -> bool:
+    """True when every address ``url``'s host resolves to is globally
+    routable (SSRF guard for client-ID metadata document fetches). The fetch
+    may still resolve again (DNS rebinding); a production control plane
+    should pin the resolved address."""
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    except OSError:
+        return False
+    addrs = {info[4][0] for info in infos}
+    return bool(addrs) and all(ipaddress.ip_address(a.split("%")[0]).is_global for a in addrs)

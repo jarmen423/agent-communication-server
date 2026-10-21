@@ -80,15 +80,15 @@ Follow the same operations as the readable provisioning block in
 7. Start a hub for each account, with a distinct DB/volume:
 
    ```bash
-   NATS_USER=hub-server NATS_CREDENTIALS_FILE=/secure/TENANT/hub-server.creds \
+   NATS_CREDENTIALS_FILE=/secure/TENANT/hub-server.creds \
        hub-server --nats-url tls://HOST:PORT --db-path /data/TENANT/db \
        --durable --require-bound-identity --api-admin owner-1
    ```
 
-`NATS_USER=hub-server` is an inbox-prefix hint here; credential-file JWT
-authentication takes precedence. It keeps all internal hub clients on
-`_INBOX.hub-server.>`. Setting only `NATS_HUB_IDENTITY=hub-server` is
-insufficient: the internal wave orchestrator has its own client identity.
+The connection helpers derive the inbox permission key from the credential
+JWT's `name` claim. The hub's internal wave client therefore also uses
+`_INBOX.hub-server.>` without an `NATS_USER` hint. This local decoding is only
+an inbox hint; NATS still verifies the signed JWT and proof of the user key.
 Admin JWT permissions alone do not grant API administration: also configure
 `--api-admin <identity>` as in config mode.
 
@@ -157,3 +157,9 @@ updates support keeping operator/JWT for v1.
 
 See the upstream [decentralized authentication guide](https://docs.nats.io/learn/security/decentralized-auth)
 and [scoped template introduction](https://nats.io/blog/nats-server-29-release/).
+
+For device-managed credentials, use [`acs`](ACS_CONNECTOR.md). The DEV ONLY
+stub checks device/tenant ownership before issuance and stops refreshing
+revoked identities/devices. Unlike the NSC revocation example above, the stub
+does **not** push account revocations: an already issued JWT remains usable
+until expiry. Keep short NATS TTLs in dev tests.

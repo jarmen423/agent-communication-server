@@ -12,4 +12,10 @@ if grep -Ei 'surrealdb|rocksdb|nats-hub v' "$client_deps"; then
   echo 'Client dependency tree contains server/database code' >&2
   exit 1
 fi
+# The acs connector is Apache-2.0 client code too.
+cargo tree --locked -p acs > "$client_deps"
+if grep -Ei 'surrealdb|rocksdb|nats-hub v' "$client_deps"; then
+  echo 'acs dependency tree contains server/database code' >&2
+  exit 1
+fi
 cargo check --locked -p nats-hub --lib --no-default-features --features no-storage

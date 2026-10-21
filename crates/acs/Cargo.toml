@@ -1,0 +1,26 @@
+[package]
+name = "acs"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "ACS device connector and local credential manager"
+repository = "https://github.com/jarmen423/agent-communication-server"
+
+[dependencies]
+nats-hub-client = { path = "../client", version = "0.1.0" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+nkeys = "0.4"
+rand = "0.8"
+fs2 = "0.4"
+libc = "0.2"
+toml_edit = "0.22"
+serde_yaml = "0.9"
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "crypto-rust", "vendored"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -25,6 +25,8 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/client/**"
+      - "crates/acs/**"
+      - "mcp_server/**"
   workflow_dispatch:
     inputs:
       version:
@@ -137,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           n=0
-          for b in target/"$TARGET"/release/hub-*; do
+          for b in target/"$TARGET"/release/acs target/"$TARGET"/release/hub-*; do
             [[ -f "$b" && -x "$b" && "$(basename "$b")" != *.* ]] || continue
             "$b" --help >/dev/null
             n=$((n + 1))
@@ -184,6 +186,7 @@ jobs:
           bash scripts/install_remote.sh 127.0.0.1 --release-only \
             --release-base-url "file://$PWD/dist"
           "$HOME/bin/hub-delegate-remote" --help >/dev/null
+          "$HOME/.local/share/nats-hub/bin/acs" --help >/dev/null
           ls -l "$HOME/.local/share/nats-hub/bin"
 
       - name: "Smoke: packaging/remote/install.sh from the packaged bundle"

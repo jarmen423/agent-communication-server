@@ -84,7 +84,7 @@ unset NATS_USER NATS_PASSWORD NATS_TOKEN NATS_NKEY NATS_CREDENTIALS_FILE
 if (( ! nats_only )); then
     for tenant in T_A T_B; do
         NATS_CREDENTIALS_FILE="$OPERATOR_DIR/creds/$tenant/hub-server.creds" \
-        NATS_USER=hub-server NATS_HUB_IDENTITY=hub-server "$HUB_SERVER_BIN" --nats-url "$NATS_URL" \
+        "$HUB_SERVER_BIN" --nats-url "$NATS_URL" \
             --db-path "$OPERATOR_DIR/db-$tenant" --durable --require-bound-identity \
             --api-admin admin-1 >"$OPERATOR_DIR/hub-$tenant.log" 2>&1 &
         pids+=("$!")

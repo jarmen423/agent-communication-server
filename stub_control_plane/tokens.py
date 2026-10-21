@@ -5,7 +5,7 @@ offline against the published JWKS, so the control plane is not on the hot
 path of tool calls and endpoint replicas share nothing but the public key.
 The cost is that a revoked access token stays usable until it expires, so
 access tokens are short-lived (15 min by default) and every refresh and
-every NATS credential issue rechecks the grant.
+every OAuth-path NATS credential issue rechecks the grant (``acs_grant`` claim).
 
 Claims:
 
@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 TENANT_CLAIM = "acs_tenant"
 IDENTITY_CLAIM = "acs_identity"
+GRANT_CLAIM = "acs_grant"  # authorization-code grant (refresh family) the token came from
 
 
 def _b64url(data: bytes) -> str:
@@ -80,7 +81,8 @@ class TokenIssuer:
         }]}
 
     def mint(self, *, subject: str, client_id: str, audience: str, scopes: list[str],
-             tenant: str, identity: str, ttl_secs: int) -> IssuedToken:
+             tenant: str, identity: str, ttl_secs: int,
+             grant: str | None = None) -> IssuedToken:
         now = int(time.time())
         jti = secrets.token_urlsafe(16)
         claims = {
@@ -89,6 +91,8 @@ class TokenIssuer:
             "client_id": client_id, "scope": " ".join(scopes),
             TENANT_CLAIM: tenant, IDENTITY_CLAIM: identity,
         }
+        if grant is not None:
+            claims[GRANT_CLAIM] = grant
         token = jwt.encode(claims, self._key, algorithm="EdDSA",
                            headers={"kid": self.kid, "typ": "at+jwt"})
         return IssuedToken(token, jti, claims["exp"])

@@ -235,9 +235,19 @@ def test_nats_credentials_api():
         assert signer.verify(f"{head}.{payload}".encode(),
                              base64.urlsafe_b64decode(sig + "=" * (-len(sig) % 4)))
         assert store.identity("T_A", "claude-web-1").nats_public_keys == [pub]
-        # Revoking the identity stops issuance at once.
+        # Revoking the grant family (refresh-token reuse, /revoke) stops a
+        # still-valid access token from minting NATS creds; the family is
+        # persisted, so this also holds after a stub restart.
+        grant = decode_jwt(tok["access_token"])["acs_grant"]
+        store.revoke_family(grant)
+        denied = await http.post(url, json={"public_key": pub}, headers=auth)
+        assert denied.status_code == 401 and "grant" in denied.text
+        store.grants[grant].revoked = False
+        assert (await http.post(url, json={"public_key": pub}, headers=auth)).status_code == 200
+        # Revoking the identity stops issuance at once (the grant check sees
+        # it first, so 401; the identity check is the 403 backstop).
         store.identity("T_A", "claude-web-1").revoked = True
-        assert (await http.post(url, json={"public_key": pub}, headers=auth)).status_code == 403
+        assert (await http.post(url, json={"public_key": pub}, headers=auth)).status_code in (401, 403)
     run(go())
 
 
@@ -298,3 +308,18 @@ def test_refuses_non_loopback_bind(tmp_path):
         stub_main(["--host", "0.0.0.0", "--resource", RESOURCE,
                    "--service-key-file", str(tmp_path / "k")])
     assert "DEV ONLY" in str(e.value)
+
+
+def test_cimd_ssrf_guard_rejects_private_hosts():
+    """Unauthenticated /authorize?client_id=<url> makes the stub fetch that
+    URL; it must never reach loopback, private or link-local addresses."""
+    from stub_control_plane.provider import _public_host
+
+    async def go():
+        for url in ("https://127.0.0.1/c.json", "https://localhost/c.json",
+                    "https://10.0.0.5/c.json", "https://192.168.1.1/c.json",
+                    "https://169.254.169.254/latest/meta-data", "https://[::1]/c.json",
+                    "https://no-such-host.invalid/c.json"):
+            assert not await _public_host(url), url
+        assert await _public_host("https://8.8.8.8/c.json")
+    run(go())

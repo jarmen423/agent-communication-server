@@ -63,6 +63,7 @@ class RefreshRecord:
 class Store:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path) if path else None
+        self.devices: dict[str, dict] = {}  # device id → hashed credentials + ownership
         self.clients: dict[str, dict] = {}  # client_id → OAuthClientInformationFull JSON
         self.identities: dict[str, Identity] = {}  # "<tenant>/<identity>" → record
         self.installs: dict[str, str] = {}  # "<tenant>/<owner>/<client_id>" → identity
@@ -140,6 +141,7 @@ class Store:
             return
         self.purge_expired()
         data: dict[str, Any] = {
+            "devices": self.devices,
             "clients": self.clients,
             "identities": {k: asdict(v) for k, v in self.identities.items()},
             "installs": self.installs,
@@ -157,6 +159,7 @@ class Store:
 
     def _load(self) -> None:
         data = json.loads(self.path.read_text())  # type: ignore[union-attr]
+        self.devices = data.get("devices", {})
         self.clients = data.get("clients", {})
         self.identities = {k: Identity(**v) for k, v in data.get("identities", {}).items()}
         self.installs = data.get("installs", {})
