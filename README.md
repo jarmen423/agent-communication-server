@@ -91,6 +91,23 @@ claude plugin marketplace add jarmen423/agent-communication-server   # then inst
 The plugin's MCP server reads `NATS_URL` (default `nats://127.0.0.1:4222`),
 `NATS_HUB_IDENTITY` and the usual `NATS_*` auth env vars.
 
+### D. Preview the hosted flow (all local, DEV ONLY pieces)
+
+Hosted ACS (`docs/HOSTED_PLAN.md`): sign in once with the `acs` connector,
+then every agent on the machine joins your tenant. Locally, against a stub
+control plane on an operator-mode stack:
+
+```bash
+scripts/dev/install_nsc.sh
+scripts/dogfood_hosted.sh                      # acs login → agent add → mcp install → delegate,
+                                               # wave, file lock, backup/restore; remote MCP; visualizer
+scripts/dogfood_hosted.sh --real-worker claude # also delegate a one-word prompt to Claude Code
+make demo-remote-mcp                           # the endpoint web chat apps (claude.ai, ChatGPT) connect to
+```
+
+Guides: `docs/ACS_CONNECTOR.md` (connector), `docs/REMOTE_MCP.md` (web chat
+apps), `docs/OPERATOR_MODE.md` (tenancy), `docs/FILE_LOCKS.md`.
+
 ## Release binaries
 
 Each `v*` tag publishes `nats-hub-<version>-<target>.tar.gz` for

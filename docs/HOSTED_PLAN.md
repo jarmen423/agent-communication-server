@@ -400,15 +400,23 @@ The residual risks in `SECURITY.md` change meaning once a tenant is a team:
 
 | Phase | What | Repo | Exit criteria |
 |---|---|---|---|
-| **H-0 spike** | Operator spike implemented: see §3 H-0 results and `OPERATOR_MODE.md` (remote-MCP research tracked separately as H-0b). Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT; check remote-MCP connector support (OAuth, tool timeouts, plan/approval requirements) in claude.ai, ChatGPT and Grok | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decisions recorded here |
-| **H-1 connector** | Client crate split; `acs` login (incl. headless/service key)/up/status/agent/mcp install against a stub control plane; creds refresh; packaging (brew, curl install) | public | `acs login` → `acs mcp install claude` → delegate a task on a local operator-mode stack; a bot host joins headless |
-| **H-1b remote MCP endpoint** | Streamable-HTTP MCP server backed by JetStream (stateless), OAuth against the stub control plane, turn-bounded waits | public | claude.ai (as a custom connector) delegates to a local worker and fetches the result in a later turn |
+| **H-0 spike** ✅ | Operator spike implemented: see §3 H-0 results and `OPERATOR_MODE.md` (remote-MCP research tracked separately as H-0b). Operator mode + resolver; scoped signing keys reproducing `acl.rs` per role; run `dogfood_prod_config.sh` and `dogfood_durable.sh` against an operator-mode account; two-tenant isolation test; JWT expiry/refresh/revocation with our clients; decide on extra channels; write up callout vs JWT; check remote-MCP connector support (OAuth, tool timeouts, plan/approval requirements) in claude.ai, ChatGPT and Grok | public (test harness + docs) | Both dogfoods pass in operator mode; isolation test green; decisions recorded here |
+| **H-1 connector** ✅ (H-1a crate split + H-1c `acs`, 2026-10-21; `docs/ACS_CONNECTOR.md`) | Client crate split; `acs` login (incl. headless/service key)/up/status/agent/mcp install against a stub control plane; creds refresh; packaging (brew, curl install) | public | `acs login` → `acs mcp install claude` → delegate a task on a local operator-mode stack; a bot host joins headless |
+| **H-1b remote MCP endpoint** ✅ (2026-10-21; `docs/REMOTE_MCP.md`; not yet tried live in claude.ai/ChatGPT) | Streamable-HTTP MCP server backed by JetStream (stateless), OAuth against the stub control plane, turn-bounded waits | public | claude.ai (as a custom connector) delegates to a local worker and fetches the result in a later turn |
 | **H-2 control plane MVP** | Sign-up, tenant create (account JWT push + hub-server container), device-code flow, identity minting, revocation | private | A new user goes from sign-up to a delegated task with no manual steps |
 | **H-3 hosted ops + private beta** | Cluster, TLS, limits, encryption at rest, monitoring, backups (W2-B) | private infra | 2 weeks of beta tenants without manual intervention |
 | **H-4 product** | Dashboard (visualizer behind ACS login, W2-C), billing, self-serve | private + public | Paid sign-up works |
 
 W2-B (retention, backup) feeds H-3; W2-C (visualizer) becomes the H-4
-dashboard; W2-D (file locks) is independent.
+dashboard; W2-D (file locks) is independent. All three are done (2026-10-21).
+
+**Status (2026-10-21):** everything that can be built in the public repo
+without cloud resources is done and runs end to end locally
+(`scripts/dogfood_hosted.sh`, transcript in
+`.planning/hosted/live-e2e-2026-10-21.md`). Next: try the remote MCP
+endpoint as a real claude.ai/ChatGPT custom connector through a tunnel, then
+H-2 (private control plane) and H-3 (cloud), which need a private repo and
+infrastructure decisions (§11).
 
 ## 11. Open decisions
 

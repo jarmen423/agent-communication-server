@@ -269,10 +269,14 @@ make test-py     # = scripts/dev/with_stack.sh .venv/bin/python -m pytest -q tes
 with a temp DB, then exports `NATS_URL` and `NATS_HUB_TEST_STACK=1`. Without
 it, NATS-dependent Rust tests skip and Python `live` tests are skipped.
 
-At the time of writing, `main` has about **156 Rust tests** (51 unit tests in
-`src/`, 105 in 16 integration files) and about **100 Python tests** in 11
-files. CI (`.github/workflows/ci.yml`) runs fmt, build, both suites and the
-`no-storage` library check on every push.
+At the time of writing (2026-10-21), `main` has about **300 Rust tests** and
+about **425 Python tests**. CI (`.github/workflows/ci.yml`) runs fmt, clippy,
+build, the full suite in three modes (default, `make test-bound`,
+`make test-durable`), the `no-storage`/client-dependency check, `reuse lint`,
+the operator-mode suite (tenant isolation, credential expiry), the remote MCP
+e2e (`make test-remote-mcp`), the `acs` e2e (`make test-acs`) and the
+visualizer Playwright smoke test on every push. `scripts/dogfood_hosted.sh`
+runs the whole hosted flow locally.
 
 | Rust integration file | Covers |
 |---|---|
