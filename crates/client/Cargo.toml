@@ -8,7 +8,7 @@ license = "Apache-2.0"
 repository = "https://github.com/jarmen423/agent-communication-server"
 readme = "../../README.md"
 authors = ["Agent Memory Labs <josh@agentmemorylabs.com>"]
-keywords = ["nats", "agent", "messaging", "communication", "surrealdb"]
+keywords = ["nats", "agent", "messaging", "communication"]
 categories = ["network-programming", "asynchronous"]
 
 [lib]
