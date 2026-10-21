@@ -38,7 +38,7 @@ pub(super) async fn fetch_visible(
         Err(resp) => return resp,
     };
     if !req.params.is_object() && !req.params.is_null() {
-        return dispatch(storage, req, op).await; // let the handler report it
+        return dispatch(storage, req, op, &ApiAuthz::default()).await; // let the handler report it
     }
     let key = if op == "history.query" {
         "envelopes"
@@ -56,7 +56,7 @@ pub(super) async fn fetch_visible(
     let mut kept: Vec<Value> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for _ in 0..pages {
-        let resp = dispatch(storage, &page_req, op).await;
+        let resp = dispatch(storage, &page_req, op, &ApiAuthz::default()).await;
         if !resp.ok {
             return resp;
         }

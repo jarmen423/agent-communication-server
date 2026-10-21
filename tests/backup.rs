@@ -147,26 +147,25 @@ async fn backup_restore_roundtrip() {
 }
 
 #[tokio::test]
-async fn backup_export_is_admin_only() {
+async fn backup_export_is_admin_only_and_confined_to_backup_dir() {
     let dir = TempDir::new().unwrap();
     let storage: Arc<dyn Storage> = Arc::new(SurrealStorage::connect_memory().await.unwrap());
     storage.migrate().await.unwrap();
-    let out = dir.path().join("b.surql");
-    let params = |p: &std::path::Path| json!({"path": p.display().to_string()});
-    let req = |p: &std::path::Path| {
-        serde_json::to_vec(&json!({"op": "backup.export", "params": params(p)})).unwrap()
+    let req = |name: &str| {
+        serde_json::to_vec(&json!({"op": "backup.export", "params": {"name": name}})).unwrap()
     };
 
     let authz = ApiAuthz {
         require_bound: false,
         admins: ["ops".to_string()].into_iter().collect(),
+        backup_dir: Some(dir.path().to_path_buf()),
     };
 
     // Bound non-admin caller → denied (write op, no ownership rule).
     let resp = handle_request_authorized(
         &storage,
         "hub.api.mallory.backup.export",
-        &req(&out),
+        &req("b.surql"),
         &authz,
     )
     .await;
@@ -174,16 +173,47 @@ async fn backup_export_is_admin_only() {
 
     // Anonymous legacy caller on an enforcing hub → denied.
     let resp =
-        handle_request_authorized(&storage, "hub.api.backup.export", &req(&out), &authz).await;
+        handle_request_authorized(&storage, "hub.api.backup.export", &req("b.surql"), &authz).await;
     assert!(!resp.ok, "legacy caller must be denied: {resp:?}");
 
-    // Admin → allowed; the export lands on disk.
-    let resp =
-        handle_request_authorized(&storage, "hub.api.ops.backup.export", &req(&out), &authz).await;
+    // Admin → allowed; the export lands inside --backup-dir.
+    let resp = handle_request_authorized(
+        &storage,
+        "hub.api.ops.backup.export",
+        &req("b.surql"),
+        &authz,
+    )
+    .await;
     assert!(resp.ok, "admin export failed: {resp:?}");
-    assert!(out.is_file());
+    assert!(dir.path().join("b.surql").is_file());
 
-    // Missing path param → handler-level error (still admin-gated first).
+    // Existing file → refused (never overwrites).
+    let resp = handle_request_authorized(
+        &storage,
+        "hub.api.ops.backup.export",
+        &req("b.surql"),
+        &authz,
+    )
+    .await;
+    assert!(!resp.ok, "overwrite must be refused: {resp:?}");
+
+    // Paths, traversal and hidden names → refused, even for an admin.
+    let outside = dir.path().parent().unwrap().join("escaped.surql");
+    for bad in [
+        "../escaped.surql",
+        "/tmp/x.surql",
+        "a/b.surql",
+        ".hidden",
+        "",
+    ] {
+        let resp =
+            handle_request_authorized(&storage, "hub.api.ops.backup.export", &req(bad), &authz)
+                .await;
+        assert!(!resp.ok, "{bad:?} must be refused: {resp:?}");
+    }
+    assert!(!outside.exists());
+
+    // Missing name → handler-level error (still admin-gated first).
     let resp = handle_request_authorized(
         &storage,
         "hub.api.ops.backup.export",
@@ -191,14 +221,30 @@ async fn backup_export_is_admin_only() {
         &authz,
     )
     .await;
-    assert!(!resp.ok && resp.error.unwrap().contains("path"));
+    assert!(!resp.ok && resp.error.unwrap().contains("name"));
 
-    // A permissive hub (no admins, no bound requirement) allows it — same
-    // as every other op on a hub with no authorization configured.
-    let permissive = ApiAuthz::permissive();
-    let out2 = dir.path().join("b2.surql");
-    let resp =
-        handle_request_authorized(&storage, "hub.api.backup.export", &req(&out2), &permissive)
-            .await;
+    // A permissive hub allows the op (as every op), but still only inside
+    // --backup-dir…
+    let permissive = ApiAuthz {
+        backup_dir: Some(dir.path().to_path_buf()),
+        ..ApiAuthz::permissive()
+    };
+    let resp = handle_request_authorized(
+        &storage,
+        "hub.api.backup.export",
+        &req("b2.surql"),
+        &permissive,
+    )
+    .await;
     assert!(resp.ok, "permissive hub export failed: {resp:?}");
+
+    // …and without --backup-dir the op is disabled for everyone.
+    let resp = handle_request_authorized(
+        &storage,
+        "hub.api.backup.export",
+        &req("b3.surql"),
+        &ApiAuthz::permissive(),
+    )
+    .await;
+    assert!(!resp.ok && resp.error.unwrap().contains("--backup-dir"));
 }

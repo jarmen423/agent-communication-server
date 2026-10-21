@@ -100,6 +100,11 @@ struct Args {
     #[arg(long = "api-admin")]
     api_admin: Vec<String>,
 
+    /// Directory the `backup.export` op (and `hub-server backup`) writes
+    /// into. Without it the op is disabled. Callers only pick a file name.
+    #[arg(long)]
+    backup_dir: Option<std::path::PathBuf>,
+
     /// Worker liveness TTL (seconds) for wave orchestration: a worker
     /// silent longer than this loses its running wave tasks. Falls back
     /// to env NATS_HUB_WAVE_LIVENESS_SECS, then 90.
@@ -148,7 +153,8 @@ struct Args {
 enum HubCommand {
     /// Write a consistent backup of the RUNNING hub-server's database by
     /// calling the admin-only `backup.export` query-API op. The export
-    /// lands on the hub host at --out (the file must not already exist).
+    /// lands on the hub host as <--backup-dir of that hub-server>/<--name>
+    /// (the file must not already exist).
     Backup {
         /// NATS server URL
         #[arg(long, default_value = "nats://127.0.0.1:4222")]
@@ -160,9 +166,10 @@ enum HubCommand {
         #[arg(long)]
         identity: Option<String>,
 
-        /// File the hub-server writes the export to (on the hub host).
+        /// File name inside the running hub-server's --backup-dir
+        /// ([A-Za-z0-9._-], no '/'). Default: hub-<UTC timestamp>.surql
         #[arg(long)]
-        out: std::path::PathBuf,
+        name: Option<String>,
     },
 
     /// Restore a `hub-server backup` export into a FRESH --db-path.
@@ -181,16 +188,16 @@ enum HubCommand {
 }
 
 /// `hub-server backup`: ask the running hub-server to export its DB.
-async fn run_backup(nats_url: &str, identity: Option<&str>, out: &std::path::Path) -> Result<()> {
+async fn run_backup(nats_url: &str, identity: Option<&str>, name: Option<&str>) -> Result<()> {
+    let name = name
+        .map(String::from)
+        .unwrap_or_else(|| format!("hub-{}.surql", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")));
     let api = match identity {
         Some(id) => nats_hub::ApiClient::connect_with_identity(nats_url, id).await?,
         None => nats_hub::ApiClient::connect(nats_url).await?,
     };
     let resp = api
-        .request(
-            "backup.export",
-            serde_json::json!({"path": out.display().to_string()}),
-        )
+        .request("backup.export", serde_json::json!({ "name": name }))
         .await?;
     let path = resp.get("path").and_then(|v| v.as_str()).unwrap_or("?");
     let bytes = resp.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -299,8 +306,8 @@ async fn main() -> Result<()> {
         Some(HubCommand::Backup {
             ref nats_url,
             ref identity,
-            ref out,
-        }) => return run_backup(nats_url, identity.as_deref(), out).await,
+            ref name,
+        }) => return run_backup(nats_url, identity.as_deref(), name.as_deref()).await,
         #[cfg(feature = "storage-surreal")]
         Some(HubCommand::Restore {
             ref db_path,
@@ -401,6 +408,7 @@ async fn main() -> Result<()> {
     let api_authz = nats_hub::query_api::ApiAuthz {
         require_bound: args.require_bound_identity,
         admins: api_admins,
+        backup_dir: args.backup_dir.clone(),
     };
     if args.require_bound_identity {
         info_log("require-bound-identity: legacy hub.send/hub.register/hub.presence/hub.api.<op> subjects are rejected");

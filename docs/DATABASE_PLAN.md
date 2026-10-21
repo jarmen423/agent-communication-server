@@ -350,11 +350,12 @@ protected. `reply_to` edges die with their records (SurrealDB cascades them).
 
 ## Backup & restore (iteration 2)
 
-- **Hot backup**: `hub-server backup --identity <admin> --out file.surql`
+- **Hot backup**: `hub-server backup --identity <admin> [--name file.surql]`
   calls the admin-only `backup.export` query-API op; the running hub-server
   writes a consistent `.surql` snapshot (single read transaction — schema
-  `DEFINE`s plus all table data and `reply_to` edges) to a path on the hub
-  host. Refuses to overwrite. Gate it with `--api-admin`.
+  `DEFINE`s plus all table data and `reply_to` edges) into its
+  `--backup-dir` (the op is disabled without one; callers pick only a file
+  name). Refuses to overwrite. Gate it with `--api-admin`.
 - **Restore**: `hub-server restore --db-path <fresh> --from file.surql` —
   offline, imports into a fresh path (the export's `DEFINE`s fail on an
   already-migrated DB), then runs `migrate()` and prints per-table counts.

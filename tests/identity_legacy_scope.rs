@@ -25,6 +25,7 @@ fn admin_only() -> ApiAuthz {
     ApiAuthz {
         require_bound: false,
         admins: BTreeSet::from(["boss".to_string()]),
+        ..Default::default()
     }
 }
 

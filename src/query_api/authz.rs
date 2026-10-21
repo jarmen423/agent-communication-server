@@ -115,6 +115,9 @@ pub struct ApiAuthz {
     /// Identities allowed to invoke write ops (`--api-admin`, repeatable;
     /// `NATS_HUB_API_ADMINS` comma-separated env is merged in by hub-server).
     pub admins: BTreeSet<String>,
+    /// Directory `backup.export` writes into (`hub-server --backup-dir`).
+    /// `None` disables the op: callers name a file, never a path.
+    pub backup_dir: Option<std::path::PathBuf>,
 }
 
 impl ApiAuthz {

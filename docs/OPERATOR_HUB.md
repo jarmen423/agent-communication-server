@@ -327,17 +327,24 @@ The only persistent state is the RocksDB at `/var/lib/nats-hub/nats_hub.db`.
 `hub-server` exposes a `backup.export` query-API op that asks the **running**
 hub-server to write a consistent `.surql` snapshot of its database (the export
 runs in a single read transaction). It's a filesystem write on the hub host,
-so it is **admin-only** — run it with an identity listed in `--api-admin`
-(or `NATS_HUB_API_ADMINS`):
+so two things gate it:
+
+- **It's off until the operator picks a directory.** Start hub-server with
+  `--backup-dir /var/backups/nats-hub`. Callers only choose a file *name*
+  inside it (`[A-Za-z0-9._-]`, no `/`, not starting with `.`), never a path.
+- **It's admin-only.** Run it with an identity listed in `--api-admin` (or
+  `NATS_HUB_API_ADMINS`):
 
 ```bash
-hub-server backup --identity ops --out /var/backups/nats-hub/hub-$(date +%F-%H%M).surql
+hub-server backup --identity ops                     # name: hub-<UTC timestamp>.surql
+hub-server backup --identity ops --name before-upgrade.surql
 ```
 
 `--identity` defaults to `NATS_HUB_IDENTITY`. On a hub with no `--api-admin`
 and no `--require-bound-identity`, `backup.export` is unauthenticated like
-every other op — set `--api-admin` before exposing this on a real deployment.
-The export refuses to overwrite an existing file; use timestamped names.
+every other op (still confined to `--backup-dir`). Set `--api-admin` before
+exposing this on a real deployment. The export refuses to overwrite an
+existing file.
 
 Restore is offline and writes a **fresh** DB path — the export carries its
 own schema, so the target must be empty:

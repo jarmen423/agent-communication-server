@@ -19,6 +19,7 @@ fn authz() -> ApiAuthz {
     ApiAuthz {
         require_bound: true,
         admins: BTreeSet::from(["boss".to_string()]),
+        ..Default::default()
     }
 }
 
