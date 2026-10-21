@@ -98,24 +98,30 @@ live = pytest.mark.skipif(
 def test_live_acquire_wait_release():
     """A locks, B waits (with event-driven unblock), A releases, B proceeds."""
     async def run():
-        os.environ["NATS_HUB_IDENTITY"] = "pytest-a"
-        got = await hub_handlers.HANDLERS["lock_files"](
-            {"scope": "live-repo", "paths": ["src/main.py"]})
-        assert got["ok"], got
-        lock_id = got["data"]["lock"]["lock_id"]
+        try:
+            os.environ["NATS_HUB_IDENTITY"] = "pytest-a"
+            got = await hub_handlers.HANDLERS["lock_files"](
+                {"scope": "live-repo", "paths": ["src/main.py"]})
+            assert got["ok"], got
+            lock_id = got["data"]["lock"]["lock_id"]
 
-        # Waiter B sees A's lock, then unblocks on release.
-        async def wait_free():
-            os.environ["NATS_HUB_IDENTITY"] = "pytest-b"
-            return await hub_locks._wait_for_files(
-                {"scope": "live-repo", "paths": ["src/main.py"], "timeout": 20})
+            # Waiter B sees A's lock, then unblocks on release.
+            async def wait_free():
+                os.environ["NATS_HUB_IDENTITY"] = "pytest-b"
+                return await hub_locks._wait_for_files(
+                    {"scope": "live-repo", "paths": ["src/main.py"], "timeout": 20})
 
-        waiter = asyncio.create_task(wait_free())
-        await asyncio.sleep(0.5)
-        os.environ["NATS_HUB_IDENTITY"] = "pytest-a"
-        rel = await hub_handlers.HANDLERS["release_files"]({"lock_id": lock_id})
-        assert rel["ok"], rel
-        res = await asyncio.wait_for(waiter, timeout=25)
-        assert res["ok"] and res["data"]["free"], res
+            waiter = asyncio.create_task(wait_free())
+            await asyncio.sleep(0.5)
+            os.environ["NATS_HUB_IDENTITY"] = "pytest-a"
+            rel = await hub_handlers.HANDLERS["release_files"]({"lock_id": lock_id})
+            assert rel["ok"], rel
+            res = await asyncio.wait_for(waiter, timeout=25)
+            assert res["ok"] and res["data"]["free"], res
+        finally:
+            # conn._nc is a module-global cached client bound to THIS loop;
+            # drain it before asyncio.run closes the loop or later tests in
+            # the suite inherit a client on a dead loop (requests time out).
+            await conn.close()
 
     asyncio.run(run())
