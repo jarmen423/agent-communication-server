@@ -80,10 +80,14 @@ database access. The `no-storage` build doesn't include SurrealDB. Details:
 [`docs/DATABASE_PLAN.md`](docs/DATABASE_PLAN.md) and
 [`docs/PORTABILITY.md`](docs/PORTABILITY.md).
 
-The pet sprites under `visualizer/pets/` were copied from Petdex pet installs.
-Agent Memory Labs didn't author them and doesn't license them. Their terms
-haven't been verified yet
-([`LICENSES/LicenseRef-Petdex-Unverified.txt`](LICENSES/LicenseRef-Petdex-Unverified.txt)).
+The visualizer vendors **p5.js 1.11.3** under `visualizer/vendor/`
+(`p5.min.js`, SHA-256 recorded in `visualizer/vendor/p5.VERSION`). p5.js is
+under the **GNU Lesser General Public License v2.1 or later**
+([`LICENSES/LGPL-2.1-or-later.txt`](LICENSES/LGPL-2.1-or-later.txt)). It is
+loaded unmodified as a separate library file; the visualizer's own code
+remains BUSL-1.1 as above. The default agent theme
+(`visualizer/themes/default/`) is original procedural artwork authored for
+nats-hub and redistributable under BUSL-1.1 like the rest of the visualizer.
 
 ## Contributions
 
