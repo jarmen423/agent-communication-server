@@ -45,6 +45,22 @@ from nats.aio.client import Client
 _TLS_SCHEMES = ("wss://", "tls://", "tls+ws://")
 
 
+class _RefreshingCredentialsClient(Client):
+    """nats-py closes permanently on an expiry -ERR (even with reconnect on).
+
+    Reconnect this one recoverable authentication event using nats-py's
+    existing file callbacks. The normal reconnect path preserves subscriptions.
+    Revocation and other authorization failures retain the library's behavior.
+    """
+
+    async def _process_err(self, err_msg: str) -> None:
+        if (err_msg.strip("'\" ").lower() == "user authentication expired"
+                and self.is_connected and self.options["allow_reconnect"]):
+            await self._process_op_err(nats.errors.Error("nats: user authentication expired"))
+            return
+        await super()._process_err(err_msg)
+
+
 def _env(name: str) -> Optional[str]:
     """Read an env var; return None if unset or empty."""
     v = os.environ.get(name)
@@ -253,4 +269,8 @@ async def connect_nats(
     # Caller-supplied extras (connect_timeout, error_cb, etc.) win last.
     connect_kwargs.update(extra)
 
+    if credentials_file:
+        nc = _RefreshingCredentialsClient()
+        await nc.connect(**connect_kwargs)
+        return nc
     return await nats.connect(**connect_kwargs)

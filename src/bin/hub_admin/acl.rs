@@ -142,10 +142,47 @@ fn publish_allow(identity: &str, role: &str, js: &JsNames) -> Vec<String> {
     allow
 }
 
-fn quoted_list(items: &[String]) -> String {
+/// Shared config-mode and scoped-signing-key permission policy.
+pub(crate) fn permissions(
+    identity: &str,
+    role: &str,
+    channels: &[String],
+    js: &JsNames,
+) -> serde_json::Value {
+    let (publish, subscribe) = if role == "hub-server" {
+        (
+            vec![
+                "channel.>".into(),
+                "hub.>".into(),
+                "$JS.API.>".into(),
+                "$JS.ACK.>".into(),
+            ],
+            vec![
+                "hub.>".into(),
+                "channel.>".into(),
+                format!("_INBOX.{identity}.>"),
+            ],
+        )
+    } else {
+        (
+            publish_allow(identity, role, js),
+            subscribe_allow(identity, role, channels),
+        )
+    };
+    let mut policy = serde_json::json!({"pub": {"allow": publish}, "sub": {"allow": subscribe}});
+    if matches!(role, "service" | "hub-server") {
+        // Config allow_responses:true defaults: one response within two seconds.
+        policy["resp"] = serde_json::json!({"max": 1, "ttl": 2_000_000_000u64});
+    }
+    policy
+}
+
+fn quoted_list(items: &serde_json::Value) -> String {
     items
+        .as_array()
+        .unwrap()
         .iter()
-        .map(|s| format!("\"{s}\""))
+        .map(|s| s.to_string())
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -177,6 +214,7 @@ pub(crate) fn user_entry(
     } else {
         ""
     };
+    let policy = permissions(identity, role, channels, js);
     format!(
         r#"    # role: {role}
     {{ user: "{identity}", {cred},{conn_type}
@@ -184,8 +222,8 @@ pub(crate) fn user_entry(
         publish: {{ allow: [{}] }},
         subscribe: {{ allow: [{}] }},{responses}
       }} }},"#,
-        quoted_list(&publish_allow(identity, role, js)),
-        quoted_list(&subscribe_allow(identity, role, channels)),
+        quoted_list(&policy["pub"]["allow"]),
+        quoted_list(&policy["sub"]["allow"]),
     )
 }
 
@@ -204,13 +242,85 @@ pub(crate) fn user_entry(
 ///   creates the streams and consumers and acks ingress; harmless without
 ///   JetStream.
 pub(crate) fn hub_server_entry(password: &str) -> String {
+    let policy = permissions("hub-server", "hub-server", &[], &JsNames::default());
+    let publish = quoted_list(&policy["pub"]["allow"]);
+    let subscribe = quoted_list(&policy["sub"]["allow"]);
     format!(
         r#"    # role: hub-server (router, query API, wave orchestrator, ws bridge)
     {{ user: "hub-server", password: "{password}",
       permissions: {{
-        publish: {{ allow: ["channel.>", "hub.>", "$JS.API.>", "$JS.ACK.>"] }},
-        subscribe: {{ allow: ["hub.>", "channel.>", "_INBOX.hub-server.>"] }},
+        publish: {{ allow: [{publish}] }},
+        subscribe: {{ allow: [{subscribe}] }},
         allow_responses: true,
       }} }},"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn templates_reproduce_config_mode_allowlists() {
+        for identity in ["bob", "agent_2", "hub-server"] {
+            for role in ["worker", "orchestrator", "admin", "service", "hub-server"] {
+                let template =
+                    permissions("{{name()}}", role, &["chat".into()], &JsNames::default());
+                let expanded: serde_json::Value =
+                    serde_json::from_str(&template.to_string().replace("{{name()}}", identity))
+                        .unwrap();
+                // Frozen pre-H0 config-mode policy: catches simultaneous
+                // broadening of the config renderer and JWT templates.
+                let expected = if role == "hub-server" {
+                    json!({"pub": {"allow": ["channel.>", "hub.>", "$JS.API.>", "$JS.ACK.>"]},
+                        "sub": {"allow": ["hub.>", "channel.>", format!("_INBOX.{identity}.>")]},
+                        "resp": {"max": 1, "ttl": 2_000_000_000u64}})
+                } else {
+                    let mut publish = vec![
+                        format!("hub.pub.{identity}.>"),
+                        format!("hub.register.{identity}"),
+                        format!("hub.presence.{identity}"),
+                        format!("hub.api.{identity}.>"),
+                    ];
+                    if role != "worker" {
+                        publish.push("hub.worker.>".into());
+                    }
+                    publish.extend([
+                        format!("hub.delivery.{identity}.>"),
+                        format!("$JS.API.CONSUMER.INFO.HUB_INBOX.inbox-{identity}"),
+                        format!("$JS.API.CONSUMER.MSG.NEXT.HUB_INBOX.inbox-{identity}"),
+                        format!("$JS.ACK.HUB_INBOX.inbox-{identity}.>"),
+                        "$JS.API.DIRECT.GET.HUB_TASKS".into(),
+                    ]);
+                    let mut subscribe = vec![
+                        format!("channel.inbox.{identity}"),
+                        "channel.task.>".into(),
+                        "channel.session.>".into(),
+                        "channel.wave.>".into(),
+                        format!("_INBOX.{identity}.>"),
+                    ];
+                    if role == "service" {
+                        subscribe.extend([
+                            "hub.presence.*".into(),
+                            "hub.register.*".into(),
+                            "hub.worker.>".into(),
+                        ]);
+                    }
+                    subscribe.push("channel.chat".into());
+                    let mut expected =
+                        json!({"pub": {"allow": publish}, "sub": {"allow": subscribe}});
+                    if role == "service" {
+                        expected["resp"] = json!({"max": 1, "ttl": 2_000_000_000u64});
+                    }
+                    expected
+                };
+                assert_eq!(expanded, expected, "{role}/{identity}");
+                assert_eq!(
+                    expanded,
+                    permissions(identity, role, &["chat".into()], &JsNames::default())
+                );
+            }
+        }
+    }
 }

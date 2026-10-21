@@ -81,6 +81,41 @@ enum Cmd {
     AddAgent(AddAgentArgs),
     /// Render a complete nats-server.conf from an agents file.
     RenderConfig(RenderConfigArgs),
+    /// Emit JWT scoped-signing-key permissions as JSON (identity = {{name()}}).
+    PermissionTemplate(TemplateArgs),
+}
+
+#[derive(Args)]
+struct TemplateArgs {
+    /// worker | orchestrator | admin | service | hub-server
+    #[arg(long)]
+    role: String,
+    /// Tenant-wide extra broadcast channel (repeatable).
+    #[arg(long = "channel")]
+    channels: Vec<String>,
+    #[command(flatten)]
+    js: JsArgs,
+}
+
+fn cmd_template(a: TemplateArgs) -> Result<()> {
+    if !ROLES.contains(&a.role.as_str()) && a.role != "hub-server" {
+        bail!("unknown role {:?}", a.role);
+    }
+    let channels = a
+        .channels
+        .iter()
+        .map(|ch| check_channel(ch))
+        .collect::<Result<Vec<_>>>()?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&acl::permissions(
+            "{{name()}}",
+            &a.role,
+            &channels,
+            &a.js.names()?
+        ))?
+    );
+    Ok(())
 }
 
 #[derive(Args)]
@@ -346,5 +381,6 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::AddAgent(a) => cmd_add_agent(a),
         Cmd::RenderConfig(a) => cmd_render_config(a),
+        Cmd::PermissionTemplate(a) => cmd_template(a),
     }
 }
