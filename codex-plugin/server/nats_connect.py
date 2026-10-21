@@ -35,6 +35,9 @@ Example::
 from __future__ import annotations
 
 import os
+import base64
+import json
+from pathlib import Path
 import ssl
 from typing import Any, Optional
 
@@ -51,6 +54,11 @@ class _RefreshingCredentialsClient(Client):
     Reconnect this one recoverable authentication event using nats-py's
     existing file callbacks. The normal reconnect path preserves subscriptions.
     Revocation and other authorization failures retain the library's behavior.
+
+    nats-py 2.16.0 has force_reconnect(), but expiry goes straight from
+    _process_err to a scheduled permanent _close, without a public error_cb
+    recovery point. Retain this narrow dispatch hook and pin nats-py exactly
+    in requirements.txt; recheck it before upgrading the library.
     """
 
     async def _process_err(self, err_msg: str) -> None:
@@ -102,21 +110,36 @@ def _valid(identity: Optional[str]) -> Optional[str]:
     return None
 
 
+def credentials_identity(path: Optional[str]) -> Optional[str]:
+    """Unverified JWT name as an inbox hint only; NATS validates the JWT."""
+    if not path:
+        return None
+    try:
+        lines = Path(path).read_text().splitlines()
+        index = next(i for i, line in enumerate(lines) if "BEGIN NATS USER JWT" in line)
+        payload = lines[index + 1].strip().split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return _valid(claims.get("name"))
+    except (OSError, ValueError, IndexError, StopIteration, AttributeError, TypeError):
+        return None
+
+
 def inbox_prefix_for(
     *,
     user: Optional[str] = None,
     identity: Optional[str] = None,
     name: Optional[str] = None,
+    credentials_file: Optional[str] = None,
 ) -> Optional[str]:
     """Request-reply inbox prefix for a connection (contract C1).
 
     ``_INBOX.<id>`` where ``<id>`` is the first valid identity among: the
-    NATS ``user`` (credentials are minted per identity, so the user is the
-    permission key), the explicit ``identity``, the connection ``name``
+    NATS ``user``, the explicit ``identity``, the credential JWT's ``name``
+    permission key, the connection ``name``
     (workers pass their identity as the name), and ``NATS_HUB_IDENTITY``.
     ``None`` when none applies — nats-py then uses its default ``_INBOX``.
     """
-    for candidate in (user, identity, name, _env("NATS_HUB_IDENTITY")):
+    for candidate in (user, identity, credentials_identity(credentials_file), name, _env("NATS_HUB_IDENTITY")):
         ok = _valid(candidate)
         if ok:
             return f"_INBOX.{ok}"
@@ -262,7 +285,7 @@ async def connect_nats(
         connect_kwargs["nkeys_seed"] = nkeys_seed
     if tls_context is not None:
         connect_kwargs["tls"] = tls_context
-    prefix = inbox_prefix_for(user=user, identity=identity, name=name)
+    prefix = inbox_prefix_for(user=user, identity=identity, name=name, credentials_file=credentials_file)
     if prefix:
         connect_kwargs["inbox_prefix"] = prefix
 

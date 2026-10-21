@@ -129,3 +129,18 @@ def test_service_keys_and_device_revocation():
             assert (await http.post('/v1/credentials/nats', headers=headers(t),
                                     json={'identity': 'bot', 'public_key': public()})).status_code == 401
     asyncio.run(go())
+
+
+def test_jwt_inbox_hint_and_explicit_override(tmp_path, monkeypatch):
+    import base64
+    import json
+    from nats_connect import credentials_identity, inbox_prefix_for
+    monkeypatch.delenv('NATS_HUB_IDENTITY', raising=False)
+    path = tmp_path / 'identity.creds'
+    payload = base64.urlsafe_b64encode(json.dumps({'name': 'hub-server'}).encode()).rstrip(b'=').decode()
+    path.write_text(f'-----BEGIN NATS USER JWT-----\nx.{payload}.y\n')
+    assert credentials_identity(str(path)) == 'hub-server'
+    assert inbox_prefix_for(credentials_file=str(path), name='logical-client') == '_INBOX.hub-server'
+    assert inbox_prefix_for(credentials_file=str(path), identity='explicit') == '_INBOX.explicit'
+    path.write_text('BEGIN NATS USER JWT\nx.bad!.y\n')
+    assert credentials_identity(str(path)) is None

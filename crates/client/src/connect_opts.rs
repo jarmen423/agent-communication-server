@@ -34,8 +34,8 @@ use tracing::debug;
 /// instead of the shared `_INBOX`, so generated NATS permissions can let each
 /// user subscribe `_INBOX.<id>.>` only (no agent can read another's replies).
 /// `<id>` is chosen by [`HubConnectOptions::inbox_prefix`]: the NATS `user`
-/// when it is a valid identity (credentials are minted per identity, so the
-/// user *is* the permission key), else `inbox_identity`, else the default
+/// when valid, else the credentials JWT `name` (the permission key), else
+/// `inbox_identity`, else the default
 /// `_INBOX`.
 #[derive(Clone, Default)]
 pub struct HubConnectOptions {
@@ -126,14 +126,27 @@ impl HubConnectOptions {
 
     /// Request-reply inbox prefix for this connection (contract C1):
     /// `_INBOX.<user>` when `user` is a valid identity, else
-    /// `_INBOX.<inbox_identity>` when that is valid, else `None` (the
+    /// the credentials JWT `name`, else `_INBOX.<inbox_identity>` when valid,
+    /// else `None` (the
     /// async-nats default `_INBOX`).
     pub fn inbox_prefix(&self) -> Option<String> {
-        [self.user.as_deref(), self.inbox_identity.as_deref()]
-            .into_iter()
-            .flatten()
-            .find(|id| crate::protocol::valid_identity(id))
-            .map(crate::protocol::subjects::reply_inbox_prefix)
+        // The credential name is the permission key even when a HubClient
+        // has a different logical sender (the hub's internal wave client).
+        let credential_identity = self
+            .credentials_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|contents| credentials_identity(&contents));
+        let prefix = [
+            self.user.as_deref(),
+            credential_identity.as_deref(),
+            self.inbox_identity.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|id| crate::protocol::valid_identity(id))
+        .map(crate::protocol::subjects::reply_inbox_prefix);
+        prefix
     }
 
     /// Returns true when any auth field is set (not a plain anonymous connect).
@@ -270,4 +283,60 @@ fn credentials_auth(
     auth.jwt = Some(jwt.into());
     auth.signature = Some(signature);
     Ok(auth)
+}
+
+/// Read a JWT name solely as a local inbox hint; NATS verifies authentication.
+/// Keep this dependency-free for the embeddable client crate.
+fn credentials_identity(contents: &str) -> Option<String> {
+    let jwt = contents
+        .lines()
+        .skip_while(|l| !l.contains("BEGIN NATS USER JWT"))
+        .nth(1)?;
+    let payload = jwt.trim().split('.').nth(1)?;
+    let mut bytes = Vec::new();
+    let (mut bits, mut count) = (0_u32, 0_u32);
+    for c in payload.bytes().take(16 * 1024) {
+        let n = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return None,
+        };
+        bits = (bits << 6) | u32::from(n);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            bytes.push((bits >> count) as u8);
+        }
+    }
+    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let name = claims.get("name")?.as_str()?;
+    crate::protocol::valid_identity(name).then(|| name.to_owned())
+}
+
+#[cfg(test)]
+mod credential_inbox_tests {
+    use super::*;
+
+    #[test]
+    fn jwt_name_is_the_inbox_permission_key() {
+        // {"name":"hub-server"}, with an arbitrary header/signature. This is
+        // a hint only; the authentication callback/NATS verifies the creds.
+        let contents = "-----BEGIN NATS USER JWT-----\na.eyJuYW1lIjoiaHViLXNlcnZlciJ9.b\n";
+        assert_eq!(
+            credentials_identity(contents).as_deref(),
+            Some("hub-server")
+        );
+        assert!(credentials_identity("not a creds file").is_none());
+        assert!(credentials_identity("BEGIN NATS USER JWT\na.bad!.b").is_none());
+        let path = std::env::temp_dir().join(format!("acs-inbox-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, contents).unwrap();
+        let opts = HubConnectOptions::default()
+            .with_credentials_file(&path)
+            .with_inbox_identity("internal-wave-client");
+        assert_eq!(opts.inbox_prefix().as_deref(), Some("_INBOX.hub-server"));
+        std::fs::remove_file(path).unwrap();
+    }
 }
