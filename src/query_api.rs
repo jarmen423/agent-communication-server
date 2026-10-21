@@ -304,6 +304,14 @@ async fn dispatch(storage: &Arc<dyn Storage>, req: &ApiRequest, op: &str) -> Api
             ApiResponse::err(format!("{op}: analytics needs the storage-surreal feature"))
         }
 
+        // ── Backup (admin-only write — see authz::is_write_op) ─────────
+        #[cfg(feature = "storage-surreal")]
+        "backup.export" => backup_export(s, p).await,
+        #[cfg(not(feature = "storage-surreal"))]
+        op if op.starts_with("backup.") => {
+            ApiResponse::err(format!("{op}: backup needs the storage-surreal feature"))
+        }
+
         // ── Misc ───────────────────────────────────────────────
         "ping" => ApiResponse::ok(serde_json::json!({"ok": true})),
 

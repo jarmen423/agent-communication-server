@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# systemd unit for a nats-hub hot backup: asks the RUNNING hub-server to
+# export a consistent snapshot (backup.export query-API op, admin-only).
+# Pair with nats-hub-backup.timer. Install per deploy/systemd/README.md and
+# docs/OPERATOR_HUB.md "Backup".
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=nats-hub backup (consistent .surql export via backup.export)
+Documentation=https://github.com/nousresearch/nats-hub/blob/main/docs/OPERATOR_HUB.md
+Wants=nats-hub-server.service
+After=nats-hub-server.service
+# Never run two exports at once.
+ConditionPathExists=!/var/backups/nats-hub/.exporting
+
+[Service]
+Type=oneshot
+User=nats-hub
+Group=nats-hub
+
+# The caller identity must be in hub-server's --api-admin list (or
+# NATS_HUB_API_ADMINS). The export lands on this host; the filename is
+# timestamped at start time so runs never collide.
+Environment=NATS_URL=nats://127.0.0.1:4222
+Environment=NATS_HUB_IDENTITY=ops
+Environment=BACKUP_DIR=/var/backups/nats-hub
+ExecStart=/bin/sh -c '\
+    touch "$BACKUP_DIR/.exporting" && trap "rm -f $BACKUP_DIR/.exporting" EXIT; \
+    /usr/local/bin/hub-server backup \
+        --nats-url "$NATS_URL" \
+        --identity "$NATS_HUB_IDENTITY" \
+        --out "$BACKUP_DIR/hub-$(date +%%F-%%H%%M).surql"'
+
+# Sandboxing — same posture as nats-hub-server.service.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/nats-hub
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

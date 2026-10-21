@@ -319,6 +319,51 @@ DEFINE INDEX idx_wt_wave_status ON TABLE wave_tasks COLUMNS wave_id, status;
 - [ ] `LibsqlStorage` impl via `libsql` crate
 - [ ] Test parity across all three implementations
 
+## Retention (iteration 2)
+
+History grows without bound unless you turn retention on. hub-server runs a
+background pruner when any rule is configured — off by default:
+
+| Flag | Rule |
+|---|---|
+| `--retention-days N` | delete envelopes older than N days |
+| `--retention-max-envelopes N` | cap total envelopes (oldest first) |
+| `--retention-terminal-days N` | how long terminal waves/sessions (records **and** their channels' envelopes) are kept after closing; defaults to `max(4 × --retention-days, 30)` when `--retention-days` is set |
+| `--retention-batch-size N` | rows per DELETE statement (default 1000) |
+| `--retention-interval-secs N` | seconds between passes (default 3600) |
+
+Each pass deletes in bounded batches (a `SELECT VALUE id … LIMIT $batch` +
+`DELETE … WHERE id IN $ids` per batch, yielding between batches) so the
+router and the storage mirror are never blocked. Counters on `/metrics`:
+`natshub_retention_pruned_total`, `natshub_retention_pass_errors_total`.
+
+**Keep-live rule.** A pass never deletes a non-terminal session or wave
+record, or any envelope on a channel a live wave/session still uses:
+`session.<sid>`, `wave.<wid>`, `wave.<wid>.<…>`, and wave-task session
+channels `session.<wid>--<task>`. The protection set is recomputed every
+pass. Terminal sessions (`status = closed`) and waves
+(`completed`/`failed`/`cancelled`) keep their records and their channels'
+envelopes until `closed_at + terminal_retention`, then both go together —
+that's the "longer retention" for terminal state. Wave tasks end with
+`done`/`failed`/`cancelled` + `completed_at`; tasks of a *running* wave are
+protected. `reply_to` edges die with their records (SurrealDB cascades them).
+
+## Backup & restore (iteration 2)
+
+- **Hot backup**: `hub-server backup --identity <admin> --out file.surql`
+  calls the admin-only `backup.export` query-API op; the running hub-server
+  writes a consistent `.surql` snapshot (single read transaction — schema
+  `DEFINE`s plus all table data and `reply_to` edges) to a path on the hub
+  host. Refuses to overwrite. Gate it with `--api-admin`.
+- **Restore**: `hub-server restore --db-path <fresh> --from file.surql` —
+  offline, imports into a fresh path (the export's `DEFINE`s fail on an
+  already-migrated DB), then runs `migrate()` and prints per-table counts.
+- Coverage: envelopes + reply threads, agents, sessions, waves, wave tasks.
+- With `--durable`, JetStream is a **delivery buffer, not the archive** —
+  undelivered DMs/task traffic are not part of the export.
+- systemd timer: `deploy/systemd/nats-hub-backup.{service,timer}`; runbook:
+  `docs/OPERATOR_HUB.md` → Backup.
+
 ## What Does NOT Go in nats-hub's DB
 
 - ❌ Agent memory / knowledge graphs → that's Agent Memory Labs' job

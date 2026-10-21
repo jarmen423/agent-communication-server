@@ -106,6 +106,128 @@ struct Args {
     #[cfg(feature = "storage-surreal")]
     #[arg(long)]
     wave_liveness_secs: Option<u64>,
+
+    /// Envelope retention: prune history older than N days, in bounded
+    /// batches from a background task. Off by default. Envelopes on
+    /// channels a live wave/session still uses are never pruned.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    retention_days: Option<u64>,
+
+    /// Envelope retention: cap total stored envelopes at N (oldest
+    /// unprotected rows go first). Off by default.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    retention_max_envelopes: Option<u64>,
+
+    /// How long terminal (closed/failed/cancelled) waves and sessions are
+    /// kept, in days — record plus all of their channels' envelopes.
+    /// Defaults to max(4 * --retention-days, 30) when --retention-days is
+    /// set; terminal state is never pruned otherwise.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    retention_terminal_days: Option<u64>,
+
+    /// Max rows deleted per retention statement. Default 1000.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    retention_batch_size: Option<usize>,
+
+    /// Seconds between retention passes. Default 3600.
+    #[cfg(feature = "storage-surreal")]
+    #[arg(long)]
+    retention_interval_secs: Option<u64>,
+
+    /// Operator subcommands. Bare `hub-server` (no subcommand) runs the
+    /// router — all flags above apply to that mode.
+    #[command(subcommand)]
+    command: Option<HubCommand>,
+}
+
+#[derive(clap::Subcommand)]
+enum HubCommand {
+    /// Write a consistent backup of the RUNNING hub-server's database by
+    /// calling the admin-only `backup.export` query-API op. The export
+    /// lands on the hub host at --out (the file must not already exist).
+    Backup {
+        /// NATS server URL
+        #[arg(long, default_value = "nats://127.0.0.1:4222")]
+        nats_url: String,
+
+        /// Caller identity for the bound api subject (defaults to
+        /// NATS_HUB_IDENTITY). Must be in the hub's --api-admin list when
+        /// API authorization is enforced.
+        #[arg(long)]
+        identity: Option<String>,
+
+        /// File the hub-server writes the export to (on the hub host).
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+
+    /// Restore a `hub-server backup` export into a FRESH --db-path.
+    /// Offline: the hub-server owning that path must be stopped first
+    /// (RocksDB is single-writer), and the path must be empty.
+    #[cfg(feature = "storage-surreal")]
+    Restore {
+        /// Fresh SurrealDB path to restore into (must not exist or be empty)
+        #[arg(long)]
+        db_path: String,
+
+        /// The .surql export file produced by `hub-server backup`
+        #[arg(long)]
+        from: std::path::PathBuf,
+    },
+}
+
+/// `hub-server backup`: ask the running hub-server to export its DB.
+async fn run_backup(nats_url: &str, identity: Option<&str>, out: &std::path::Path) -> Result<()> {
+    let api = match identity {
+        Some(id) => nats_hub::ApiClient::connect_with_identity(nats_url, id).await?,
+        None => nats_hub::ApiClient::connect(nats_url).await?,
+    };
+    let resp = api
+        .request(
+            "backup.export",
+            serde_json::json!({"path": out.display().to_string()}),
+        )
+        .await?;
+    let path = resp.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+    let bytes = resp.get("bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+    println!("backup written: {path} ({bytes} bytes)");
+    Ok(())
+}
+
+/// `hub-server restore`: import an export into a fresh DB path. The file
+/// carries its own schema (`DEFINE TABLE`/`FIELD`/`INDEX`), so the path
+/// must be fresh — then `migrate()` runs to normalize whatever the export
+/// predates.
+#[cfg(feature = "storage-surreal")]
+async fn run_restore(db_path: &str, from: &std::path::Path) -> Result<()> {
+    let p = std::path::Path::new(db_path);
+    let non_empty = p.is_file()
+        || (p.is_dir()
+            && std::fs::read_dir(p)
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false));
+    anyhow::ensure!(
+        !non_empty,
+        "--db-path '{db_path}' is not empty; restore requires a fresh path"
+    );
+    let storage = SurrealStorage::connect(db_path)
+        .await
+        .with_context(|| format!("failed to open SurrealDB at '{db_path}'"))?;
+    nats_hub::storage::backup::import_from(&storage.db(), from).await?;
+    storage
+        .migrate()
+        .await
+        .context("post-restore migration failed")?;
+    let counts = nats_hub::storage::backup::table_counts(&storage.db()).await?;
+    println!("restored '{}' into '{db_path}':", from.display());
+    for (table, n) in counts {
+        println!("  {table:<12} {n}");
+    }
+    Ok(())
 }
 
 /// Spawn a minimal HTTP/1.0 server that responds to `GET /metrics` with the
@@ -171,6 +293,21 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+
+    // Operator subcommands run and exit — the rest of main is the router.
+    match args.command {
+        Some(HubCommand::Backup {
+            ref nats_url,
+            ref identity,
+            ref out,
+        }) => return run_backup(nats_url, identity.as_deref(), out).await,
+        #[cfg(feature = "storage-surreal")]
+        Some(HubCommand::Restore {
+            ref db_path,
+            ref from,
+        }) => return run_restore(db_path, from).await,
+        _ => {}
+    }
 
     // Set up the live metrics collector (always available, storage-independent).
     let metrics = Arc::new(MetricsCollector::default());
@@ -273,7 +410,7 @@ async fn main() -> Result<()> {
         .await
         .context("failed to connect to NATS")?;
     let mut cp = cp
-        .with_metrics(metrics)
+        .with_metrics(metrics.clone())
         .with_ws_events(ws_tx)
         .with_require_bound_identity(args.require_bound_identity);
     if args.durable {
@@ -357,6 +494,35 @@ async fn main() -> Result<()> {
                     "[hub-server] wave orchestrator failed to start: {e:#} \
                      (wave.spawn/cancel ops will return errors)"
                 ),
+            }
+
+            // Retention pruner: a background task deleting in bounded
+            // batches; off unless a --retention-* rule is configured.
+            let days = |d: u64| std::time::Duration::from_secs(d.saturating_mul(86_400));
+            let policy = nats_hub::storage::retention::RetentionPolicy {
+                max_envelope_age: args.retention_days.map(days),
+                max_envelopes: args.retention_max_envelopes,
+                terminal_retention: args
+                    .retention_terminal_days
+                    .or_else(|| args.retention_days.map(|d| (d.saturating_mul(4)).max(30)))
+                    .map(days),
+                batch_size: args
+                    .retention_batch_size
+                    .unwrap_or(nats_hub::storage::retention::RetentionPolicy::DEFAULT_BATCH),
+                interval: std::time::Duration::from_secs(
+                    args.retention_interval_secs.unwrap_or(3600),
+                ),
+            };
+            if policy.enabled() {
+                info_log(&format!(
+                    "retention: age {:?}, cap {:?}, terminal {:?}, batch {}, every {:?}",
+                    policy.max_envelope_age,
+                    policy.max_envelopes,
+                    policy.terminal_retention,
+                    policy.batch_size,
+                    policy.interval
+                ));
+                nats_hub::storage::retention::spawn(storage.clone(), policy, metrics.clone());
             }
 
             let cp = cp.with_storage(storage);

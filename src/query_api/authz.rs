@@ -61,7 +61,7 @@ use crate::ApiResponse;
 /// Op namespaces that appear right after `hub.api.` in the legacy form.
 /// A bound subject's identity token may not collide with these.
 pub const OP_NAMESPACES: &[&str] = &[
-    "wave", "session", "agent", "history", "thread", "envelope", "stats", "ping",
+    "wave", "session", "agent", "history", "thread", "envelope", "stats", "ping", "backup",
 ];
 
 /// Read ops under `wave.*` / `session.*`; any other op in those namespaces
@@ -209,11 +209,15 @@ impl ApiAuthz {
     /// Write ops mutate stored state — they are restricted to admins.
     /// Any `wave.*`/`session.*` op outside the read sets is a write
     /// (forward-compatible with new ops added by later refocus tasks).
+    /// Every `backup.*` op is admin-only: it writes files on the hub host,
+    /// so even bound non-admin callers are denied (`write_allowed` has no
+    /// `backup.*` arm).
     pub fn is_write_op(op: &str) -> bool {
         if let Some(ns) = op.split('.').next() {
             match ns {
                 "wave" => !WAVE_READ_OPS.contains(&op),
                 "session" => !SESSION_READ_OPS.contains(&op),
+                "backup" => true,
                 _ => false,
             }
         } else {
