@@ -60,7 +60,9 @@ async fn main() -> Result<()> {
         refresh_secs: args.refresh_secs,
         alive_secs: args.alive_secs,
         feed_cap: args.feed_cap,
-        identity: args.identity.or_else(|| std::env::var("NATS_HUB_IDENTITY").ok()),
+        identity: args
+            .identity
+            .or_else(|| std::env::var("NATS_HUB_IDENTITY").ok()),
     })
     .await
 }

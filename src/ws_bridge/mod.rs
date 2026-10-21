@@ -191,8 +191,8 @@ async fn handle_connection(
     let n = stream.peek(&mut peek_buf).await?;
     let request = String::from_utf8_lossy(&peek_buf[..n]);
 
-    let has_upgrade = request.contains("Upgrade: websocket")
-        || request.contains("upgrade: websocket");
+    let has_upgrade =
+        request.contains("Upgrade: websocket") || request.contains("upgrade: websocket");
 
     let path = request
         .lines()
