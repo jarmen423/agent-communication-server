@@ -1,0 +1,14 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# systemd timer for nats-hub backups. Fires daily at 03:00; adjust
+# OnCalendar to taste. Install per deploy/systemd/README.md and
+# docs/OPERATOR_HUB.md "Backup".
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Daily nats-hub backup (consistent .surql export)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

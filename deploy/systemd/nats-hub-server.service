@@ -19,8 +19,11 @@ Group=nats-hub
 
 # hub-server is a router: it connects to the NATS bus on 127.0.0.1:4222 and
 # mirrors envelopes into an embedded SurrealDB (RocksDB) at --db-path.
+# --backup-dir enables the backup.export op (nats-hub-backup.timer); it is
+# the only place hub-server writes exports, so it's in ReadWritePaths below.
 ExecStart=/usr/local/bin/hub-server \
-    --db-path /var/lib/nats-hub/nats_hub.db
+    --db-path /var/lib/nats-hub/nats_hub.db \
+    --backup-dir /var/backups/nats-hub
 
 ExecReload=/bin/kill -HUP $MAINPID
 
@@ -28,7 +31,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
 
-# Sandboxing. ReadWritePaths = the DB directory + log directory.
+# Sandboxing. ReadWritePaths = the DB, log and backup directories.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -40,7 +43,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
-ReadWritePaths=/var/lib/nats-hub /var/log/nats-hub
+ReadWritePaths=/var/lib/nats-hub /var/log/nats-hub /var/backups/nats-hub
 CapabilityBoundingSet=
 AmbientCapabilities=
 

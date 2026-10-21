@@ -7,10 +7,14 @@ use serde_json::{json, Value};
 use super::{resolve_limit, ApiResponse};
 use crate::storage::{AgentFilter, HistoryQuery, Storage, MAX_THREAD_DEPTH};
 
+#[cfg(feature = "storage-surreal")]
+mod backup;
 mod session;
 mod wave;
 mod wave_orch;
 
+#[cfg(feature = "storage-surreal")]
+pub(super) use backup::backup_export;
 pub(super) use session::*;
 pub(super) use wave::*;
 pub(super) use wave_orch::{wave_cancel, wave_spawn, wave_status};

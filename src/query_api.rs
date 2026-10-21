@@ -245,7 +245,7 @@ pub async fn handle_request_authorized(
         // Over-fetch so invisible rows don't shorten the caller's page.
         scoped_reads::fetch_visible(storage, &req, op, scope).await
     } else {
-        dispatch(storage, &req, op).await
+        dispatch(storage, &req, op, authz).await
     };
     authz
         .authorize(storage, &caller, op, &req.params, resp)
@@ -254,7 +254,12 @@ pub async fn handle_request_authorized(
 
 /// Route `req` to the storage handler for `op` (subject-derived; falls back
 /// to `req.op` when the subject is not an api subject).
-async fn dispatch(storage: &Arc<dyn Storage>, req: &ApiRequest, op: &str) -> ApiResponse {
+async fn dispatch(
+    storage: &Arc<dyn Storage>,
+    req: &ApiRequest,
+    op: &str,
+    #[cfg_attr(not(feature = "storage-surreal"), allow(unused_variables))] authz: &ApiAuthz,
+) -> ApiResponse {
     let s: &dyn Storage = storage.as_ref();
     let p = &req.params;
     match op {
@@ -302,6 +307,14 @@ async fn dispatch(storage: &Arc<dyn Storage>, req: &ApiRequest, op: &str) -> Api
         #[cfg(not(feature = "storage-surreal"))]
         op if op.starts_with("stats.") => {
             ApiResponse::err(format!("{op}: analytics needs the storage-surreal feature"))
+        }
+
+        // ── Backup (admin-only write — see authz::is_write_op) ─────────
+        #[cfg(feature = "storage-surreal")]
+        "backup.export" => backup_export(s, p, authz.backup_dir.as_deref()).await,
+        #[cfg(not(feature = "storage-surreal"))]
+        op if op.starts_with("backup.") => {
+            ApiResponse::err(format!("{op}: backup needs the storage-surreal feature"))
         }
 
         // ── Misc ───────────────────────────────────────────────

@@ -321,24 +321,76 @@ refuses them all.
 ## Backup
 
 The only persistent state is the RocksDB at `/var/lib/nats-hub/nats_hub.db`.
-Two options:
 
-- **Cold snapshot** (simplest):
-  ```bash
-  sudo systemctl stop nats-hub-server.service
-  sudo tar -czf "/var/backups/nats-hub-$(date +%F).tar.gz" /var/lib/nats-hub
-  sudo systemctl start nats-hub-server.service
-  ```
-- **Logical export**: `hub-history --db-path /var/lib/nats-hub/nats_hub.db --tail > history.jsonl` etc. (see `hub-stats`, `hub-thread`). Slower, but does not require stopping the service.
+### Hot backup (recommended): `backup.export` + `hub-server backup`
 
-Put whichever you pick behind cron or systemd-timer; keep at least 14 days.
+`hub-server` exposes a `backup.export` query-API op that asks the **running**
+hub-server to write a consistent `.surql` snapshot of its database (the export
+runs in a single read transaction). It's a filesystem write on the hub host,
+so two things gate it:
+
+- **It's off until the operator picks a directory.** Start hub-server with
+  `--backup-dir /var/backups/nats-hub`. Callers only choose a file *name*
+  inside it (`[A-Za-z0-9._-]`, no `/`, not starting with `.`), never a path.
+- **It's admin-only.** Run it with an identity listed in `--api-admin` (or
+  `NATS_HUB_API_ADMINS`):
+
+```bash
+hub-server backup --identity ops                     # name: hub-<UTC timestamp>.surql
+hub-server backup --identity ops --name before-upgrade.surql
+```
+
+`--identity` defaults to `NATS_HUB_IDENTITY`. On a hub with no `--api-admin`
+and no `--require-bound-identity`, `backup.export` is unauthenticated like
+every other op (still confined to `--backup-dir`). Set `--api-admin` before
+exposing this on a real deployment. The export refuses to overwrite an
+existing file.
+
+Restore is offline and writes a **fresh** DB path — the export carries its
+own schema, so the target must be empty:
+
+```bash
+sudo systemctl stop nats-hub-server.service          # only if restoring over the live path
+hub-server restore --db-path /var/lib/nats-hub/nats_hub.db --from /var/backups/nats-hub/hub-2026-10-21-0300.surql
+sudo systemctl start nats-hub-server.service         # or point a new server at the restored path
+```
+
+`restore` prints per-table row counts (envelopes, agents, sessions, waves,
+wave_tasks). Everything comes back: message history with reply threads, the
+agent registry, sessions, waves and wave tasks.
+
+To restore into the *same* path as the running hub: stop the service, move the
+old DB aside, restore, start. To restore alongside it (verify a backup):
+restore into a scratch path and run `hub-history --db-path`… wait — history
+goes through the query API, so spin a second `hub-server --db-path <scratch>`
+on a spare port instead.
+
+Schedule it with the shipped systemd timer (`deploy/systemd/`):
+
+```bash
+sudo install -m 0644 deploy/systemd/nats-hub-backup.{service,timer} /etc/systemd/system/
+sudo install -d -m 0750 -o nats-hub -g nats-hub /var/backups/nats-hub
+sudo systemctl daemon-reload && sudo systemctl enable --now nats-hub-backup.timer
+```
+
+**What's lost between backups:** anything mirrored to the DB after the last
+export — recent message history, registry heartbeats, session/wave state
+changes. With `--durable`, JetStream also buffers *undelivered* DMs and recent
+task traffic, but JetStream is a **delivery buffer, not the archive**: it is
+not exported and not restorable through this path. A restore means "every
+committed record as of backup time"; in-flight delivery state may be redelivered
+by JetStream (dedupe by `meta.id` keeps it safe).
+
+### Cold snapshot (alternative)
+
+```bash
+sudo systemctl stop nats-hub-server.service
+sudo tar -czf "/var/backups/nats-hub-$(date +%F).tar.gz" /var/lib/nats-hub
+sudo systemctl start nats-hub-server.service
+```
 
 Also back up `/etc/nats/nats-server.conf` — losing the user list means
-re-issuing every credential.
-
-With durable delivery on, the JetStream store (`/var/lib/nats-hub/jetstream`)
-holds undelivered DMs and recent task results. Archive it while nats-server
-is stopped, or accept losing in-flight messages on a restore.
+re-issuing every credential. Keep at least 14 days of backups either way.
 
 ## Rotation
 

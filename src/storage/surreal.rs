@@ -68,6 +68,14 @@ impl SurrealStorage {
         db.use_ns("nats_hub").use_db("messaging").await?;
         Ok(Self { db })
     }
+
+    /// The embedded SurrealDB handle (cheap clone — the connection is
+    /// shared). Used by backend-specific features that need more than the
+    /// `Storage` trait surface: analytics pushdown, retention pruning,
+    /// backup export/import.
+    pub fn db(&self) -> Db {
+        self.db.clone()
+    }
 }
 
 #[async_trait]
@@ -226,5 +234,9 @@ impl Storage for SurrealStorage {
         // with RecordId enum types in serde_json::Value.
         self.db.query("INFO FOR DB").await?;
         Ok(())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
