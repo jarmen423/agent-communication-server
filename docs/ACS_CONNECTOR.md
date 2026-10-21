@@ -104,9 +104,11 @@ the worker. Worker code and model CLIs still need to be installed separately.
 
 The existing OAuth/MCP routes remain unchanged. Device endpoints are:
 
-- `POST /device/code`: RFC 8628 code, user code, verification URL, expiry and interval.
+- `POST /device/code`: form-encoded public `client_id=acs`; returns RFC 8628
+  code, user code, verification URL, expiry and interval.
 - `GET|POST /device/verify`: auto-approve a user code; scripted POST accepts `user_code`.
-- `POST /device/token`: device-code grant, rotating `refresh_token`, or `service_key` exchange.
+- `POST /device/token`: form-encoded device-code grant (public `client_id=acs`
+  required), rotating `refresh_token`, or `service_key` exchange.
 - `GET|DELETE /v1/device`: inspect/revoke the authenticated device.
 - `POST /v1/device/identities`: register `{identity, public_key, role?}` in the token's tenant.
 - `DELETE /v1/device/identities/<id>`: revoke an owned identity.

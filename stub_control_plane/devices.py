@@ -82,6 +82,12 @@ class Devices:
                              "nats_url": self.cfg.nats_url}, headers=HEADERS)
 
     async def code(self, request):
+        try:
+            data = await body(request)
+        except ValueError:
+            return error(400, "invalid_request", "device request required")
+        if data.get("client_id") != "acs":
+            return error(400, "invalid_client", "public client_id acs required")
         device_code, user_code = opaque_token(), secrets.token_hex(4).upper()
         self.codes[token_hash(device_code)] = {
             "user_code": user_code, "expires": time.time() + self.cfg.code_ttl,
@@ -112,6 +118,8 @@ class Devices:
             return error(400, "invalid_request", "form or JSON required")
         grant = data.get("grant_type")
         if grant == DEVICE_GRANT:
+            if data.get("client_id") != "acs":
+                return error(400, "invalid_client", "public client_id acs required")
             hashed = token_hash(str(data.get("device_code", "")))
             code = self.codes.get(hashed)
             if not code or code["expires"] <= time.time():

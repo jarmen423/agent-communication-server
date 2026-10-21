@@ -12,10 +12,10 @@ import nkeys
 
 
 async def login(http):
-    code = (await http.post('/device/code')).json()
+    code = (await http.post('/device/code', data={'client_id': 'acs'})).json()
     assert (await http.post('/device/verify', data={'user_code': code['user_code']})).status_code == 200
     result = await http.post('/device/token', data={
-        'grant_type': DEVICE_GRANT, 'device_code': code['device_code']})
+        'grant_type': DEVICE_GRANT, 'device_code': code['device_code'], 'client_id': 'acs'})
     assert result.status_code == 200, result.text
     return result.json()
 
@@ -32,9 +32,9 @@ def test_device_protocol_pending_slow_down_expiry_and_single_use():
     async def go():
         http, issuer, _, store = make()
         async with http:
-            code = (await http.post('/device/code')).json()
+            code = (await http.post('/device/code', data={'client_id': 'acs'})).json()
             assert all(code[k] for k in ('device_code', 'user_code', 'verification_uri', 'expires_in', 'interval'))
-            form = {'grant_type': DEVICE_GRANT, 'device_code': code['device_code']}
+            form = {'grant_type': DEVICE_GRANT, 'device_code': code['device_code'], 'client_id': 'acs'}
             assert (await http.post('/device/token', data=form)).json()['error'] == 'authorization_pending'
             assert (await http.post('/device/token', data=form)).json()['error'] == 'slow_down'
             assert 'DEV ONLY' in (await http.get(code['verification_uri_complete'])).text
@@ -47,7 +47,7 @@ def test_device_protocol_pending_slow_down_expiry_and_single_use():
             assert claims['acs_tenant'] == 'T_A' and claims['scope'] == 'acs:device'
             assert issuer.verify(t['access_token'], audience=RESOURCE) is None
             assert (await http.post('/device/token', data=form)).json()['error'] == 'expired_token'
-            code = (await http.post('/device/code')).json()
+            code = (await http.post('/device/code', data={'client_id': 'acs'})).json()
             endpoint.codes[token_hash(code['device_code'])]['expires'] = time.time() - 1
             assert (await http.post('/device/token', data={**form, 'device_code': code['device_code']})).status_code == 400
             assert (await http.get(code['verification_uri_complete'])).status_code == 400
@@ -144,3 +144,24 @@ def test_jwt_inbox_hint_and_explicit_override(tmp_path, monkeypatch):
     assert inbox_prefix_for(credentials_file=str(path), identity='explicit') == '_INBOX.explicit'
     path.write_text('BEGIN NATS USER JWT\nx.bad!.y\n')
     assert credentials_identity(str(path)) is None
+
+
+def test_device_public_client_identifier_is_required():
+    async def go():
+        http, *_ = make()
+        async with http:
+            for client in ({}, {'client_id': ''}, {'client_id': 'foreign-client'}):
+                response = await http.post('/device/code', data=client)
+                assert response.status_code == 400
+                assert response.json()['error'] == 'invalid_client'
+            code = (await http.post('/device/code', data={'client_id': 'acs'})).json()
+            assert (await http.get(code['verification_uri_complete'])).status_code == 200
+            for client in ({}, {'client_id': 'foreign-client'}):
+                response = await http.post('/device/token', data={
+                    'grant_type': DEVICE_GRANT, 'device_code': code['device_code'], **client})
+                assert response.status_code == 400
+                assert response.json()['error'] == 'invalid_client'
+            response = await http.post('/device/token', data={
+                'grant_type': DEVICE_GRANT, 'device_code': code['device_code'], 'client_id': 'acs'})
+            assert response.status_code == 200
+    asyncio.run(go())

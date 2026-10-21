@@ -38,10 +38,15 @@ impl Api {
         token: Option<&str>,
         body: Value,
     ) -> Result<Value> {
-        let mut req = self
+        let builder = self
             .client
-            .request(method, format!("{}{path}", self.server))
-            .json(&body);
+            .request(method, format!("{}{path}", self.server));
+        // RFC 8628 device requests use application/x-www-form-urlencoded.
+        let mut req = if path == "/device/code" || path == "/device/token" {
+            builder.form(&body)
+        } else {
+            builder.json(&body)
+        };
         if let Some(token) = token {
             req = req.bearer_auth(token);
         }
@@ -166,7 +171,7 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
             }
             tokio::time::sleep(Duration::from_secs(interval)).await;
             match api.request(Method::POST, "/device/token", None,
-                json!({"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": code["device_code"]})).await {
+                json!({"grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": code["device_code"], "client_id": "acs"})).await {
                 Ok(value) => break value,
                 Err(e) if e.to_string().ends_with("authorization_pending") => (),
                 Err(e) if e.to_string().ends_with("slow_down") => interval += 5,
