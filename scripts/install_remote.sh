@@ -16,7 +16,7 @@
 #   2. --from-source               cargo build from this checkout (or a clone)
 #   3. default / --from-release T  download the GitHub release asset for this
 #                                  platform over HTTPS, verify it against the
-#                                  release's SHA256SUMS, install every hub-* CLI.
+#                                  release's SHA256SUMS, install acs and every hub-* CLI.
 #                                  If the download fails or there is no asset
 #                                  for this platform, fall back to (2) unless
 #                                  --release-only. A checksum MISMATCH is fatal
@@ -43,6 +43,7 @@ Options:
   --release-only            Fail instead of building from source if the release
                             download is unavailable
   --from-source             Skip releases; cargo build hub-delegate from source
+  --with-acs                Also build/install acs when building from source
   --release-base-url URL    Directory holding SHA256SUMS + tarballs (https:// or
                             file://). Default: the GitHub release for TAG.
   --repo URL                GitHub repo (release downloads + source clone)
@@ -69,6 +70,7 @@ RELEASE_TAG="latest"
 RELEASE_BASE_URL="${NATS_HUB_RELEASE_BASE_URL:-}"
 MODE="release"          # release | source
 RELEASE_ONLY=0
+WITH_ACS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,6 +80,7 @@ while [[ $# -gt 0 ]]; do
     --from-release) RELEASE_TAG="${2:?--from-release requires a tag}"; MODE="release"; shift 2 ;;
     --release-only) RELEASE_ONLY=1; shift ;;
     --from-source) MODE="source"; shift ;;
+    --with-acs) WITH_ACS=1; shift ;;
     --release-base-url) RELEASE_BASE_URL="${2:?--release-base-url requires a value}"; shift 2 ;;
     --repo) REPO_URL="${2:?--repo requires a value}"; shift 2 ;;
     --bin) EXISTING_BIN="${2:?--bin requires a value}"; shift 2 ;;
@@ -220,7 +223,7 @@ install_from_release() {
     echo "ERROR: $asset does not contain an executable hub-delegate" >&2
     exit 1
   fi
-  for f in "$dir"/hub-*; do
+  for f in "$dir"/acs "$dir"/hub-*; do
     [[ -f "$f" && -x "$f" ]] || continue
     cp -f "$f" "$BIN_DIR/"
     chmod +x "$BIN_DIR/$(basename "$f")"
@@ -270,8 +273,10 @@ EOF
   fi
 
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${INSTALL_ROOT}/target}"
-  echo "→ cargo build --release --bin hub-delegate (CARGO_TARGET_DIR=$CARGO_TARGET_DIR)"
-  (cd "$repo_root" && cargo build --release --bin hub-delegate)
+  local build_args=(build --release -p nats-hub-client --bin hub-delegate)
+  (( WITH_ACS )) && build_args+=(-p acs --bin acs)
+  echo "→ cargo ${build_args[*]} (CARGO_TARGET_DIR=$CARGO_TARGET_DIR)"
+  (cd "$repo_root" && source scripts/dev/lib.sh && cargo "${build_args[@]}")
 
   local built="${CARGO_TARGET_DIR}/release/hub-delegate"
   if [[ ! -f "$built" ]]; then
@@ -280,6 +285,10 @@ EOF
   fi
   cp -f "$built" "$BINARY_PATH"
   chmod +x "$BINARY_PATH"
+  if (( WITH_ACS )); then
+    cp -f "${CARGO_TARGET_DIR}/release/acs" "$BIN_DIR/acs"
+    chmod +x "$BIN_DIR/acs"
+  fi
 }
 
 # ── Obtain the binary ───────────────────────────────────────────────

@@ -5,7 +5,7 @@
 # Rust and never publishes anything; it only lays out tarballs and checksums.
 #
 #   package.sh binaries <version> <target> <bin-dir> <out-dir>
-#       Tar every `hub-*` executable in <bin-dir> (a cargo `release/` dir)
+#       Tar `acs` and every `hub-*` executable in <bin-dir> (a cargo `release/` dir)
 #       plus README.md and the license files (LICENSE, NOTICE, LICENSING.md,
 #       LICENSES/) into
 #       <out-dir>/nats-hub-<version>-<target>.tar.gz
@@ -78,7 +78,7 @@ cmd_binaries() {
   mkdir -p "$stage/$name"
 
   local count=0 f base
-  for f in "$bin_dir"/hub-*; do
+  for f in "$bin_dir"/acs "$bin_dir"/hub-*; do
     base="$(basename "$f")"
     # Skip cargo's side files (hub-server.d, hub-server.pdb, …).
     [[ -f "$f" && -x "$f" && "$base" != *.* ]] || continue

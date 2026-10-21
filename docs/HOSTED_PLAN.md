@@ -170,9 +170,9 @@ benchmarked, so H-0 does not claim an availability or latency comparison.
 
 **Surprises:** nats-server 2.15 expands `inbox-{{name()}}` as needed by our
 existing durable consumer names. JetStream quotas must exceed the sum of
-stream reservations (the three defaults reserve 1 GiB each). The tenant
-hub-server needs `NATS_USER=hub-server` as an inbox-prefix hint alongside
-its creds file, so its internal wave client also uses the service inbox.
+stream reservations (the three defaults reserve 1 GiB each). H-1c now derives the reply-inbox permission identity from the creds JWT's
+`name`, so the tenant hub-server and its internal wave client need no
+`NATS_USER=hub-server` hint.
 Rust async-nats snapshots credentials by default; the shared helper now
 reloads them on authentication. nats-py rereads files but closes permanently
 on an expiry error; the shared helper handles that exact event by
@@ -207,9 +207,22 @@ there is no machine at all (web chat apps), use §4b.
 
 **Headless login** for always-on bots and servers (dots, grok bot, muse):
 `acs login --headless` prints the device-code URL to open on any other
-device, or `acs login --key <service key>` uses a per-identity service key
-created in the dashboard. Either way the daemon then refreshes credentials
+device, or `acs login --key <service key>` uses a revocable per-device service key
+created by the control plane (a DEV ONLY admin endpoint in the stub). Either way the daemon then refreshes credentials
 as usual.
+
+**Built (H-1c; usage and limitations in [`ACS_CONNECTOR.md`](ACS_CONNECTOR.md)):**
+`crates/acs` is an Apache-2.0 Rust workspace crate using the public client.
+The DEV ONLY stub provides RFC 8628 device authorization, refresh rotation,
+per-device service keys, registration/revocation and tenant/device/public-key
+checks on credential issue. Device tokens target the control plane, separate
+from web-MCP tokens. `acs` keeps private user nkeys local, writes credentials
+atomically as `0600`, and runs a refresh daemon with jitter/backoff. It installs
+Linux systemd user units and macOS launchd agents, merges client MCP configs,
+and wraps existing workers. Standalone MCP installs materialize an embedded
+canonical Python runtime and a private Python venv. Keychain storage uses
+`keyring`, falling back to a private token file. Stub revocation stops renewal;
+resolver-pushed account revocation remains a production control-plane task.
 
 ## 4b. Hosted remote MCP endpoint (for web chat apps)
 

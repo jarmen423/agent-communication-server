@@ -117,15 +117,20 @@ async fn main() -> Result<()> {
                 } => api::login(&root, &server, headless, key).await?,
                 Command::Logout => {
                     daemon::down(&root).await?;
-                    let mut state = local::load(&root)?;
-                    let api = api::authorized(&root, &mut state).await?;
-                    api.request(
-                        Method::DELETE,
-                        "/v1/device",
-                        Some(&state.access_token),
-                        json!({}),
-                    )
-                    .await?;
+                    if !root.join("logout.revoked").exists() {
+                        let mut state = local::load(&root)?;
+                        let api = api::authorized(&root, &mut state).await?;
+                        api.request(
+                            Method::DELETE,
+                            "/v1/device",
+                            Some(&state.access_token),
+                            json!({}),
+                        )
+                        .await?;
+                        // If a locked keychain prevents cleanup, the next logout
+                        // retries local removal without needing the revoked token.
+                        local::atomic(&root.join("logout.revoked"), b"revoked")?;
+                    }
                     local::clear(&root)?;
                     println!("Logged out; device revoked and local state removed");
                 }

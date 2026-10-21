@@ -82,6 +82,9 @@ jobs:
       - name: Remote MCP endpoint e2e (operator stack, OAuth, two replicas)
         run: scripts/dev/operator_stack.sh .venv/bin/python -m pytest -q -s tests/python/test_remote_mcp_e2e.py
 
+      - name: ACS connector e2e (device login, stdio MCP, real credential expiry)
+        run: scripts/dev/operator_stack.sh .venv/bin/python -m pytest -q -s tests/python/test_acs_e2e.py
+
   # The embeddable transport-only build (no SurrealDB/RocksDB). Fast: no C++.
   no-storage:
     runs-on: ubuntu-latest

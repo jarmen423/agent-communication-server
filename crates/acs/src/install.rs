@@ -62,8 +62,10 @@ async fn runtime(
                 .filter(|p| p.is_file())
         })
         .unwrap_or_else(|| PathBuf::from("python3"));
-    let python = if python.is_file() {
-        python.canonicalize()?
+    // Preserve a venv interpreter's symlink: canonicalizing it selects the
+    // system interpreter and silently drops the venv's installed packages.
+    let python = if python.is_file() && !python.is_absolute() {
+        std::env::current_dir()?.join(python)
     } else {
         python
     };

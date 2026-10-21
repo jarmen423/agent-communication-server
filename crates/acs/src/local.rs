@@ -115,6 +115,7 @@ pub fn store_refresh(root: &Path, token: &str) -> Result<()> {
     if std::env::var_os("ACS_NO_KEYRING").is_none() {
         if let Ok(entry) = entry(root) {
             if entry.set_password(token).is_ok() {
+                atomic(&root.join("keychain.used"), b"keychain")?;
                 fs::remove_file(root.join("refresh.token"))?;
                 return Ok(());
             }
@@ -135,8 +136,9 @@ pub fn refresh(root: &Path) -> Result<String> {
 }
 
 pub fn clear(root: &Path) -> Result<()> {
-    if std::env::var_os("ACS_NO_KEYRING").is_none() {
-        if let Ok(entry) = entry(root) {
+    if root.join("keychain.used").exists() {
+        let entry = entry(root)?;
+        {
             match entry.delete_credential() {
                 Ok(()) | Err(keyring::Error::NoEntry) => (),
                 Err(_) => {
@@ -145,7 +147,12 @@ pub fn clear(root: &Path) -> Result<()> {
             }
         }
     }
-    for name in ["refresh.token", "state.json"] {
+    for name in [
+        "refresh.token",
+        "state.json",
+        "keychain.used",
+        "logout.revoked",
+    ] {
         let path = root.join(name);
         if path.exists() {
             fs::remove_file(path)?;
