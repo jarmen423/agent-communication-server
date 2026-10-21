@@ -24,6 +24,7 @@ on:
       - "scripts/install_remote.sh"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/client/**"
   workflow_dispatch:
     inputs:
       version:
@@ -129,7 +130,7 @@ jobs:
         shell: bash
         run: |
           source scripts/dev/lib.sh   # bindgen header fix when needed; ./target
-          cargo build --release --locked --bins --features tui --target "$TARGET"
+          cargo build --workspace --release --locked --bins --features tui --target "$TARGET"
 
       - name: Smoke-run every binary (--help)
         shell: bash

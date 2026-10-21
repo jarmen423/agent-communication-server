@@ -19,13 +19,14 @@ binaries are built on Ubuntu 22.04 and need glibc 2.35 or newer (Ubuntu 22.04+,
 Debian 12+). The macOS binary is built on the `macos-latest` arm64 runner. No
 Intel-mac build is published; the installer falls back to a source build there.
 
-Binaries are built with `cargo build --release --locked --bins --features tui`
+Binaries are built with `cargo build --workspace --release --locked --bins --features tui`
 and stripped (`CARGO_PROFILE_RELEASE_STRIP=symbols`). Each one is smoke-run
 with `--help` on its own platform before it's packaged.
 
 ## Cut a release
 
-1. Bump `version` in `Cargo.toml`. The workflow refuses a tag that doesn't match,
+1. Bump `version` in root `Cargo.toml` and `crates/client/Cargo.toml`, and the
+   root `nats-hub-client` dependency version. The workflow refuses a tag that doesn't match,
    although `v0.2.0-rc.1` is accepted for version `0.2.0`. Keep the plugin
    manifests' `version` in step if they changed.
 2. Merge to `main` and make sure CI is green.
@@ -49,7 +50,7 @@ either move the tag or re-run the release. To re-run, dispatch the workflow
 ## Dry runs (no tag, nothing published)
 
 - **On every push** to a branch that touches `release.yml`, `packaging/**`,
-  `scripts/install_remote.sh`, `Cargo.toml` or `Cargo.lock`, the full pipeline
+  `scripts/install_remote.sh`, `Cargo.toml`, `Cargo.lock` or `crates/client/**`, the full pipeline
   runs except `publish`.
 - **Manually:**
 

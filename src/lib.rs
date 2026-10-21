@@ -1,4 +1,8 @@
-//! # nats-hub
+//! # nats-hub server
+//!
+//! BUSL-1.1 server implementation. For Apache-2.0 messaging integrations,
+//! depend on `nats-hub-client`. Moved client APIs are re-exported here so
+//! existing `nats_hub::…` paths remain compatible.
 //!
 //! A NATS-based communication layer with control plane routing for
 //! agent-to-agent and human-to-agent messaging. Built in Rust with

@@ -53,11 +53,6 @@ tokio-tungstenite = "0.24"
 # ── Storage backends (enable via feature flag) ─────────────────
 surrealdb = { version = "2", optional = true, features = ["kv-rocksdb", "kv-mem"] }
 
-# hub-worker kills its command's process group with killpg (already in the
-# lock file via tokio/mio; now a direct dependency).
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
 [dev-dependencies]
 tempfile = "3"
 
@@ -66,8 +61,8 @@ default = ["storage-surreal"]
 storage-surreal = ["dep:surrealdb"]
 tui = ["nats-hub-client/tui"]
 # No-storage mode: pure NATS transport, no persistence layer.
-# Use this when embedding nats-hub as a messaging dependency
-# without needing SurrealDB (e.g. ephemeral agents, testing).
+# Retained for existing server integrations; new messaging applications
+# should depend directly on the Apache-2.0 nats-hub-client crate.
 no-storage = []
 
 # ── Build profiles ─────────────────────────────────────────────

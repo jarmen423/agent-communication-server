@@ -49,6 +49,9 @@ jobs:
       - name: Setup (nats-server + venv)
         run: make setup
 
+      - name: REUSE licensing
+        run: pipx run reuse lint
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -89,5 +92,5 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: cargo check --lib (no-storage)
-        run: cargo check --locked --lib --no-default-features --features no-storage
+      - name: Apache client and server library without persistence
+        run: make check-no-storage

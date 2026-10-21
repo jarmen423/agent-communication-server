@@ -4,14 +4,9 @@
 # LICENSING.md explains the split in plain language; LICENSES/ holds the texts.
 #
 # Order matters: when several annotations match a file, the LAST one wins.
-# The layering below is:
-#   1. everything defaults to Apache-2.0 (Python client, plugins, docs, tests,
-#      scripts, CI, build files);
-#   2. all Rust under src/ plus the server's assets are BUSL-1.1, so a new Rust
-#      module is server-side until someone decides otherwise;
-#   3. the client Rust (library, client CLIs, TUI) is carved back to Apache-2.0;
-#   4. hub-server and hub-admin go back to BUSL-1.1;
-#   5. narrow exceptions (a client config file, third-party pet sprites).
+# All files default to Apache-2.0, including crates/client/**. The root
+# nats-hub server crate (Cargo.toml and src/**) and server assets are BUSL-1.1.
+# Narrow exceptions cover the client model catalog and third-party sprites.
 # `precedence = "override"` makes this file authoritative even if a file
 # happens to contain an SPDX tag of its own.
 version = 1
@@ -26,40 +21,11 @@ SPDX-License-Identifier = "Apache-2.0"
 # 2. Server side: BUSL-1.1.
 [[annotations]]
 path = [
+    "Cargo.toml",
     "src/**",
     "visualizer/**",
     "deploy/**",
     "config/**",
-]
-precedence = "override"
-SPDX-FileCopyrightText = "2026 Agent Memory Labs"
-SPDX-License-Identifier = "BUSL-1.1"
-
-# 3. Client Rust: protocol + client library, query-API client, events,
-#    TUI, and the client CLIs. src/lib.rs is the crate root (module list and
-#    re-exports) and goes with the client library.
-[[annotations]]
-path = [
-    "src/lib.rs",
-    "src/protocol.rs",
-    "src/client.rs",
-    "src/client/**",
-    "src/connect_opts.rs",
-    "src/query_api_client.rs",
-    "src/events/**",
-    "src/tui/**",
-    "src/bin/**",
-]
-precedence = "override"
-SPDX-FileCopyrightText = "2026 Agent Memory Labs"
-SPDX-License-Identifier = "Apache-2.0"
-
-# 4. Server binaries: BUSL-1.1.
-[[annotations]]
-path = [
-    "src/bin/hub_server.rs",
-    "src/bin/hub_admin.rs",
-    "src/bin/hub_admin/**",
 ]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Agent Memory Labs"

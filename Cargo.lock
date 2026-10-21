@@ -2506,7 +2506,6 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
- "libc",
  "nats-hub-client",
  "nkeys",
  "serde",

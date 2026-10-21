@@ -1,42 +1,51 @@
 # Portability & Embedding
 
-nats-hub is a library (`nats_hub`) plus a set of binaries (`hub-server`,
-`hub-publish`, `hub-delegate`, …). You can embed the library in another Rust
-project as a messaging dependency. The binaries are also published as
-prebuilt release tarballs (see [`RELEASING.md`](RELEASING.md)).
+nats-hub is a Cargo workspace with two separately licensed crates. Use
+`nats-hub-client` (`nats_hub_client`, Apache-2.0) to embed messaging in your
+application. It contains the protocol, NATS client, query API wire types,
+records/filters, events, durable attach/catch-up helpers and pure wave
+validation. It has no server, SurrealDB or RocksDB dependency.
+
+`nats-hub` (`nats_hub`, BUSL-1.1) contains the router, storage backends, query
+API implementation, orchestrator, WebSocket bridge and live metrics. It
+re-exports the moved client APIs for compatibility. See
+[`LICENSING.md`](../LICENSING.md) for the license split.
 
 ## Add as a dependency
 
 ```toml
 [dependencies]
-# Transport only: HubClient, Envelope, events, MetricsCollector. No SurrealDB/RocksDB.
-nats-hub = { git = "https://github.com/jarmen423/agent-communication-server", default-features = false, features = ["no-storage"] }
+nats-hub-client = { git = "https://github.com/jarmen423/agent-communication-server" }
 
-# With SurrealDB persistence (Storage trait, SurrealStorage, Analytics):
-nats-hub = { git = "https://github.com/jarmen423/agent-communication-server" }
+# Server embedding (BUSL-1.1), with SurrealDB persistence:
+# nats-hub = { git = "https://github.com/jarmen423/agent-communication-server" }
 ```
 
-`default-features = false` matters. The default feature pulls in SurrealDB
-(embedded RocksDB, a C++ build of about 10 minutes), which you usually don't
-want when embedding. CI checks the transport-only build on every push
-(`cargo check --lib --no-default-features --features no-storage`).
+No feature flags are needed for a client-only dependency. Client CLIs and
+`hub-tui` query the running hub-server over NATS and never open the database.
+All workspace binaries retain their names and share `target/debug/` (or
+`target/release/`). Prebuilt tarballs are described in [`RELEASING.md`](RELEASING.md).
 
 ## Feature flags
 
-| Flag | What it enables |
+| Crate / flag | What it enables |
 |---|---|
-| `default` | `storage-surreal` |
-| `storage-surreal` | SurrealDB persistence (the `Storage` trait + `SurrealStorage`) and the historical `Analytics`/`hub-stats` path |
-| `no-storage` | Pure NATS transport, no persistence. The live `MetricsCollector` (`hub-server --metrics-addr`) still works |
-| `tui` | `hub-tui` terminal dashboard (ratatui + crossterm). Off by default, so library users never pull in TUI deps |
+| client `default` | Empty; messaging, records and query API need no features |
+| client `tui` | Optional `hub-tui` dashboard (ratatui + crossterm) |
+| server `default` | `storage-surreal` |
+| server `storage-surreal` | SurrealDB/RocksDB persistence and historical analytics implementation |
+| server `no-storage` | Compatibility server library without persistence; live metrics stay available |
+| server `tui` | Forwards to the client `tui` feature for existing build commands |
 
-The `MetricsCollector` is **always compiled**. It has no storage dependency, so
-observability is available even in `no-storage` mode.
+`make check-no-storage` checks every client target (including TUI), rejects
+server/SurrealDB/RocksDB dependencies in its transitive tree, and checks the
+server library with `--no-default-features --features no-storage`. CI runs
+this gate on every push. The default client build needs no C++ or libclang.
 
 ## Minimal embed example
 
 ```rust
-use nats_hub::HubClient;
+use nats_hub_client::HubClient;
 use serde_json::json;
 
 #[tokio::main]

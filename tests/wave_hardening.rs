@@ -42,7 +42,7 @@ async fn wait_registered(reg: &mut async_nats::Subscriber, identity: &str, child
 }
 
 fn hub_worker_bin() -> PathBuf {
-    PathBuf::from(support::client_bin("hub-worker"))
+    support::client_bin("hub-worker")
 }
 
 fn spawn_hub_worker(stack: &TestStack, identity: &str, execute: &str) -> Child {
