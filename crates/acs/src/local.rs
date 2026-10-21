@@ -41,9 +41,10 @@ pub fn home() -> Result<PathBuf> {
 }
 
 pub fn root() -> Result<PathBuf> {
-    let root = std::env::var_os("ACS_HOME")
-        .map(PathBuf::from)
-        .unwrap_or(home()?.join(".config/acs"));
+    let root = match std::env::var_os("ACS_HOME") {
+        Some(path) => PathBuf::from(path),
+        None => home()?.join(".config/acs"),
+    };
     fs::create_dir_all(&root)?;
     #[cfg(unix)]
     {
@@ -138,29 +139,27 @@ pub fn refresh(root: &Path) -> Result<String> {
 pub fn clear(root: &Path) -> Result<()> {
     if root.join("keychain.used").exists() {
         let entry = entry(root)?;
-        {
-            match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => (),
-                Err(_) => {
-                    bail!("cannot remove keychain credential; unlock the keychain and retry logout")
-                }
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => (),
+            Err(_) => {
+                bail!("cannot remove keychain credential; unlock the keychain and retry logout")
             }
         }
     }
+    let creds = root.join("creds");
+    if creds.exists() {
+        fs::remove_dir_all(creds)?;
+    }
     for name in [
         "refresh.token",
-        "state.json",
         "keychain.used",
+        "state.json",
         "logout.revoked",
     ] {
         let path = root.join(name);
         if path.exists() {
             fs::remove_file(path)?;
         }
-    }
-    let creds = root.join("creds");
-    if creds.exists() {
-        fs::remove_dir_all(creds)?;
     }
     Ok(())
 }

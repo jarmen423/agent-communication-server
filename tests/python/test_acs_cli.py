@@ -181,3 +181,30 @@ def test_keychain_unavailable_falls_back_and_logs_out(device_stack):
     assert (Path(env['ACS_HOME']) / 'refresh.token').stat().st_mode & 0o777 == 0o600
     acs(env, 'logout')
     assert not (Path(env['ACS_HOME']) / 'refresh.token').exists()
+
+
+def test_standalone_installs_embedded_mcp_runtime(device_stack):
+    import asyncio
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    env, tmp, _ = device_stack
+    headless_login(env)
+    acs(env, 'agent', 'add', 'standalone')
+    home = tmp / 'standalone-home'
+    home.mkdir()
+    # Run away from the repo; use an explicitly installed Python interpreter.
+    # The binary must supply all canonical modules without a source checkout.
+    p = subprocess.run([str(ACS), 'mcp', 'install', 'claude', '--home', str(home),
+                        '--python', sys.executable], cwd=home, env={**env, 'HOME': str(home)},
+                       text=True, capture_output=True, timeout=30)
+    assert p.returncode == 0, p.stdout + p.stderr
+    config = json.loads((home / '.claude.json').read_text())['mcpServers']['nats-hub']
+    assert config['args'][0] == str(Path(env['ACS_HOME']) / 'mcp/server/nats_hub_mcp.py')
+    async def initialize():
+        async with stdio_client(StdioServerParameters(**config)) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                assert 'delegate_task' in [t.name for t in tools.tools]
+    asyncio.run(initialize())
+    acs(env, 'logout')

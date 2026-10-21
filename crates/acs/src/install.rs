@@ -49,8 +49,7 @@ async fn runtime(
         })
     });
     let Some(server) = discovered else {
-        let (server, default_python) = crate::runtime::install(root).await?;
-        return Ok((server, python.unwrap_or(default_python)));
+        return crate::runtime::install(root, python).await;
     };
     let server = server.canonicalize()?;
     let python = python
@@ -83,7 +82,10 @@ pub async fn mcp(
     let state = local::load(root)?;
     let id = select(&state, identity)?;
     let (server, python) = runtime(root, server, python).await?;
-    let home = home.unwrap_or(local::home()?);
+    let home = match home {
+        Some(path) => path,
+        None => local::home()?,
+    };
     let env = json!({"NATS_URL": state.nats_url,
         "NATS_CREDENTIALS_FILE": local::creds_path(root, id), "NATS_HUB_IDENTITY": id});
     let config = json!({"command": python, "args": [server], "env": env});
@@ -223,7 +225,9 @@ pub async fn worker(root: &Path, backend: &str, identity: &str, args: &[String])
         .env_remove("NATS_USER")
         .env_remove("NATS_PASSWORD")
         .env_remove("NATS_TOKEN")
-        .env_remove("NATS_NKEY");
+        .env_remove("NATS_NKEY")
+        .env_remove("NATS_NKEYS_SEED")
+        .env_remove("ACS_SERVICE_KEY");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

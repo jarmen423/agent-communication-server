@@ -3,87 +3,33 @@ use crate::local;
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
-const SOURCES: &[(&str, &[u8])] = &[
-    (
-        "hub_annotations.py",
-        include_bytes!("../../../mcp_server/hub_annotations.py"),
-    ),
-    (
-        "hub_app.py",
-        include_bytes!("../../../mcp_server/hub_app.py"),
-    ),
-    (
-        "hub_buffers.py",
-        include_bytes!("../../../mcp_server/hub_buffers.py"),
-    ),
-    (
-        "hub_connection.py",
-        include_bytes!("../../../mcp_server/hub_connection.py"),
-    ),
-    (
-        "hub_delivery.py",
-        include_bytes!("../../../mcp_server/hub_delivery.py"),
-    ),
-    (
-        "hub_handlers.py",
-        include_bytes!("../../../mcp_server/hub_handlers.py"),
-    ),
-    (
-        "hub_primitives.py",
-        include_bytes!("../../../mcp_server/hub_primitives.py"),
-    ),
-    (
-        "hub_providers.py",
-        include_bytes!("../../../mcp_server/hub_providers.py"),
-    ),
-    (
-        "hub_queries.py",
-        include_bytes!("../../../mcp_server/hub_queries.py"),
-    ),
-    (
-        "hub_query_tools.py",
-        include_bytes!("../../../mcp_server/hub_query_tools.py"),
-    ),
-    (
-        "hub_sessions.py",
-        include_bytes!("../../../mcp_server/hub_sessions.py"),
-    ),
-    (
-        "hub_tools.py",
-        include_bytes!("../../../mcp_server/hub_tools.py"),
-    ),
-    (
-        "hub_validate.py",
-        include_bytes!("../../../mcp_server/hub_validate.py"),
-    ),
-    (
-        "nats_connect.py",
-        include_bytes!("../../../mcp_server/nats_connect.py"),
-    ),
-    (
-        "nats_hub_mcp.py",
-        include_bytes!("../../../mcp_server/nats_hub_mcp.py"),
-    ),
-];
+include!(concat!(env!("OUT_DIR"), "/mcp_sources.rs"));
 
-pub async fn install(root: &Path) -> Result<(PathBuf, PathBuf)> {
+pub async fn install(root: &Path, external_python: Option<PathBuf>) -> Result<(PathBuf, PathBuf)> {
     let base = root.join("mcp");
     let server = base.join("server");
     for (name, bytes) in SOURCES {
         local::atomic(&server.join(name), bytes)?;
     }
+    if let Some(python) = external_python {
+        let python = if python.is_file() && !python.is_absolute() {
+            std::env::current_dir()?.join(python)
+        } else {
+            python
+        };
+        return Ok((server.join("nats_hub_mcp.py"), python));
+    }
     let python = base.join(".venv/bin/python");
-    if !python.is_file() {
-        if !tokio::process::Command::new("python3")
+    if !python.is_file()
+        && !tokio::process::Command::new("python3")
             .arg("-m")
             .arg("venv")
             .arg(base.join(".venv"))
             .status()
             .await?
             .success()
-        {
-            bail!("Python venv creation failed; install Python 3.10+ and its venv package");
-        }
+    {
+        bail!("Python venv creation failed; install Python 3.10+ and its venv package");
     }
     if !base.join("ready-v1").exists() {
         eprintln!("Installing MCP Python dependencies in {}", base.display());
