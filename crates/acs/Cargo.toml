@@ -1,13 +1,13 @@
 [package]
 name = "acs"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "ACS device connector and local credential manager"
 repository = "https://github.com/jarmen423/agent-communication-server"
 
 [dependencies]
-nats-hub-client = { path = "../client", version = "0.1.0" }
+nats-hub-client = { path = "../client", version = "0.0.1" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }

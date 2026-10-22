@@ -420,6 +420,19 @@ infrastructure decisions (§11).
 
 ## 11. Open decisions
 
+The full list, with options and recommendations, is in
+[`OPEN_DECISIONS.md`](OPEN_DECISIONS.md). This section keeps the original numbering.
+
+**Beta decisions (2026-10-22, details in `OPEN_DECISIONS.md`)** override
+§6–7 for the beta:
+- **Control plane:** Rust/axum, in the private repo `agentmemorylabs/acs-private`.
+- **Sign-in:** GitHub + Google OAuth + email magic links, with invite codes.
+- **Tenancy and domain:** one user = one tenant; domain `acs.agentmemorylabs.com`.
+- **Infra:** one GCP us-east VM running everything as containers. That
+  means 1 NATS node, self-run Postgres and file-based signing keys
+  (3 nodes, managed Postgres and KMS come later).
+- **Beta:** free, invite-only.
+
 1. **License split:** Apache-2.0 client + BUSL-1.1 server (Additional Use
    Grant: no third-party hosted service; Change Date 4 years → Apache-2.0) +
    private control plane. Agreed; licensor "Agent Memory Labs". **Applied**

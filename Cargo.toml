@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "nats-hub"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 rust-version = "1.74"
 description = "NATS-based communication layer with control plane routing for agent + human messaging"
@@ -30,7 +30,7 @@ name = "hub-admin"
 path = "src/bin/hub_admin.rs"
 
 [dependencies]
-nats-hub-client = { path = "crates/client", version = "0.1.0" }
+nats-hub-client = { path = "crates/client", version = "0.0.1" }
 async-nats = "0.38"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

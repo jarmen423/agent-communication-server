@@ -332,6 +332,7 @@ The client has no default features or storage feature. All its CLIs, including
 - `docs/RELEASING.md`: release workflow, dry runs, install from release
 - `docs/PRODUCT_VISION.md`, `docs/DATABASE_PLAN.md`: vision and persistence design
 - `docs/HOSTED_PLAN.md`: hosted ACS (tenancy, auth, `acs` connector, phases)
+- `docs/OPEN_DECISIONS.md`: owner decisions blocking the hosted beta (H-2/H-3)
 - `docs/DELIVERY.md`: durable delivery (JetStream, `--durable`)
 - `docs/REMOTE_MCP.md`: remote MCP endpoint for web chat apps (claude.ai, ChatGPT, Grok) + dev stub control plane
 - `docs/archive/`: finished phase plans and handoffs (historical; see its README)
