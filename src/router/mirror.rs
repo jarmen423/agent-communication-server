@@ -111,12 +111,15 @@ impl StorageMirror {
     pub(crate) async fn drain(&self) -> anyhow::Result<()> {
         let started = std::time::Instant::now();
         let before = self.completed.load(Ordering::Relaxed);
+        let failed_before = self.failed.load(Ordering::Relaxed);
         self.stop.cancel();
         if let Some(writer) = self.writer.lock().await.take() {
             writer.await?;
         }
         let flushed = self.completed.load(Ordering::Relaxed) - before;
-        let failed = self.failed.load(Ordering::Relaxed);
+        // Only writes lost while draining fail the shutdown; earlier
+        // failures were already logged when they happened.
+        let failed = self.failed.load(Ordering::Relaxed) - failed_before;
         info!(
             queued_writes_flushed = flushed,
             writes_failed = failed,
