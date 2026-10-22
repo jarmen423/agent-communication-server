@@ -58,11 +58,7 @@ use crate::protocol::valid_identity;
 use crate::storage::Storage;
 use crate::ApiResponse;
 
-/// Op namespaces that appear right after `hub.api.` in the legacy form.
-/// A bound subject's identity token may not collide with these.
-pub const OP_NAMESPACES: &[&str] = &[
-    "wave", "session", "agent", "history", "thread", "envelope", "stats", "ping", "backup", "lock",
-];
+pub use nats_hub_client::query_api::OP_NAMESPACES;
 
 /// Read ops under `wave.*` / `session.*`; any other op in those namespaces
 /// is treated as a write.

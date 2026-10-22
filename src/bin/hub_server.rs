@@ -180,13 +180,7 @@ async fn run_server(
     if let Some(database) = storage {
         database.close().await?;
     }
-    nats.flush().await?;
-    nats.drain().await?;
-    // async-nats 0.38's drain() only enqueues the request. Flush probes
-    // finish once the handler closes its command queue after draining.
-    while nats.flush().await.is_ok() {
-        tokio::task::yield_now().await;
-    }
+    shutdown::drain_nats(&nats).await?;
     Ok(())
 }
 

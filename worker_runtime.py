@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -99,6 +100,15 @@ async def run_worker(cfg: WorkerConfig) -> None:
     connect_kwargs: dict[str, Any] = {"name": cfg.identity}
     if cfg.nats_auth:
         connect_kwargs.update(cfg.nats_auth)
+    closed = asyncio.Event()
+    on_closed = connect_kwargs.get("closed_cb")
+
+    async def connection_closed() -> None:
+        closed.set()
+        if on_closed is not None:
+            await on_closed()
+
+    connect_kwargs["closed_cb"] = connection_closed
     nc = await connect_nats(cfg.nats_url, **connect_kwargs)
     log = cfg.log_prefix
     print(f"[{log}] connected to NATS as {cfg.identity}")
@@ -430,14 +440,18 @@ async def run_worker(cfg: WorkerConfig) -> None:
             await session_resume.resume_all(api_request, cfg.identity, resume_session)
         print(f"[{log}] ready")
 
-        while True:
-            await asyncio.sleep(1)
+        if nc.is_closed:
+            closed.set()
+        await closed.wait()
+        print(f"[{log}] NATS connection closed permanently; exiting for restart", file=sys.stderr)
+        raise ConnectionError("NATS connection closed permanently")
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
         if heartbeat_task is not None:
             heartbeat_task.cancel()
         dispatcher.cancel()  # cancels the running turn too (kills CLI groups)
-        await asyncio.gather(dispatcher, return_exceptions=True)
+        await asyncio.gather(dispatcher, *([heartbeat_task] if heartbeat_task else []),
+                             return_exceptions=True)
         await inbox_sub.unsubscribe()
         await nc.close()
