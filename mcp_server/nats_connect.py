@@ -35,6 +35,7 @@ Example::
 from __future__ import annotations
 
 import os
+import random
 import base64
 import json
 from pathlib import Path
@@ -49,24 +50,35 @@ _TLS_SCHEMES = ("wss://", "tls://", "tls+ws://")
 
 
 class _RefreshingCredentialsClient(Client):
-    """nats-py closes permanently on an expiry -ERR (even with reconnect on).
+    """Recover refreshable sessions while retaining nats-py's subscriptions.
 
-    Reconnect this one recoverable authentication event using nats-py's
-    existing file callbacks. The normal reconnect path preserves subscriptions.
-    Revocation and other authorization failures retain the library's behavior.
-
-    nats-py 2.16.0 has force_reconnect(), but expiry goes straight from
-    _process_err to a scheduled permanent _close, without a public error_cb
-    recovery point. Retain this narrow dispatch hook and pin nats-py exactly
-    in requirements.txt; recheck it before upgrading the library.
+    nats-py 2.16.0 closes these server -ERRs without a public recovery hook.
+    Keep this dispatch override narrow and recheck it when upgrading the pin.
+    Its JWT and signature callbacks read the credentials file on every attempt.
     """
 
     async def _process_err(self, err_msg: str) -> None:
-        if (err_msg.strip("'\" ").lower() == "user authentication expired"
-                and self.is_connected and self.options["allow_reconnect"]):
-            await self._process_op_err(nats.errors.Error("nats: user authentication expired"))
+        reason = err_msg.strip("'\" ").lower()
+        if (reason in {
+                "user authentication expired",
+                "maximum account active connections exceeded",
+                "authorization violation",
+                "user authentication revoked",
+            } and self.is_connected and self.options["allow_reconnect"]):
+            await self._process_op_err(nats.errors.Error(f"nats: {reason}"))
             return
         await super()._process_err(err_msg)
+
+
+def _credential_reconnect(servers, _info):
+    """Public nats-py server-selection hook: exponential delay, 30 s cap.
+
+    Successful authentication resets the server's reconnect counter. Equal
+    jitter keeps retries spread out without allowing immediate retry loops.
+    """
+    server = min(servers, key=lambda s: s.reconnects)
+    cap = min(30.0, 2.0 ** min(server.reconnects + 1, 5))
+    return server, random.uniform(cap / 2, cap)
 
 
 def _env(name: str) -> Optional[str]:
@@ -290,6 +302,9 @@ async def connect_nats(
     prefix = inbox_prefix_for(user=user, identity=identity, name=name, credentials_file=credentials_file)
     if prefix:
         connect_kwargs["inbox_prefix"] = prefix
+
+    if credentials_file:
+        connect_kwargs["reconnect_to_server_handler"] = _credential_reconnect
 
     # Caller-supplied extras (connect_timeout, error_cb, etc.) win last.
     connect_kwargs.update(extra)

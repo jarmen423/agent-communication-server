@@ -90,7 +90,9 @@ def headless_login(env):
 
 def test_headless_login_agents_install_preserves_config_and_logout(device_stack):
     env, tmp, _ = device_stack
-    assert 'Logged in: tenant T_A device device-' in headless_login(env)
+    login = headless_login(env)
+    assert login.startswith('Open http://') and 'DEV ONLY' not in login
+    assert 'Logged in: tenant T_A device device-' in login
     acs(env, 'agent', 'add', 'me')
     acs(env, 'agent', 'add', 'bot', '--role', 'worker')
     root = Path(env['ACS_HOME'])

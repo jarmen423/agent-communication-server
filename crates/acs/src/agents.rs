@@ -9,21 +9,8 @@ use std::path::Path;
 
 pub fn check_id(id: &str) -> Result<()> {
     nats_hub_client::protocol::require_valid_identity(id)?;
-    if [
-        "hub-server",
-        "hub-orchestrator",
-        "visualizer",
-        "wave",
-        "session",
-        "agent",
-        "history",
-        "thread",
-        "envelope",
-        "stats",
-        "ping",
-        "backup",
-    ]
-    .contains(&id)
+    if nats_hub_client::protocol::reserved_identity(id)
+        || nats_hub_client::query_api::OP_NAMESPACES.contains(&id)
     {
         bail!("reserved identity");
     }
@@ -126,4 +113,40 @@ pub async fn remove(root: &Path, id: &str) -> Result<()> {
     }
     println!("Revoked {id}; local credential removed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_reserved_components_and_api_namespaces() {
+        for name in [
+            "hub-server",
+            "hub-orchestrator",
+            "hub-locks",
+            "visualizer",
+            "wave",
+            "session",
+            "agent",
+            "history",
+            "thread",
+            "envelope",
+            "stats",
+            "ping",
+            "backup",
+            "lock",
+        ] {
+            assert!(
+                check_id(name).is_err(),
+                "reserved identity accepted: {name}"
+            );
+        }
+        for name in ["bot", "Lock", "hub-locks-1", "worker_42"] {
+            check_id(name).unwrap();
+        }
+        for name in ["", "a.b", "*", "../bad"] {
+            assert!(check_id(name).is_err());
+        }
+    }
 }

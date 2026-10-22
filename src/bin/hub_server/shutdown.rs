@@ -98,6 +98,41 @@ pub(super) async fn serve(args: Args) -> Result<()> {
     }
 }
 
+/// Storage cleanup precedes this step. A refused connection has no broker to
+/// flush to; do not spend the shutdown deadline waiting for it to recover.
+pub(super) async fn drain_nats(nats: &async_nats::Client) -> Result<()> {
+    let drain = async {
+        nats.flush().await?;
+        nats.drain().await?;
+        // async-nats 0.38 drain only enqueues a request. Flush probes end
+        // when its handler closes the command queue after draining.
+        while nats.flush().await.is_ok() {
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    };
+    let disconnected = async {
+        while nats.connection_state() == async_nats::connection::State::Connected {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = disconnected => {
+            tracing::info!(target: "nats_hub::shutdown", "NATS unavailable; skipping network drain");
+            Ok(())
+        }
+        result = drain => {
+            if result.is_err() && nats.connection_state() != async_nats::connection::State::Connected {
+                tracing::info!(target: "nats_hub::shutdown", "NATS unavailable; skipping network drain");
+                Ok(())
+            } else {
+                result
+            }
+        },
+    }
+}
+
 fn force(metrics: &MetricsCollector, started: Instant, reason: &str) -> ! {
     let dropped = metrics.storage_mirror_pending.load(Ordering::Relaxed);
     metrics

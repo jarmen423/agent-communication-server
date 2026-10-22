@@ -6,6 +6,12 @@ use serde_json::Value;
 /// NATS subject prefix for query API.
 pub const API_PREFIX: &str = "hub.api";
 
+/// Reserved API namespace tokens: a caller identity must not collide with
+/// the first token of a legacy operation.
+pub const OP_NAMESPACES: &[&str] = &[
+    "wave", "session", "agent", "history", "thread", "envelope", "stats", "ping", "backup", "lock",
+];
+
 /// Build a legacy query API subject: `hub.api.<operation>`.
 pub fn subject(operation: &str) -> String {
     format!("{API_PREFIX}.{operation}")

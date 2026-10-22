@@ -1,9 +1,31 @@
 //! HTTP device API. Never include response bodies, tokens or seeds in errors.
 use crate::local::{self, State};
 use anyhow::{bail, Context, Result};
-use reqwest::{Client, Method, Url};
+use reqwest::{header::RETRY_AFTER, Client, Method, StatusCode, Url};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    time::{Duration, SystemTime},
+};
+use tokio::time::Instant;
+
+const REQUEST_BUDGET: Duration = Duration::from_secs(60);
+const MAX_RETRIES: usize = 60;
+
+fn retry_delay(header: &str) -> Option<Duration> {
+    let delay = header
+        .trim()
+        .parse::<u64>()
+        .map(Duration::from_secs)
+        .ok()
+        .or_else(|| {
+            httpdate::parse_http_date(header)
+                .ok()
+                .map(|date| date.duration_since(SystemTime::now()).unwrap_or_default())
+        })?;
+    Some(delay.min(Duration::from_secs(10)))
+}
 
 pub struct Api {
     client: Client,
@@ -38,6 +60,18 @@ impl Api {
         token: Option<&str>,
         body: Value,
     ) -> Result<Value> {
+        self.request_until(method, path, token, body, Instant::now() + REQUEST_BUDGET)
+            .await
+    }
+
+    async fn request_until(
+        &self,
+        method: Method,
+        path: &str,
+        token: Option<&str>,
+        body: Value,
+        deadline: Instant,
+    ) -> Result<Value> {
         let builder = self
             .client
             .request(method, format!("{}{path}", self.server));
@@ -50,35 +84,64 @@ impl Api {
         if let Some(token) = token {
             req = req.bearer_auth(token);
         }
-        let response = req
-            .send()
+        let mut retries = 0;
+        loop {
+            let response = tokio::time::timeout_at(
+                deadline,
+                req.try_clone()
+                    .context("cannot retry control-plane request")?
+                    .send(),
+            )
             .await
+            .map_err(|_| anyhow::anyhow!("control-plane request timed out"))?
             .map_err(|_| anyhow::anyhow!("control plane unavailable"))?;
-        let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .context("cannot read control-plane response")?;
-        let value: Value =
-            serde_json::from_slice(&bytes).context("invalid control-plane response")?;
-        if !status.is_success() {
-            // Error names are a fixed protocol vocabulary; don't reflect server text.
-            let code = value["error"].as_str().unwrap_or("request_failed");
-            let safe = match code {
-                "authorization_pending"
-                | "slow_down"
-                | "expired_token"
-                | "invalid_grant"
-                | "access_denied"
-                | "invalid_token"
-                | "identity_exists"
-                | "invalid_request"
-                | "invalid_client" => code,
-                _ => "request_failed",
-            };
-            bail!("HTTP {} {safe}", status.as_u16());
+            let status = response.status();
+            if status == StatusCode::SERVICE_UNAVAILABLE && retries < MAX_RETRIES {
+                if let Some(delay) = response
+                    .headers()
+                    .get(RETRY_AFTER)
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(retry_delay)
+                {
+                    if Instant::now() + delay < deadline {
+                        retries += 1;
+                        drop(response);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                }
+            }
+            let bytes = tokio::time::timeout_at(deadline, response.bytes())
+                .await
+                .map_err(|_| anyhow::anyhow!("control-plane request timed out"))?
+                .context("cannot read control-plane response")?;
+            let value: Value =
+                serde_json::from_slice(&bytes).context("invalid control-plane response")?;
+            if !status.is_success() {
+                // Error names are a fixed protocol vocabulary; don't reflect server text.
+                let code = value["error"].as_str().unwrap_or("request_failed");
+                let safe = match code {
+                    "authorization_pending"
+                    | "slow_down"
+                    | "expired_token"
+                    | "invalid_grant"
+                    | "access_denied"
+                    | "invalid_token"
+                    | "identity_exists"
+                    | "invalid_request"
+                    | "invalid_client"
+                    | "temporarily_unavailable"
+                    | "rate_limited"
+                    | "quota_exceeded"
+                    | "key_in_use"
+                    | "revocation_list_full"
+                    | "unsupported_grant_type" => code,
+                    _ => "request_failed",
+                };
+                bail!("HTTP {} {safe}", status.as_u16());
+            }
+            return Ok(value);
         }
-        Ok(value)
     }
 }
 
@@ -143,7 +206,7 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
         if verify.origin() != Url::parse(&api.server)?.origin() {
             bail!("foreign verification URL refused");
         }
-        println!("DEV ONLY control plane: open {url}");
+        println!("Open {url}");
         use std::io::Write;
         std::io::stdout().flush()?;
         if !headless {
@@ -192,3 +255,6 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
     println!("Logged in: tenant {} device {}", state.tenant, state.device);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

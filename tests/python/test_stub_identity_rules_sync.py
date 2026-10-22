@@ -19,7 +19,7 @@ def _rust_str_array(path: Path, const: str) -> frozenset[str]:
 
 
 def test_op_namespaces_match_rust():
-    rust = _rust_str_array(ROOT / "src/query_api/authz.rs", "OP_NAMESPACES")
+    rust = _rust_str_array(ROOT / "crates/client/src/query_api.rs", "OP_NAMESPACES")
     assert identity_rules.OP_NAMESPACES == rust
 
 

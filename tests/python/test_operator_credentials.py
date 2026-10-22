@@ -164,3 +164,76 @@ def test_clients_reload_after_real_jwt_expiry_and_user_revocation(monkeypatch):
             if mcp:
                 await mcp.close()
     asyncio.run(run())
+
+
+def test_python_recovers_after_tenant_suspension_and_remint(tmp_path):
+    from nats_connect import connect_nats
+
+    async def run():
+        errors = []
+        disconnected = asyncio.Event()
+        reconnected = asyncio.Event()
+
+        async def on_error(error):
+            errors.append(str(error).lower())
+
+        async def on_disconnect():
+            disconnected.set()
+
+        async def on_reconnect():
+            reconnected.set()
+
+        # A hub credential permits a self-contained subscription/responder check
+        # even while the stack's routers are recovering from the same suspension.
+        path = tmp_path / 'refresh.creds'
+        path.write_bytes(Path(creds('T_B', 'hub-server')).read_bytes())
+        stale = tmp_path / 'stale.creds'
+        stale.write_bytes(path.read_bytes())
+        nc = await connect_nats(os.environ['NATS_URL'], credentials_file=str(path),
+                                disconnected_cb=on_disconnect, reconnected_cb=on_reconnect,
+                                error_cb=on_error)
+        sub = await nc.subscribe('hub.probe.suspension')
+
+        async def respond(msg):
+            await nc.publish(msg.reply, b'recovered')
+
+        responder = await nc.subscribe('hub.probe.suspension.reply', cb=respond)
+        await nc.flush()
+        try:
+            assert (await nc.request('hub.probe.suspension.reply', b'before', timeout=2)).data == b'recovered'
+            await nsc('edit', 'account', '--name', 'T_B', '--conns', '0')
+            await nsc('revocations', 'add-user', '--account', 'T_B', '--user-public-key', '*', '--at', '0')
+            await nsc('push', '--account', 'T_B', '--account-jwt-server-url', os.environ['NATS_URL'])
+            await asyncio.wait_for(disconnected.wait(), 5)
+            # Allow at least one login rejection before restoring the tenant.
+            async def rejected_attempt():
+                while not errors and not nc.is_closed:
+                    await asyncio.sleep(.05)
+            await asyncio.wait_for(rejected_attempt(), 8)
+            assert not nc.is_closed, 'suspension permanently closed the refreshable Python connection'
+            assert errors, 'must exercise a rejected reconnect during suspension'
+            await nsc('edit', 'account', '--name', 'T_B', '--conns', '64')
+            # Keep the wildcard revocation: only a newly minted JWT may log in.
+            await asyncio.sleep(1.1)
+            await nsc('edit', 'user', '--account', 'T_B', '--name', 'hub-server', '-K', 'hub-server', '--expiry', '1h')
+            fresh = path.with_suffix('.new')
+            await nsc('generate', 'creds', '--account', 'T_B', '--name', 'hub-server', '--output-file', str(fresh))
+            fresh.replace(path)
+            await nsc('push', '--account', 'T_B', '--account-jwt-server-url', os.environ['NATS_URL'])
+            with pytest.raises(nats.errors.Error):
+                await nats.connect(os.environ['NATS_URL'], user_credentials=str(stale),
+                                   allow_reconnect=False, connect_timeout=1, error_cb=on_error)
+            await asyncio.wait_for(reconnected.wait(), 40)
+            assert nc.stats['reconnects'] >= 1
+            await nc.publish('hub.probe.suspension', b'after')
+            await nc.flush()
+            assert (await sub.next_msg(timeout=3)).data == b'after'
+            assert (await nc.request('hub.probe.suspension.reply', b'after', timeout=3)).data == b'recovered'
+            print('PASS tenant suspension: connections=0 + wildcard revocation; same Python client, subscription and request/reply recover with re-minted file')
+        finally:
+            await nc.close()
+            # Return this shared operator stack to its original policy for later tests.
+            await nsc('edit', 'account', '--name', 'T_B', '--conns', '64')
+            await nsc('revocations', 'delete-user', '--account', 'T_B', '--user-public-key', '*')
+            await nsc('push', '--account', 'T_B', '--account-jwt-server-url', os.environ['NATS_URL'])
+    asyncio.run(run())
