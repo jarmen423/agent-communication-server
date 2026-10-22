@@ -114,6 +114,10 @@ pub struct MetricsCollector {
     /// Storage-mirror writes dropped because the bounded mirror queue was
     /// full (the DB could not keep up). Routing is unaffected.
     pub storage_mirror_dropped: AtomicU64,
+    /// Accepted mirror writes still queued or being written.
+    pub storage_mirror_pending: AtomicU64,
+    /// Mirror writes abandoned by a forced shutdown.
+    pub storage_mirror_shutdown_dropped: AtomicU64,
     /// Messages that arrived on legacy self-asserted subjects (`hub.send.>`,
     /// bare `hub.register`/`hub.presence`) while bound subjects exist.
     /// Counted whether or not `--require-bound-identity` is on, so an
@@ -263,6 +267,13 @@ impl MetricsCollector {
         out.push_str(&format!(
             "natshub_storage_mirror_dropped_total {}\n",
             self.storage_mirror_dropped.load(Ordering::Relaxed)
+        ));
+
+        out.push_str("# HELP natshub_storage_mirror_shutdown_dropped_total Storage writes abandoned at shutdown\n");
+        out.push_str("# TYPE natshub_storage_mirror_shutdown_dropped_total counter\n");
+        out.push_str(&format!(
+            "natshub_storage_mirror_shutdown_dropped_total {}\n",
+            self.storage_mirror_shutdown_dropped.load(Ordering::Relaxed)
         ));
 
         // Legacy (unbound) subject arrivals

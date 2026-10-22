@@ -33,6 +33,7 @@ path = "src/bin/hub_admin.rs"
 nats-hub-client = { path = "crates/client", version = "0.0.1" }
 async-nats = "0.38"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

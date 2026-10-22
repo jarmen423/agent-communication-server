@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, info, warn};
 
 use crate::analytics::metrics::MetricsCollector;
 use crate::protocol::Envelope;
@@ -44,6 +45,10 @@ pub(crate) struct StorageMirror {
     storage: Arc<dyn Storage>,
     dropped: AtomicU64,
     metrics: Option<Arc<MetricsCollector>>,
+    stop: CancellationToken,
+    writer: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    completed: Arc<AtomicU64>,
+    failed: Arc<AtomicU64>,
 }
 
 impl StorageMirror {
@@ -59,6 +64,10 @@ impl StorageMirror {
             storage,
             dropped: AtomicU64::new(0),
             metrics,
+            stop: CancellationToken::new(),
+            writer: Mutex::new(None),
+            completed: Arc::new(AtomicU64::new(0)),
+            failed: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -69,23 +78,69 @@ impl StorageMirror {
             return;
         };
         let storage = self.storage.clone();
-        tokio::spawn(async move {
-            while let Some(op) = rx.recv().await {
-                apply(storage.as_ref(), op).await;
+        let stop = self.stop.clone();
+        let completed = self.completed.clone();
+        let failed = self.failed.clone();
+        let metrics = self.metrics.clone();
+        *self.writer.lock().await = Some(tokio::spawn(async move {
+            loop {
+                let op = tokio::select! {
+                    biased;
+                    _ = stop.cancelled(), if !rx.is_closed() => {
+                        rx.close();
+                        continue;
+                    }
+                    op = rx.recv() => match op {
+                        Some(op) => op,
+                        None => break,
+                    }
+                };
+                if apply(storage.as_ref(), op).await {
+                    completed.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    failed.fetch_add(1, Ordering::Relaxed);
+                }
+                if let Some(m) = &metrics {
+                    m.storage_mirror_pending.fetch_sub(1, Ordering::Relaxed);
+                }
             }
             debug!("storage mirror writer stopped");
-        });
+        }));
+    }
+
+    pub(crate) async fn drain(&self) -> anyhow::Result<()> {
+        let started = std::time::Instant::now();
+        let before = self.completed.load(Ordering::Relaxed);
+        self.stop.cancel();
+        if let Some(writer) = self.writer.lock().await.take() {
+            writer.await?;
+        }
+        let flushed = self.completed.load(Ordering::Relaxed) - before;
+        let failed = self.failed.load(Ordering::Relaxed);
+        info!(
+            queued_writes_flushed = flushed,
+            writes_failed = failed,
+            duration_ms = started.elapsed().as_millis(),
+            "storage mirror drained"
+        );
+        anyhow::ensure!(failed == 0, "{failed} storage mirror writes failed");
+        Ok(())
     }
 
     /// Queue a write without blocking. Returns `false` (and counts the drop)
     /// when the queue is full.
     pub(crate) fn enqueue(&self, op: MirrorOp) -> bool {
+        // Count before send so the writer cannot complete before the increment.
+        if let Some(m) = &self.metrics {
+            m.storage_mirror_pending.fetch_add(1, Ordering::Relaxed);
+        }
         match self.tx.try_send(op) {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(op))
             | Err(mpsc::error::TrySendError::Closed(op)) => {
                 let n = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
                 if let Some(m) = &self.metrics {
+                    m.storage_mirror_pending.fetch_sub(1, Ordering::Relaxed);
                     m.record_mirror_drop();
                 }
                 // Log the first drop and then every power of two, so a
@@ -108,13 +163,14 @@ impl StorageMirror {
     }
 }
 
-async fn apply(storage: &dyn Storage, op: MirrorOp) {
+async fn apply(storage: &dyn Storage, op: MirrorOp) -> bool {
     let res = match &op {
         MirrorOp::Envelope(env) => storage.store_envelope(env).await,
         MirrorOp::Register(rec) => storage.register_agent(rec.clone()).await,
         MirrorOp::Touch(ident) => storage.touch_agent(ident).await,
     };
-    if let Err(e) = res {
+    if let Err(e) = &res {
         warn!(error = %e, op = op.label(), "storage mirror write failed (non-fatal)");
     }
+    res.is_ok()
 }

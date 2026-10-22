@@ -37,6 +37,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::client::HubClient;
@@ -114,12 +115,14 @@ impl LockService {
     /// Connect to NATS as `hub-locks`, install the process-wide handle and
     /// spawn the presence/sweep loop. On a connect failure a storage-only
     /// service is installed instead — lock ops still work (degraded: no
-    /// events, no presence expiry), and the caller logs the cause.
+    /// events, no presence expiry), and the caller logs the cause. Cancel
+    /// `shutdown`, join the returned task, then `uninstall()` during teardown.
     pub async fn start(
         storage: Arc<dyn Storage>,
         nats_url: &str,
         config: LockConfig,
-    ) -> Result<Arc<Self>> {
+        shutdown: CancellationToken,
+    ) -> Result<(Arc<Self>, tokio::task::JoinHandle<()>)> {
         let svc = match HubClient::connect(nats_url, LOCKS_IDENTITY).await {
             Ok(client) => Arc::new(Self {
                 storage,
@@ -133,21 +136,24 @@ impl LockService {
             }
         };
         install(svc.clone());
-        if svc.client.is_some() {
-            let runner = svc.clone();
-            tokio::spawn(async move {
-                if let Err(e) = runner.run().await {
+        let runner = svc.clone();
+        let task = tokio::spawn(async move {
+            if runner.client.is_some() {
+                if let Err(e) = runner.run(shutdown).await {
                     warn!(error = %e, "lock service exited");
                 }
-            });
-        }
-        Ok(svc)
+                if let Some(client) = &runner.client {
+                    let _ = client.drain().await;
+                }
+            }
+        });
+        Ok((svc, task))
     }
 
     /// The presence + expiry loop: heartbeats on `hub.presence` /
     /// `hub.presence.<id>` keep holders alive; the periodic sweep expires
     /// TTL-dead and presence-lost locks.
-    async fn run(self: &Arc<Self>) -> Result<()> {
+    async fn run(self: &Arc<Self>, shutdown: CancellationToken) -> Result<()> {
         let client = self.client.as_ref().context("lock service: no client")?;
         let mut legacy_rx = client
             .subscribe_subject_tagged(subjects::PRESENCE)
@@ -167,7 +173,11 @@ impl LockService {
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
             tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
                 Some((subj, env)) = legacy_rx.recv() => self.on_presence(&subj, &env).await,
                 Some((subj, env)) = bound_rx.recv() => self.on_presence(&subj, &env).await,
                 _ = sweep.tick() => self.sweep().await,

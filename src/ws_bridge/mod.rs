@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::HubClient;
@@ -81,9 +83,19 @@ struct BridgeState {
 /// - `event_tx`: broadcast sender that the router pushes JSON envelopes to
 /// - `config`: static dir, NATS URL, Origin allowlist, token, identity
 pub async fn start_ws_bridge(addr: &str, event_tx: EventTx, config: WsBridgeConfig) -> Result<()> {
+    start_ws_bridge_until(addr, event_tx, config, CancellationToken::new()).await
+}
+
+/// Managed bridge: close the listener and all browser command intake on cancellation.
+pub async fn start_ws_bridge_until(
+    addr: &str,
+    event_tx: EventTx,
+    config: WsBridgeConfig,
+    shutdown: CancellationToken,
+) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     info!("WS bridge listening on http://{addr}");
-    serve_ws_bridge(listener, event_tx, config).await
+    serve_ws_bridge_until(listener, event_tx, config, shutdown).await
 }
 
 /// Serve the WS bridge on an already-bound listener.
@@ -94,6 +106,15 @@ pub async fn serve_ws_bridge(
     listener: TcpListener,
     event_tx: EventTx,
     config: WsBridgeConfig,
+) -> Result<()> {
+    serve_ws_bridge_until(listener, event_tx, config, CancellationToken::new()).await
+}
+
+async fn serve_ws_bridge_until(
+    listener: TcpListener,
+    event_tx: EventTx,
+    config: WsBridgeConfig,
+    shutdown: CancellationToken,
 ) -> Result<()> {
     crate::protocol::require_valid_identity(&config.identity)?;
     let static_root = match &config.static_dir {
@@ -123,12 +144,14 @@ pub async fn serve_ws_bridge(
         identity: config.identity,
     });
 
+    let mut tasks = JoinSet::new();
+
     // One NATS connection shared by all browser tabs, established in the
     // background with retries so the bridge can serve while NATS is down.
     if let Some(url) = config.nats_url.clone() {
         let st = state.clone();
         let identity = state.identity.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let mut backoff = Duration::from_millis(500);
             loop {
                 // Connect as the configured `--ws-identity` so bound sends
@@ -151,7 +174,13 @@ pub async fn serve_ws_bridge(
     }
 
     loop {
-        let (stream, peer_addr) = match listener.accept().await {
+        let accepted = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = tasks.join_next(), if !tasks.is_empty() => continue,
+            accepted = listener.accept() => accepted,
+        };
+        let (stream, peer_addr) = match accepted {
             Ok(s) => s,
             Err(e) => {
                 warn!("WS accept error: {e}");
@@ -160,12 +189,19 @@ pub async fn serve_ws_bridge(
         };
 
         let st = state.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             if let Err(e) = handle_connection(stream, st, peer_addr).await {
                 debug!("WS connection from {peer_addr} ended: {e}");
             }
         });
     }
+    drop(listener);
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    if let Some(hub) = state.hub.write().await.take() {
+        hub.drain().await?;
+    }
+    Ok(())
 }
 
 /// True when a request targets the WebSocket endpoint. Only the exact

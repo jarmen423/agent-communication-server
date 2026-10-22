@@ -30,6 +30,9 @@ ExecReload=/bin/kill -HUP $MAINPID
 # Restart policy — same guardrails as the NATS unit.
 Restart=on-failure
 RestartSec=2s
+KillSignal=SIGTERM
+# Allow the default 10-second graceful shutdown to finish before SIGKILL.
+TimeoutStopSec=15s
 
 # Sandboxing. ReadWritePaths = the DB, log and backup directories.
 NoNewPrivileges=true

@@ -362,6 +362,7 @@ pub fn spawn(
     storage: Arc<SurrealStorage>,
     policy: RetentionPolicy,
     metrics: Arc<MetricsCollector>,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!(
@@ -375,7 +376,11 @@ pub fn spawn(
         let mut ticker = tokio::time::interval(policy.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            ticker.tick().await;
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => break,
+                _ = ticker.tick() => {},
+            }
             match run_pass(&storage, &policy).await {
                 Ok(r) => {
                     if !r.is_empty() {
