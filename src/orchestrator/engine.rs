@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::client::HubClient;
@@ -44,12 +45,14 @@ pub struct WaveOrchestrator {
 
 impl WaveOrchestrator {
     /// Connect to NATS, install the process-wide API handle, and spawn the
-    /// run loop. Returns the command handle (also via `orchestrator_handle()`).
+    /// run loop. Returns the command handle (also via `orchestrator_handle()`)
+    /// and a task to join after cancelling `shutdown`.
     pub async fn start(
         storage: Arc<dyn Storage>,
         nats_url: &str,
         config: OrchestratorConfig,
-    ) -> Result<OrchestratorHandle> {
+        shutdown: CancellationToken,
+    ) -> Result<(OrchestratorHandle, tokio::task::JoinHandle<()>)> {
         let client = HubClient::connect(nats_url, ORCHESTRATOR_IDENTITY)
             .await
             .context("orchestrator: NATS connect failed")?;
@@ -63,15 +66,16 @@ impl WaveOrchestrator {
             last_seen: HashMap::new(),
         };
         install_handle(tx.clone());
-        tokio::spawn(async move {
-            if let Err(e) = orch.run().await {
+        let task = tokio::spawn(async move {
+            if let Err(e) = orch.run(shutdown).await {
                 warn!(error = %e, "wave orchestrator exited");
             }
+            let _ = orch.client.drain().await;
         });
-        Ok(tx)
+        Ok((tx, task))
     }
 
-    async fn run(&mut self) -> Result<()> {
+    async fn run(&mut self, shutdown: CancellationToken) -> Result<()> {
         let mut wave_rx = self
             .client
             .subscribe_subject("channel.wave.>")
@@ -93,7 +97,11 @@ impl WaveOrchestrator {
             .context("orchestrator: subscribe hub.presence.* failed")?;
 
         // Resume re-dispatches through the router; wait until it routes.
-        self.wait_for_router().await;
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return Ok(()),
+            _ = self.wait_for_router() => {},
+        }
         if let Err(e) = self.resume().await {
             warn!(error = %e, "wave resume failed; starting with an empty slate");
         }
@@ -106,7 +114,11 @@ impl WaveOrchestrator {
 
         info!("wave orchestrator running");
         loop {
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
             tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
                 Some(env) = wave_rx.recv() => self.on_wave_envelope(env).await,
                 Some((subj, env)) = presence_rx.recv() => self.on_presence(&subj, &env),
                 Some((subj, env)) = bound_presence_rx.recv() => self.on_presence(&subj, &env),

@@ -34,6 +34,16 @@ pub async fn serve_attach(
     js: async_nats::jetstream::Context,
     cfg: Arc<DeliveryConfig>,
 ) -> Result<()> {
+    serve_attach_until(nats, js, cfg, tokio_util::sync::CancellationToken::new()).await
+}
+
+/// Managed attach listener: finish the active request before stopping.
+pub async fn serve_attach_until(
+    nats: async_nats::Client,
+    js: async_nats::jetstream::Context,
+    cfg: Arc<DeliveryConfig>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Result<()> {
     let mut sub = nats
         .queue_subscribe(
             format!("{ATTACH_PREFIX}.*.inbox"),
@@ -41,7 +51,12 @@ pub async fn serve_attach(
         )
         .await?;
     info!("durable delivery: answering inbox attach on {ATTACH_PREFIX}.*.inbox");
-    while let Some(msg) = sub.next().await {
+    loop {
+        let msg = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            msg = sub.next() => match msg { Some(msg) => msg, None => break },
+        };
         let Some(reply_to) = msg.reply.clone() else {
             continue;
         };

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::client::AgentInfo;
@@ -64,6 +65,8 @@ pub struct ControlPlane {
     mirror_capacity: usize,
     /// `Some` = route from the JetStream ingress stream (`--durable`).
     durable: Option<Arc<DeliveryConfig>>,
+    delivery_shutdown: CancellationToken,
+    delivery_tasks: tokio::sync::Mutex<tokio::task::JoinSet<()>>,
 }
 
 impl ControlPlane {
@@ -83,6 +86,8 @@ impl ControlPlane {
             storage: None,
             mirror_capacity: DEFAULT_MIRROR_CAPACITY,
             durable: None,
+            delivery_shutdown: CancellationToken::new(),
+            delivery_tasks: tokio::sync::Mutex::new(tokio::task::JoinSet::new()),
         })
     }
 
@@ -168,8 +173,10 @@ impl ControlPlane {
         Ok(count)
     }
 
-    /// Run the control plane event loop. Blocks until cancelled.
-    pub async fn run(&self) -> Result<()> {
+    /// Route until cancellation, finishing the active handler before dropping
+    /// intake subscriptions. Then call `drain_mirror()` and `stop_delivery()`
+    /// before dropping storage and draining the shared NATS connection.
+    pub async fn run(&self, shutdown: CancellationToken) -> Result<()> {
         info!("control plane router starting");
 
         // 0. Start the storage mirror writer and warm the in-memory cache
@@ -190,7 +197,7 @@ impl ControlPlane {
         }
 
         if let Some(cfg) = self.durable.clone() {
-            return self.run_durable(cfg).await;
+            return self.run_durable(cfg, shutdown).await;
         }
 
         let mut send_sub = self
@@ -211,7 +218,11 @@ impl ControlPlane {
         );
 
         loop {
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
             tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
                 Some(msg) = send_sub.next() => self.handle_send(&msg).await,
                 Some(msg) = bound_send_sub.next() => self.handle_send(&msg).await,
                 Some(msg) = feeds.next() => self.on_feed(&msg).await,
@@ -221,7 +232,11 @@ impl ControlPlane {
 
     /// `--durable`: route from the shared ingress consumer; registrations
     /// and heartbeats stay core-NATS (they are repeated, not stored).
-    async fn run_durable(&self, cfg: Arc<DeliveryConfig>) -> Result<()> {
+    async fn run_durable(
+        &self,
+        cfg: Arc<DeliveryConfig>,
+        shutdown: CancellationToken,
+    ) -> Result<()> {
         let ingress = self.start_durable(cfg).await?;
         let mut feeds = self.subscribe_feeds().await?;
         let mut msgs = self.ingress_messages(&ingress).await?;
@@ -230,7 +245,11 @@ impl ControlPlane {
             "control plane routing from the durable ingress consumer; subscribed to hub.register(.*), hub.presence(.*)"
         );
         loop {
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
             tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
                 item = msgs.next() => match item {
                     Some(Ok(msg)) => self.handle_durable(&ingress, msg).await,
                     Some(Err(e)) => debug!(error = %e, "ingress consumer stream error"),
@@ -290,6 +309,29 @@ impl ControlPlane {
             error!(%dest, error = %e, "failed to route envelope");
         }
         self.core.mirror_envelope(env);
+    }
+
+    /// The server shares this connection with the query API and drains it last.
+    pub fn nats_client(&self) -> async_nats::Client {
+        self.nats.clone()
+    }
+
+    /// Close the mirror input and await every accepted write. The caller
+    /// bounds this with the server's overall shutdown deadline.
+    pub async fn drain_mirror(&self) -> Result<()> {
+        if let Some(mirror) = self.core.mirror.get() {
+            mirror.drain().await?;
+        }
+        Ok(())
+    }
+
+    /// Stop the durable inbox attach listener after the mirror has drained.
+    pub async fn stop_delivery(&self) -> Result<()> {
+        self.delivery_shutdown.cancel();
+        while let Some(done) = self.delivery_tasks.lock().await.join_next().await {
+            done?;
+        }
+        Ok(())
     }
 
     /// Get a snapshot of known agents (in-memory registry).

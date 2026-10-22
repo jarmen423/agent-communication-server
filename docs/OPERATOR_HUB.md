@@ -413,6 +413,35 @@ sudo journalctl -u nats-hub-server.service -f --no-pager
 sudo systemctl reload nats-hub-nats.service
 ```
 
+### Stop or restart hub-server
+
+`systemctl stop nats-hub-server` sends SIGTERM. SIGINT (Ctrl-C) follows the
+same shutdown path. The server stops routing and query-API intake and closes
+the WebSocket listener and browser connections. It finishes active handlers,
+including durable ingress acknowledgements, then drains the storage mirror.
+It stops retention, wave orchestration, file-lock and delivery listeners,
+waits for embedded database shutdown to flush the WAL and memtables, and
+drains NATS before exiting 0.
+
+`--shutdown-timeout SECONDS` sets the deadline for the whole shutdown,
+including active handlers. The default is 10 seconds. The supplied systemd
+unit uses `KillSignal=SIGTERM` and `TimeoutStopSec=15s`. Increase
+`TimeoutStopSec` above your chosen shutdown timeout if you change it. Stop
+hub-server before stopping NATS so replies and acknowledgements can flush.
+
+Logs include `shutdown requested` with the pending mirror-write count,
+`storage mirror drained` with the number flushed and the drain duration, and
+`shutdown complete` with the total duration. A second SIGTERM or SIGINT, or an
+expired deadline, logs `shutdown forced` with `mirror_writes_dropped` and
+exits 1 immediately. These abandoned writes increment
+`natshub_storage_mirror_shutdown_dropped_total`. The final count is also in
+the log because the process may exit before another metrics scrape.
+
+The mirror remains bounded during normal operation. Writes already dropped
+on overflow cannot be recovered by graceful shutdown. In durable mode,
+ingress messages that were pulled but not handled remain unacknowledged and
+can be redelivered after restart.
+
 ## Where to go next
 
 - Plain-language security model: [`SECURITY.md`](SECURITY.md)

@@ -158,6 +158,54 @@ async fn mirror_writer_persists_in_order() {
     assert_eq!(agent.capabilities, vec!["code"]);
 }
 
+#[tokio::test]
+async fn mirror_shutdown_flushes_accepted_writes_and_closes_input() {
+    let storage = memory_storage().await;
+    let metrics = Arc::new(MetricsCollector::default());
+    let mirror = StorageMirror::new(storage.clone(), 64, Some(metrics.clone()));
+    for i in 0..64 {
+        assert!(mirror.enqueue(MirrorOp::Envelope(Box::new(Envelope::new(
+            "a",
+            "shutdown.test",
+            MessageKind::Message,
+            json!({"i": i}),
+        )))));
+    }
+    assert_eq!(
+        metrics
+            .storage_mirror_pending
+            .load(std::sync::atomic::Ordering::Relaxed),
+        64
+    );
+    mirror.start().await;
+    tokio::time::timeout(Duration::from_secs(5), mirror.drain())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        storage
+            .query_history(&HistoryQuery::new().channel("shutdown.test"))
+            .await
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        metrics
+            .storage_mirror_pending
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(!mirror.enqueue(MirrorOp::Touch("late".into())));
+    assert_eq!(mirror.dropped(), 1);
+    assert_eq!(
+        metrics
+            .storage_mirror_pending
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+}
+
 // ── Identity binding (iteration-2 T1) ──────────────────────────────
 
 #[tokio::test]

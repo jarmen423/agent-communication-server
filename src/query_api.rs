@@ -13,15 +13,16 @@
 //! ever larger than the server's NATS `max_payload`.
 
 use anyhow::Result;
-use futures_util::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::storage::Storage;
 
 pub mod authz;
 mod handlers;
+mod listener;
+pub use listener::serve_api_listener;
 mod scoped_reads;
 #[cfg(feature = "storage-surreal")]
 mod stats;
@@ -90,33 +91,15 @@ pub async fn start_api_listener_with_authz(
     nats_url: &str,
     authz: ApiAuthz,
 ) -> Result<()> {
-    // Same env auth path as ControlPlane / HubClient (NATS_TOKEN, TLS, …).
     let opts = crate::router::hub_server_connect_opts();
     let client = crate::connect_opts::connect_with_hub_opts(nats_url, &opts).await?;
-    let mut sub = client.subscribe(format!("{API_PREFIX}.>")).await?;
-
-    debug!(require_bound = authz.require_bound, admins = ?authz.admins, "query API listening on {API_PREFIX}.>");
-
-    while let Some(msg) = sub.next().await {
-        let storage = storage.clone();
-        let client = client.clone();
-        let authz = authz.clone();
-        let reply_subject = msg.reply.clone();
-        let subject = msg.subject.to_string();
-
-        tokio::spawn(async move {
-            let resp = handle_request_authorized(&storage, &subject, &msg.payload, &authz).await;
-            if let Some(reply) = reply_subject {
-                let max_payload = client.server_info().max_payload;
-                let bytes = encode_response(&resp, max_payload);
-                if let Err(e) = client.publish(reply, bytes.into()).await {
-                    warn!(error = %e, "query API: failed to publish reply");
-                }
-            }
-        });
-    }
-
-    Ok(())
+    serve_api_listener(
+        storage,
+        client,
+        authz,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
 }
 
 /// Dispatch one API request (`subject` = `hub.api.<op>`, `payload` = JSON

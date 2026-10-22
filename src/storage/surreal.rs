@@ -40,7 +40,13 @@ impl SurrealStorage {
     /// Creates the database file if it doesn't exist.
     pub async fn connect(path: &str) -> Result<Self> {
         debug!(%path, "connecting to SurrealDB (RocksDB embedded)");
-        let db = Surreal::new::<RocksDb>(path)
+        // The hub consumes query results, not Surreal LIVE notifications.
+        // Disable their SDK forwarding tasks so database shutdown can join.
+        let config = surrealdb::opt::Config::new().capabilities(
+            surrealdb::opt::capabilities::Capabilities::default()
+                .with_live_query_notifications(false),
+        );
+        let db = Surreal::new::<RocksDb>((path, config))
             .await
             .context("failed to connect to SurrealDB RocksDB")?;
 

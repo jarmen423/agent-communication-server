@@ -22,8 +22,8 @@ pub mod config;
 pub mod setup;
 
 pub use attach::{
-    attach_inbox, attach_subject, serve_attach, Attach, AttachReply, InboxTarget, ATTACH_PREFIX,
-    ATTACH_QUEUE_GROUP,
+    attach_inbox, attach_subject, serve_attach, serve_attach_until, Attach, AttachReply,
+    InboxTarget, ATTACH_PREFIX, ATTACH_QUEUE_GROUP,
 };
 pub use config::{
     client_inbox_stream, client_tasks_stream, DeliveryConfig, StorageKind, StreamLimits,

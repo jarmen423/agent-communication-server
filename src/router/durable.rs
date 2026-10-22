@@ -44,8 +44,9 @@ impl ControlPlane {
             .context("durable delivery: stream setup failed (is JetStream enabled?)")?;
         let consumer = setup::ensure_router_consumer(&js, &cfg).await?;
         let (nats, js2, cfg2) = (self.nats.clone(), js.clone(), cfg.clone());
-        tokio::spawn(async move {
-            if let Err(e) = delivery::serve_attach(nats, js2, cfg2).await {
+        let stop = self.delivery_shutdown.clone();
+        self.delivery_tasks.lock().await.spawn(async move {
+            if let Err(e) = delivery::serve_attach_until(nats, js2, cfg2, stop).await {
                 error!(error = %e, "inbox attach responder stopped");
             }
         });
