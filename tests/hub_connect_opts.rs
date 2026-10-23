@@ -270,3 +270,65 @@ async fn hub_connect_opts_live_require_tls_connects() {
         .expect("connect with require_tls should succeed against a TLS server");
     client.drain().await.expect("clean drain");
 }
+
+// ── ws:// hubs (live, private nats-server) ─────────────────────────────
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Remote machines join over `wss://`. async-nats only speaks WebSocket
+/// with its `websockets` feature; without it a `ws://` URL is dialed as
+/// raw TCP and the connect waits forever for the server's INFO.
+#[tokio::test]
+async fn connects_to_a_websocket_listener() {
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tools/bin/nats-server");
+    if !bin.exists() {
+        eprintln!("skipping: {} missing (make setup)", bin.display());
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (port, ws_port) = (free_port(), free_port());
+    let conf = dir.path().join("ws.conf");
+    std::fs::write(
+        &conf,
+        format!("host: 127.0.0.1\nport: {port}\nwebsocket {{ port: {ws_port}, no_tls: true }}\n"),
+    )
+    .unwrap();
+    let mut server = std::process::Command::new(&bin)
+        .arg("-c")
+        .arg(&conf)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let url = format!("ws://127.0.0.1:{ws_port}");
+    let mut result = None;
+    for _ in 0..50 {
+        let attempt = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            nats_hub::connect_opts::connect_with_hub_opts(&url, &HubConnectOptions::default()),
+        )
+        .await;
+        match attempt {
+            Ok(Ok(client)) => {
+                result = Some(Ok(client));
+                break;
+            }
+            Ok(Err(e)) => result = Some(Err(format!("{e:#}"))), // not listening yet
+            Err(_) => {
+                result = Some(Err("connect hung (no websocket support?)".into()));
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+    let client = result.unwrap().expect("ws:// connect");
+    client.flush().await.expect("flush over ws://");
+}

@@ -344,3 +344,30 @@ async fn second_sigterm_exits_fast_and_nonzero() {
 async fn shutdown_timeout_exits_nonzero() {
     interrupted_shutdown(false).await;
 }
+
+/// A fresh data volume (a hosted tenant's container) has no backup
+/// directory: the hub creates `--backup-dir` itself, private to it.
+#[tokio::test]
+async fn startup_creates_the_backup_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = STACK_LOCK.lock().await;
+    let Some(stack) = Stack::new().await else {
+        return;
+    };
+    let dir = stack.tmp.path().join("data").join("backups");
+    let (mut hub, log) = stack.hub(
+        "backup-dir",
+        false,
+        &["--backup-dir", dir.to_str().unwrap()],
+    );
+    wait_routing(&stack.url).await;
+    let mode = std::fs::metadata(&dir)
+        .unwrap_or_else(|e| panic!("{} not created ({e}): {}", dir.display(), logs(&log)))
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700, "backup dir mode {mode:o}");
+    signal(&hub, "-TERM").await;
+    assert!(exited(&mut hub, &log, Duration::from_secs(12))
+        .await
+        .success());
+}

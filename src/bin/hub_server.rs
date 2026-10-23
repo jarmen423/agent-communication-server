@@ -130,6 +130,16 @@ async fn run_server(
                 .map(String::from),
         );
     }
+    // The hub owns its backup directory: create it, so a fresh data volume
+    // (a hosted tenant's container) can take backups without a setup step.
+    if let Some(dir) = &args.backup_dir {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .with_context(|| format!("cannot create --backup-dir {}", dir.display()))?;
+    }
     let api_authz = nats_hub::query_api::ApiAuthz {
         require_bound: args.require_bound_identity,
         admins: api_admins,
