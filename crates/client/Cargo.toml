@@ -78,7 +78,7 @@ required-features = ["tui"]
 
 [dependencies]
 # `websockets`: remote clients join over wss:// (docs/JOIN_HUB.md).
-async-nats = { version = "0.38", features = ["websockets"] }
+async-nats = { version = "0.50", features = ["websockets"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

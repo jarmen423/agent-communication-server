@@ -340,3 +340,23 @@ mod credential_inbox_tests {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+#[cfg(test)]
+mod server_addr_tests {
+    use std::str::FromStr;
+
+    /// A ws(s):// URL without a port means the scheme's port. async-nats
+    /// before 0.50 dialed 4222 for it (and for an explicit `:443`, which
+    /// URL parsing drops), so Rust clients couldn't reach `wss://<host>`
+    /// behind a TLS proxy or Cloudflare.
+    #[test]
+    fn websocket_urls_default_to_the_scheme_port() {
+        let port = |url: &str| async_nats::ServerAddr::from_str(url).unwrap().port();
+        assert_eq!(port("wss://hub.example.com"), 443);
+        assert_eq!(port("wss://hub.example.com:443"), 443);
+        assert_eq!(port("wss://hub.example.com:8443"), 8443);
+        assert_eq!(port("ws://hub.example.com"), 80);
+        assert_eq!(port("nats://hub.example.com"), 4222);
+        assert_eq!(port("hub.example.com"), 4222);
+    }
+}
