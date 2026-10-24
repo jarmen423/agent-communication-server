@@ -1,0 +1,36 @@
+# email_plugin config. Every field, with its default. docs/EMAIL_PLUGIN.md
+
+resend_api_key_file = "~/.config/acs/resend-key"   # required; full-access key
+state_path = "~/.local/state/acs-email/state.json"  # required
+identity = "email-bridge"     # the plugin's hub identity (agents DM it to send email)
+resend_api_url = "https://api.resend.com"
+poll_seconds = 15.0
+nats_url = ""                 # empty: --nats-url, then NATS_URL, then nats://127.0.0.1:4222
+
+[[mailbox]]
+address = "claude@acs.agentmemorylabs.com"        # required
+agent = "claude"                                   # required: hub identity woken by mail
+inbox_id = "39757807-63f3-4a8b-b096-8a61474f0b97"  # required: Resend inbox id
+
+# What wakes the agent. Patterns are shell-style, matched on the lowercase
+# sender address ("*@example.com", "ada@example.org", "*" for anyone).
+allow_from = ["you@example.com"]
+deny_from = []
+require_auth = true           # DKIM or DMARC must pass (blocks forged From)
+subject_prefix = ""           # e.g. "[agent]": only mail with this prefix wakes it
+
+# Agent-to-agent email.
+peers = []                    # agents whose mail may wake this one
+may_email = []                # recipients this agent may send to (patterns)
+max_agent_turns = 4           # peer-triggered wakes per thread (loop guard)
+
+# Token budget (rolling windows). Over budget: mail is held, not dropped.
+max_wakes_per_hour = 10
+max_wakes_per_day = 50
+
+# What the agent sees and how it answers.
+context = "thread"            # "message" | "thread"
+max_context_chars = 20000
+instructions = ""             # prepended to every prompt for this mailbox
+reply_mode = "send"           # "send" | "draft" (a human sends it from Resend)
+task_timeout = 600.0          # seconds; then the task is cancelled, no reply
