@@ -410,6 +410,18 @@ The residual risks in `SECURITY.md` change meaning once a tenant is a team:
 W2-B (retention, backup) feeds H-3; W2-C (visualizer) becomes the H-4
 dashboard; W2-D (file locks) is independent. All three are done (2026-10-21).
 
+**Status (2026-10-27):** H-3 is live in production mode at
+`https://acs.agentmemorylabs.com` (one GCP VM behind a Cloudflare Tunnel).
+That means invite-only sign-up with real magic-link mail, and tenant hubs
+on the v0.0.2 release image (async-nats 0.50, so Rust clients reach `wss://`
+on 443). The deployed e2e passes, and so does a real sign-up smoke test.
+Ops: crash-looping hubs go to `failed` with their exit reason, a health
+watchdog sends alerts by email, and an encrypted off-host backup script is
+ready but waits on the GCS bucket. Still open before founders: the GitHub
+and Google OAuth apps, the bucket, a real claude.ai/ChatGPT connector
+test, and the 2-week no-intervention exit criterion. Operations live in
+`acs-private` `docs/H-3-BETA.md`.
+
 **Status (2026-10-22):** H-2 is built in the private repo
 (`agentmemorylabs/acs-private`). It covers:
 - sign-in: GitHub, Google and magic links, with invites;
