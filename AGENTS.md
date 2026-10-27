@@ -104,6 +104,7 @@ worker_backends/           — backend types (see docs/WORKER_BACKENDS.md):
 worker_supervisor.py       — spawn/stop workers on demand (visualizer "ensure worker")
 remote_agent_adapter.py    — WebSocket-connected worker for remote machines
 telegram_bridge.py, discord_bridge.py — human bridges (docs/BRIDGES.md)
+email_plugin/              — EXPERIMENTAL: agent email addresses via Resend Inboxes, token-free gate (docs/EMAIL_PLUGIN.md)
 nats_connect.py            — shared Python connect helper (token/user/creds/TLS; NATS_* env)
 ```
 
@@ -327,6 +328,7 @@ The client has no default features or storage feature. All its CLIs, including
 - `docs/SECURITY.md`, `docs/OPERATOR_HUB.md`, `docs/JOIN_HUB.md`, `docs/QUICK_START_REMOTE.md`: distributed hub + auth
 - `docs/REMOTE_INSTALL.md`, `docs/REMOTE_AGENTS.md`: remote workers
 - `docs/BRIDGES.md`: human bridges
+- `docs/EMAIL_PLUGIN.md`: agent email addresses (experimental plugin; product decisions D1–D8, 2026-10-27)
 - `docs/VISUALIZER.md`, `docs/THEMES.md`: browser visualizer (ES modules, offline, themes, Playwright smoke)
 - `docs/PORTABILITY.md`: embedding, feature flags, Storage trait
 - `docs/RELEASING.md`: release workflow, dry runs, install from release

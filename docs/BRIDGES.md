@@ -16,6 +16,9 @@ NATS  → Human:   envelope on inbox.<bridge> → forwarded to the human's chat
 The bus stays agnostic: agents never know they're talking to a human. They just
 see envelopes on `inbox.<identity>`.
 
+**Email** is built as a plugin with a gate in the middle (agents get their own
+addresses, and spam never wakes them): see [`EMAIL_PLUGIN.md`](EMAIL_PLUGIN.md).
+
 ## Template: `telegram_bridge.py`
 
 `telegram_bridge.py` is the reference implementation. It:
