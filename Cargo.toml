@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "nats-hub"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 rust-version = "1.74"
 description = "NATS-based communication layer with control plane routing for agent + human messaging"
@@ -30,7 +30,7 @@ name = "hub-admin"
 path = "src/bin/hub_admin.rs"
 
 [dependencies]
-nats-hub-client = { path = "crates/client", version = "0.0.1" }
+nats-hub-client = { path = "crates/client", version = "0.0.2" }
 # `websockets`: remote clients join over wss:// (docs/JOIN_HUB.md).
 async-nats = { version = "0.50", features = ["websockets"] }
 tokio = { version = "1", features = ["full"] }
