@@ -11,7 +11,9 @@ import logging
 
 from .config import Mailbox, PluginConfig
 from .context import build_prompt, reply_text
-from .policy import HOLD, IGNORE, WAKE, Counters, InboundEmail, Verdict, evaluate, may_send
+from .policy import (HOLD, IGNORE, WAKE, Counters, InboundEmail, Verdict, evaluate, may_send,
+                     reply_action)
+from .sessions import ThreadSessions
 from .state import DAY, State
 
 log = logging.getLogger("email_plugin")
@@ -46,6 +48,7 @@ class EmailBridge:
         self.state = state
         self.tasks: set[asyncio.Task] = set()
         self._thread_locks: dict[str, asyncio.Lock] = {}
+        self.sessions = ThreadSessions(hub, state, clock=state.clock)
 
     # ── loop ───────────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -58,6 +61,10 @@ class EmailBridge:
             await asyncio.sleep(self.cfg.poll_seconds)
 
     async def poll_once(self) -> None:
+        try:
+            await self.sessions.sweep(self.cfg.mailboxes, busy=self._thread_busy)
+        except Exception:  # noqa: BLE001 - housekeeping must not stop polling
+            log.exception("session sweep failed")
         for mb in self.cfg.mailboxes:
             try:
                 await self._poll_mailbox(mb)
@@ -90,6 +97,10 @@ class EmailBridge:
             self.state.set_baselined(mb.inbox_id)
             log.info("baselined mailbox=%s threads=%d", mb.address, len(threads))
 
+    def _thread_busy(self, thread_id: str) -> bool:
+        lock = self._thread_locks.get(thread_id)
+        return lock is not None and lock.locked()
+
     # ── one email ──────────────────────────────────────────────────────
     async def _handle(self, mb: Mailbox, thread_id: str, msg: dict, thread: list[dict]) -> None:
         received = await self.api.received_email(msg["id"])
@@ -117,12 +128,17 @@ class EmailBridge:
                     verdict: Verdict) -> None:
         lock = self._thread_locks.setdefault(email.thread_id, asyncio.Lock())
         async with lock:  # one agent run per thread at a time, in arrival order
-            prompt = build_prompt(mb, email, thread, verdict)
-            outcome = await self.hub.delegate(
-                mb.agent, prompt, mb.task_timeout,
-                on_start=lambda tid: log.info("woke agent=%s email=%s task=%s",
-                                              mb.agent, email.id, tid))
-            self.state.update(email.id, task=outcome.task_id, task_status=outcome.status)
+            def on_start(tid: str) -> None:
+                log.info("woke agent=%s email=%s task=%s", mb.agent, email.id, tid)
+
+            if mb.conversation == "session":  # D3: one hub session per thread
+                outcome = await self.sessions.turn(mb, email, thread, verdict, on_start)
+            else:
+                outcome = await self.hub.delegate(
+                    mb.agent, build_prompt(mb, email, thread, verdict), mb.task_timeout,
+                    on_start=on_start)
+            self.state.update(email.id, task=outcome.task_id, task_status=outcome.status,
+                              session=outcome.session_id)
             if outcome.status != "done":
                 log.warning("task %s agent=%s email=%s: %s",
                             outcome.status, mb.agent, email.id, outcome.error)
@@ -133,23 +149,27 @@ class EmailBridge:
             if body is None:
                 log.info("agent=%s chose not to reply email=%s", mb.agent, email.id)
             else:
-                try:
-                    if mb.reply_mode == "draft":
-                        sent = await self.api.draft_reply(mb.inbox_id, email.thread_id, email.id, body)
-                        mark = "drafted"
-                    else:
-                        sent = await self.api.reply(mb.inbox_id, email.thread_id, email.id,
-                                                    body, headers=REPLY_HEADERS)
-                        mark = "replied"
-                except Exception as e:  # noqa: BLE001
-                    log.error("reply failed email=%s task=%s: %s", email.id, outcome.task_id, e)
-                    await self._label(mb, email.thread_id, "failed")
-                    self.state.save()
-                    return
-                self.state.update(email.id, reply=sent, reply_mode=mb.reply_mode)
-                log.info("%s email=%s task=%s reply=%s", mark, email.id, outcome.task_id, sent)
-                await self._label(mb, email.thread_id, mark)
+                await self._reply(mb, email, verdict, outcome, body)
             self.state.save()
+
+    async def _reply(self, mb: Mailbox, email: InboundEmail, verdict: Verdict,
+                     outcome, body: str) -> None:
+        mode, why = reply_action(email, mb, verdict)  # D7: send, or draft for a human
+        try:
+            if mode == "draft":
+                sent = await self.api.draft_reply(mb.inbox_id, email.thread_id, email.id, body)
+                mark = "drafted"
+            else:
+                sent = await self.api.reply(mb.inbox_id, email.thread_id, email.id,
+                                            body, headers=REPLY_HEADERS)
+                mark = "replied"
+        except Exception as e:  # noqa: BLE001
+            log.error("reply failed email=%s task=%s: %s", email.id, outcome.task_id, e)
+            await self._label(mb, email.thread_id, "failed")
+            return
+        self.state.update(email.id, reply=sent, reply_mode=mode, reply_reason=why)
+        log.info("%s email=%s task=%s reply=%s (%s)", mark, email.id, outcome.task_id, sent, why)
+        await self._label(mb, email.thread_id, mark)
 
     async def _label(self, mb: Mailbox, thread_id: str, key: str) -> None:
         name, color = LABELS[key]

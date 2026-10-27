@@ -1,7 +1,7 @@
 # Email plugin: agents with their own email addresses
 
 Status: **experimental plugin** (`email_plugin/`), started 2026-10-24.
-Product decisions are still open (see [§7](#7-open-product-decisions)); the
+The owner decided D1–D8 on 2026-10-27 (see [§7](#7-product-decisions)); the
 code is built so they can change without touching the hub's other primitives.
 
 ## 1. Why
@@ -44,17 +44,19 @@ configured per mailbox; (3) `peers`, `may_email` and `max_agent_turns`
 ## 3. Why a plugin, not a core feature
 
 The plugin is a separate process that talks to the hub **only** through the
-public primitives every other client uses: a DM to an agent with the reply
-contract (`refocus.md` §6), and DMs to its own inbox. It has its own config,
+public primitives every other client uses: DMs to an agent with the reply
+contract (`refocus.md` §6), stateful sessions (the `hub-session` wire shapes),
+and DMs to its own inbox. It has its own config,
 its own state file and its own credentials. Consequences:
 
 - Nothing in the router, storage, query API, workers or MCP server changes.
   Turning the plugin off is stopping a process.
-- Workers don't know a task came from email; it is an ordinary task. Any
-  worker backend works unchanged.
+- Workers don't know a task came from email; it is an ordinary session turn
+  (or one-shot task). Any worker backend works unchanged.
 - How deeply email integrates (hub sessions per thread, agent memory, a
-  control-plane UI for policies, webhooks instead of polling) can grow one
-  step at a time, each behind a config switch.
+  control-plane UI for policies, webhooks instead of polling) grows one step
+  at a time, each behind a config switch. Hub sessions per thread are the
+  first such step (§4.3, `conversation`).
 
 It follows the bridge shape in [`BRIDGES.md`](BRIDGES.md), with a gate in the
 middle.
@@ -98,15 +100,20 @@ middle.
 4. **Label.** Every decision is visible in the Resend dashboard as a thread
    label: `acs-woke`, `acs-held`, `acs-ignored`. Held mail stays in the inbox
    for a human to read; nothing is deleted.
-5. **Wake.** Build the prompt (§4.2) and delegate to the agent with the reply
-   contract: subscribe `channel.task.<id>` first, DM `{prompt, task_channel}`,
-   wait for the terminal `done`/`error`.
-6. **Reply.** `done` → the result is sent as a reply in the same thread, from
-   the agent's address, with `Auto-Submitted: auto-replied` so vacation
-   responders don't answer it (RFC 3834). With `reply_mode = "draft"` it is
-   saved as a reply draft for a human to send instead. A result of exactly
-   `NO_REPLY` sends nothing. `error` or timeout → no email goes out (a timed-out
-   task is cancelled, §4.2) and the thread is labelled `acs-failed`.
+5. **Wake.** Build the prompt (§4.2) and run it as a turn in the thread's hub
+   session (§4.3, the default), or with `conversation = "oneshot"` as a
+   one-shot task: subscribe `channel.task.<id>` first, DM `{prompt,
+   task_channel}`, wait for the terminal `done`/`error`.
+6. **Reply.** `done` → the result becomes a reply in the same thread, from the
+   agent's address. With `reply_mode = "per_sender"` (the default, D7) it is
+   **sent** when the sender is authenticated and trusted (a peer agent, or a
+   match in `auto_send_from`; when that is empty, `allow_from` without a bare
+   `*`), and saved as a **Resend draft** for a human to approve otherwise.
+   `reply_mode = "send"` / `"draft"` do the same for every sender. Sent replies
+   carry `Auto-Submitted: auto-replied` so vacation responders don't answer
+   them (RFC 3834). A result of exactly `NO_REPLY` sends nothing. `error` or
+   timeout → no email goes out (a timed-out turn is cancelled, §4.2) and the
+   thread is labelled `acs-failed`.
 
 Each email is marked processed **before** its agent is woken: a crash can
 lose a reply, but never wakes an agent twice for one email. The first time
@@ -143,7 +150,51 @@ it and whether the sender was authenticated, and says that the agent's final
 answer becomes the reply body. Mailbox `instructions` (free text) are
 prepended, e.g. "You are the support agent for X; never share credentials."
 
-Deeper context is a product decision (§7, D4), not built yet.
+With a thread session (§4.3), the first turn gets this prompt; later turns
+get the same framing but only the thread messages the session hasn't been
+shown yet (with `context = "message"`, only the new email), since the worker
+already has the rest in memory.
+
+Context beyond the thread stays out (§7, D4).
+
+### 4.3 One hub session per thread (D3)
+
+`conversation = "session"` (default) maps each email thread to one hub
+session with the mailbox's agent, so the worker keeps its memory between
+emails. The state file holds `inbox/thread → {session_id, agent, turns,
+seen, last_turn}` (`email_plugin/sessions.py`, `state.py`).
+
+- **First email in a thread** (that the gate lets through): the plugin picks a
+  session id, writes it to the state file, creates the session record
+  (`session.create`, orchestrator = the plugin identity, so a worker can
+  persist and later resume its backend context), and DMs the worker
+  `session_start` with the §4.2 prompt on `session.<id>`. The result arrives on
+  `channel.session.<id>` under the reply contract.
+- **Later emails in the thread**: `session_send` with only what the session
+  hasn't seen. Turns are DMs to the worker (`meta.to`, channel `session.<id>`),
+  not broadcasts on the session channel, so a worker that restarted gets the
+  turn from its inbox and either resumes the session or answers `unknown
+  session`. Turns in one thread never overlap (a per-thread lock).
+- **A session that is gone** (the worker answers `unknown session`): the
+  plugin forgets it and starts a fresh session for the same email with the
+  thread text as context, as a one-shot task would. One email still gets one
+  reply.
+- **A session that never completed a turn, or whose last turn timed out**:
+  closed and forgotten; the next email starts fresh. A failed (`error`) turn
+  in an established session keeps the session; that email stays "unseen", so
+  the next turn includes it.
+- **Idle sessions** (`session_idle_hours`, default 168, 0 = never) are closed
+  at the start of a poll (`session_close` DM + `session.update_status
+  closed`); the next email in that thread starts fresh. So are sessions whose
+  mailbox was removed from the config, and a session is replaced when its
+  mailbox now points at another agent.
+- The gate, caps and labels in front are unchanged: a session turn is a wake
+  like any other.
+
+`conversation = "oneshot"` keeps one task per email with the thread as
+context. Use it for workers without session memory (the Rust `hub-worker
+--execute` runs a command per prompt) or where a cold start per email is
+preferable.
 
 ## 5. Using it
 
@@ -178,42 +229,55 @@ agent = "claude"
 inbox_id = "39757807-63f3-4a8b-b096-8a61474f0b97"
 allow_from = ["you@example.com", "*@agentmemorylabs.com"]
 context = "thread"
+conversation = "session"      # one hub session per thread (D3); "oneshot"
+reply_mode = "per_sender"     # send to allowlisted senders, draft otherwise (D7)
 max_wakes_per_hour = 10
 ```
 
 ## 6. Verified so far
 
-- Unit tests: `tests/python/test_email_policy.py` (every gate rule, config,
-  prompt, state) and `tests/python/test_email_bridge.py` (baseline, at-most-once
-  wakes across restarts, spam costs no tokens, budget, `NO_REPLY`, failures,
-  draft mode, `may_email`, the Resend client's paths/retries/errors).
-- Live: the same file's `test_live_email_wakes_echo_worker_and_replies` runs the
-  reply contract through a real router and `echo_worker.py` in all three stack
-  modes (default, `NATS_HUB_REQUIRE_BOUND=1`, `NATS_HUB_DURABLE=1`).
+- Unit tests: `tests/python/test_email_policy.py` (every gate rule, the
+  per-sender reply decision, config, prompts, state) and
+  `tests/python/test_email_bridge.py` (baseline, at-most-once wakes across
+  restarts, spam costs no tokens, budget, `NO_REPLY`, failures, draft mode,
+  `may_email`, the Resend client's paths/retries/errors).
+  `tests/python/test_email_sessions.py` covers thread sessions (new thread,
+  follow-up, plugin restart, dead-session recovery, failed and timed-out
+  turns, idle close, `oneshot`), per-sender replies, and the session wire
+  shapes `HubLink` publishes.
+- Live: `test_live_email_wakes_echo_worker_and_replies` runs the reply contract
+  through a real router and `echo_worker.py`: a first email starts a thread
+  session, a follow-up is a turn in it, and after a worker restart the next
+  email still gets its reply. It runs in all three stack modes (default,
+  `NATS_HUB_REQUIRE_BOUND=1`, `NATS_HUB_DURABLE=1`).
 - Real Resend, 2026-10-24: with `echo_worker.py --identity claude` on a
   throwaway stack, an email from an allowlisted sender to
   `claude@acs.agentmemorylabs.com` woke the agent and got a delivered reply in
   the same thread (labels `acs-woke`, `acs-replied`); an email from a sender
   not on the list was labelled `acs-held` and woke nothing.
 
-## 7. Open product decisions
+## 7. Product decisions
 
-| # | Decision | Options | Plugin default today |
-|---|---|---|---|
-| D1 | **Who may wake an agent by email?** | explicit allowlist · any ACS user of the tenant · anyone, with a human approving the first email from a new sender · anyone (public support agent) | allowlist + authenticated sender; everything else held, visible in the inbox |
-| D2 | **Addresses at scale** | one Resend inbox per agent (plan limit on inboxes) · one inbox per tenant routed by local part · domain-wide receiving + webhook, no Inboxes · per-tenant subdomains (`claude@tenant.acs…`) · plus-addressing (`agent+tenant@`) | one inbox per agent |
-| D3 | **Email thread ↔ hub conversation** | one-shot task per email (with thread text as context) · one hub *session* per thread (the worker keeps memory between emails) | one-shot task, `thread` context |
-| D4 | **Context beyond the thread** | none · the agent's recent hub history / sessions / waves · agent memory (agent-memory MCP) · per-mailbox choice | none |
-| D5 | **What a wake costs and who pays** | per-mailbox hourly/daily caps · tenant-wide token budget · cheap pre-classifier model before the real agent | per-mailbox caps; no classifier |
-| D6 | **Where it runs** | as this plugin next to a hub · inside the hosted control plane (acs-private), which already holds the Resend key and has a public URL for webhooks | plugin |
-| D7 | **Autonomy of replies** | send automatically · save as a Resend draft for a human to approve (Resend's own inbox agent only drafts) · per-sender | `reply_mode = "send"`; `"draft"` is built and per mailbox |
-| D8 | **Attachments** | ignore · pass metadata · download into the agent's workspace | metadata only (names and sizes in the prompt) |
+Decided by the owner on 2026-10-27.
+
+| # | Decision | Options that were open | Decision (2026-10-27) | Status |
+|---|---|---|---|---|
+| D1 | **Who may wake an agent by email?** | explicit allowlist · any ACS user of the tenant · anyone, with a human approving the first email from a new sender · anyone (public support agent) | **Allowlist + authenticated sender only.** Everything else is held, visible in the inbox. | Built (the default) |
+| D2 | **Addresses at scale** | one Resend inbox per agent (plan limit on inboxes) · one inbox per tenant routed by local part · domain-wide receiving + webhook, no Inboxes · per-tenant subdomains (`claude@tenant.acs…`) · plus-addressing (`agent+tenant@`) | **Long term: one Resend inbox per tenant, routed to agents by local part.** The plugin keeps one inbox per agent until then. | Recorded, not built |
+| D3 | **Email thread ↔ hub conversation** | one-shot task per email (with thread text as context) · one hub *session* per thread (the worker keeps memory between emails) | **One hub session per thread** (§4.3); `conversation = "oneshot"` per mailbox as a fallback. | Built (the default) |
+| D4 | **Context beyond the thread** | none · the agent's recent hub history / sessions / waves · agent memory (agent-memory MCP) · per-mailbox choice | **Keep the default:** none. | Built (the default) |
+| D5 | **What a wake costs and who pays** | per-mailbox hourly/daily caps · tenant-wide token budget · cheap pre-classifier model before the real agent | **Keep the default:** per-mailbox caps; no classifier. | Built (the default) |
+| D6 | **Where it runs** | as this plugin next to a hub · inside the hosted control plane (acs-private), which already holds the Resend key and has a public URL for webhooks | **Long term: inside the hosted control plane (acs-private).** It stays a plugin until then. | Recorded, not built |
+| D7 | **Autonomy of replies** | send automatically · save as a Resend draft for a human to approve (Resend's own inbox agent only drafts) · per-sender | **Per sender:** send to allowlisted (authenticated) senders, draft for everyone else. `reply_mode = "per_sender"` is the default; `"send"` / `"draft"` stay as explicit per-mailbox overrides. | Built (the default) |
+| D8 | **Attachments** | ignore · pass metadata · download into the agent's workspace | **Keep the default:** metadata only (names and sizes in the prompt). | Built (the default) |
 
 ## 8. Not built yet (in rough order)
 
-- Webhook ingestion (`inbox.email.received`, signed) instead of polling, once it
-  runs somewhere with a public URL (D6).
-- Thread ↔ hub session mapping (D3).
+- Move the feature into the hosted control plane (acs-private) (D6), with
+  webhook ingestion (`inbox.email.received`, signed) instead of polling, since
+  it has a public URL there.
+- One Resend inbox per tenant, routed to agents by local part (D2), instead of
+  one inbox per agent.
 - A dedicated MCP tool (`send_email`) so agents don't hand-write the JSON in §4.1.
 - A UI for the policy (control plane), backed by the same config fields.
-- Attachments into the agent's workspace (D8).
+- Attachments into the agent's workspace (D8 keeps metadata only for now).

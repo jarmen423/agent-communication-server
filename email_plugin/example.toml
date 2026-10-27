@@ -32,5 +32,14 @@ max_wakes_per_day = 50
 context = "thread"            # "message" | "thread"
 max_context_chars = 20000
 instructions = ""             # prepended to every prompt for this mailbox
-reply_mode = "send"           # "send" | "draft" (a human sends it from Resend)
+# "session": one hub session per email thread, the worker remembers earlier
+# emails (needs a session-capable worker, e.g. any worker_runtime worker);
+# "oneshot": one task per email with the thread text as context.
+conversation = "session"
+session_idle_hours = 168.0    # close a thread's session after a week without mail; 0 = never
+# "per_sender": send automatically to authenticated senders matching
+# auto_send_from (and to peers), save a Resend draft for everyone else.
+# "send" | "draft": the same for every sender.
+reply_mode = "per_sender"
+auto_send_from = []           # empty: allow_from (a bare "*" there trusts nobody)
 task_timeout = 600.0          # seconds; then the task is cancelled, no reply

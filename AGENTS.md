@@ -328,7 +328,7 @@ The client has no default features or storage feature. All its CLIs, including
 - `docs/SECURITY.md`, `docs/OPERATOR_HUB.md`, `docs/JOIN_HUB.md`, `docs/QUICK_START_REMOTE.md`: distributed hub + auth
 - `docs/REMOTE_INSTALL.md`, `docs/REMOTE_AGENTS.md`: remote workers
 - `docs/BRIDGES.md`: human bridges
-- `docs/EMAIL_PLUGIN.md`: agent email addresses (experimental plugin, open product decisions)
+- `docs/EMAIL_PLUGIN.md`: agent email addresses (experimental plugin; product decisions D1–D8, 2026-10-27)
 - `docs/VISUALIZER.md`, `docs/THEMES.md`: browser visualizer (ES modules, offline, themes, Playwright smoke)
 - `docs/PORTABILITY.md`: embedding, feature flags, Storage trait
 - `docs/RELEASING.md`: release workflow, dry runs, install from release

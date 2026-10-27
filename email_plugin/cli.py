@@ -14,7 +14,8 @@ import os
 import sys
 from pathlib import Path
 
-from .config import ConfigError, Mailbox, append_mailbox, load_config, valid_address, write_initial_config
+from .config import (CONVERSATION_MODES, REPLY_MODES, ConfigError, Mailbox, append_mailbox,
+                     load_config, valid_address, write_initial_config)
 from .policy import Counters, evaluate
 from .resend_api import ResendError, ResendInboxes
 from .state import DAY, State
@@ -56,7 +57,8 @@ async def cmd_add_address(args) -> int:
     mb = Mailbox(address=address, agent=args.agent, inbox_id=inbox_id,
                  allow_from=tuple(a.lower() for a in args.allow_from),
                  peers=tuple(args.peer), may_email=tuple(a.lower() for a in args.may_email),
-                 context=args.context, reply_mode=args.reply_mode)
+                 context=args.context, reply_mode=args.reply_mode,
+                 conversation=args.conversation)
     append_mailbox(path, mb)
     print(f"{address} → agent {args.agent} added to {path}")
     if not mb.allow_from and not mb.peers:
@@ -73,7 +75,9 @@ def cmd_list(args) -> int:
         print(f"  peers={list(mb.peers)} may_email={list(mb.may_email)} "
               f"max_agent_turns={mb.max_agent_turns}")
         print(f"  budget={mb.max_wakes_per_hour}/h {mb.max_wakes_per_day}/day "
-              f"context={mb.context} reply_mode={mb.reply_mode}")
+              f"context={mb.context} conversation={mb.conversation}")
+        print(f"  reply_mode={mb.reply_mode}"
+              + (f" auto_send_from={list(mb.auto_send_from)}" if mb.auto_send_from else ""))
     return 0
 
 
@@ -140,7 +144,10 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--peer", action="append", default=[], help="agent allowed to wake this one")
     a.add_argument("--may-email", action="append", default=[], help="recipient pattern")
     a.add_argument("--context", choices=("message", "thread"), default="thread")
-    a.add_argument("--reply-mode", choices=("send", "draft"), default="send")
+    a.add_argument("--reply-mode", choices=REPLY_MODES, default="per_sender",
+                   help="per_sender: send to allowlisted senders, draft for the rest")
+    a.add_argument("--conversation", choices=CONVERSATION_MODES, default="session",
+                   help="session: one hub session per thread; oneshot: one task per email")
     a.add_argument("--resend-key-file", default=DEFAULT_KEY)
     sub.add_parser("list", help="show configured mailboxes")
     c = sub.add_parser("check", help="dry run of the gate over current mail")

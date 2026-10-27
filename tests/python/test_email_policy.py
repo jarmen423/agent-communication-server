@@ -4,8 +4,9 @@ from __future__ import annotations
 import pytest
 
 from email_plugin.config import ConfigError, Mailbox, append_mailbox, load_config, write_initial_config
-from email_plugin.context import NO_REPLY, build_prompt, reply_text
-from email_plugin.policy import HOLD, IGNORE, WAKE, Counters, InboundEmail, Verdict, evaluate, may_send
+from email_plugin.context import NO_REPLY, build_followup_prompt, build_prompt, reply_text
+from email_plugin.policy import (HOLD, IGNORE, WAKE, Counters, InboundEmail, Verdict, evaluate,
+                                 may_send, reply_action)
 from email_plugin.state import State
 
 PASS = {"spf": "pass", "dkim": "pass", "dmarc": "gray"}
@@ -114,6 +115,37 @@ def test_prompt_frames_untrusted_content_and_thread():
     assert "earlier reply" not in only and "follow up" in only
 
 
+def test_reply_action_per_sender():
+    assert MB.reply_mode == "per_sender"  # D7 default
+    ok = Verdict(WAKE, "ok")
+    assert reply_action(mail(), MB, ok)[0] == "send"
+    assert reply_action(mail("x@team.example"), MB, ok)[0] == "send"
+    peer = Verdict(WAKE, "peer agent", "bot2")
+    assert reply_action(mail("bot2@acs.example.com"), MB, peer) == ("send", "peer agent bot2")
+    mode, why = reply_action(mail(auth={"dkim": "fail", "dmarc": "fail"}), MB, ok)
+    assert mode == "draft" and "not authenticated" in why
+    narrow = Mailbox(**{**MB.__dict__, "auto_send_from": ("ada@example.org",)})
+    assert reply_action(mail("x@team.example"), narrow, ok)[0] == "draft"
+    public = Mailbox(**{**MB.__dict__, "allow_from": ("*",)})
+    assert reply_action(mail(), public, ok)[0] == "draft"  # "*" opens the gate, trusts no one
+    for fixed in ("send", "draft"):
+        mb = Mailbox(**{**MB.__dict__, "reply_mode": fixed})
+        assert reply_action(mail("stranger@x.example", auth={}), mb, ok)[0] == fixed
+
+
+def test_followup_prompt_has_only_what_the_session_has_not_seen():
+    thread = [{"id": "e0", "direction": "inbound", "from": "ada@example.org", "text": "old q"},
+              {"id": "r1", "direction": "outbound", "from": "claude@acs.example.com",
+               "text": "old answer"},
+              {"id": "e1", "direction": "inbound", "from": "ada@example.org", "text": "new q"}]
+    p = build_followup_prompt(MB, mail(), thread, {"e0"}, Verdict(WAKE, "ok"))
+    assert "old q" not in p and "old answer" in p and "new q" in p
+    assert "untrusted external content" in p and NO_REPLY in p
+    msg = Mailbox(**{**MB.__dict__, "context": "message"})
+    p = build_followup_prompt(msg, mail(), thread, {"e0"}, Verdict(WAKE, "ok"))
+    assert "old answer" not in p and "new q" in p
+
+
 def test_prompt_truncates_long_threads():
     thread = [{"id": f"e{i}", "direction": "inbound", "from": "a@b.c", "text": "x" * 500}
               for i in range(10)]
@@ -136,12 +168,27 @@ def test_config_round_trip(tmp_path):
     (mb,) = cfg.mailboxes
     assert mb.address == "bot@acs.example.com" and mb.allow_from == ("a@b.c",)
     assert mb.peers == ("x",) and mb.context == "thread"
+    assert mb.conversation == "session" and mb.reply_mode == "per_sender"
+
+
+def test_example_config_parses_with_defaults():
+    from pathlib import Path
+
+    import email_plugin
+
+    cfg = load_config(Path(email_plugin.__file__).parent / "example.toml")
+    (mb,) = cfg.mailboxes
+    assert mb == Mailbox(address=mb.address, agent=mb.agent, inbox_id=mb.inbox_id,
+                         allow_from=mb.allow_from)  # every other field is the default
 
 
 @pytest.mark.parametrize("extra,err", [
     ('context = "everything"', "context"),
     ('agent = "bad.name"', "invalid identity"),
     ('surprise = 1', "unknown keys"),
+    ('conversation = "forever"', "conversation"),
+    ('reply_mode = "maybe"', "reply_mode"),
+    ('session_idle_hours = -1', "session_idle_hours"),
 ])
 def test_config_rejects_bad_mailboxes(tmp_path, extra, err):
     path = tmp_path / "email.toml"
@@ -162,6 +209,20 @@ def test_state_budget_window_and_persistence(tmp_path):
     assert st.wakes_within("claude", 3600) == 1 and st.wakes_within("claude", 86400) == 2
     st.mark("e1", WAKE, "ok")
     st.add_agent_turn("t1")
+    st.set_thread_session("ib", "t1", "s1", "claude")
+    st.session_turn("ib", "t1", done=True, seen=["e0", "e1"])
+    st.session_turn("ib", "t1", done=False, seen=["e2"])  # a failed turn saw nothing
     st.save()
     again = State(tmp_path / "s.json", clock=lambda: now[0])
     assert again.is_processed("e1") and again.agent_turns("t1") == 1
+    rec = again.thread_session("ib", "t1")
+    assert rec["session_id"] == "s1" and rec["turns"] == 1 and rec["seen"] == ["e0", "e1"]
+    assert again.drop_thread_session("ib", "t1") == rec and again.thread_sessions() == []
+
+
+def test_state_from_before_sessions_loads(tmp_path):
+    path = tmp_path / "old.json"
+    path.write_text('{"processed": {}, "thread_counts": {}, "wakes": {}, '
+                    '"agent_turns": {}, "baselined": ["ib"]}')
+    st = State(path)
+    assert st.baselined("ib") and st.thread_session("ib", "t1") is None

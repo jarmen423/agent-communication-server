@@ -15,7 +15,8 @@ from pathlib import Path
 from nats_connect import validate_identity
 
 CONTEXT_MODES = ("message", "thread")
-REPLY_MODES = ("send", "draft")
+CONVERSATION_MODES = ("session", "oneshot")
+REPLY_MODES = ("per_sender", "send", "draft")
 _ADDRESS_RE = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
@@ -46,8 +47,17 @@ class Mailbox:
     context: str = "thread"
     max_context_chars: int = 20_000
     instructions: str = ""
-    # send: reply immediately; draft: leave a reply draft for a human.
-    reply_mode: str = "send"
+    # session: one hub session per email thread, the worker keeps memory
+    # between emails (D3); oneshot: one task per email, thread text as context.
+    conversation: str = "session"
+    # A thread's session is closed after this long without a turn; the next
+    # email starts a fresh one with the thread as context. 0 = never.
+    session_idle_hours: float = 168.0
+    # per_sender (D7): send replies to authenticated senders matching
+    # auto_send_from (empty: allow_from without a bare "*") and to peer
+    # agents, save a draft for everyone else. send / draft: always.
+    reply_mode: str = "per_sender"
+    auto_send_from: tuple[str, ...] = ()
     task_timeout: float = 600.0
 
 
@@ -89,7 +99,7 @@ def _mailbox(raw: dict, where: str) -> Mailbox:
             raise ConfigError(f"{where}: '{key}' is required")
     vals = dict(raw)
     vals["address"] = raw["address"].strip().lower()
-    for key in ("allow_from", "deny_from", "may_email"):
+    for key in ("allow_from", "deny_from", "may_email", "auto_send_from"):
         vals[key] = tuple(p.strip().lower() for p in raw.get(key, ()))
     vals["peers"] = tuple(raw.get("peers", ()))
     mb = Mailbox(**vals)
@@ -105,6 +115,12 @@ def _mailbox(raw: dict, where: str) -> Mailbox:
         raise ConfigError(f"{where}: context must be one of {CONTEXT_MODES}")
     if mb.reply_mode not in REPLY_MODES:
         raise ConfigError(f"{where}: reply_mode must be one of {REPLY_MODES}")
+    if mb.conversation not in CONVERSATION_MODES:
+        raise ConfigError(f"{where}: conversation must be one of {CONVERSATION_MODES}")
+    for key in ("session_idle_hours", "task_timeout"):
+        v = getattr(mb, key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+            raise ConfigError(f"{where}: {key} must be a non-negative number")
     for key in ("max_agent_turns", "max_wakes_per_hour", "max_wakes_per_day",
                 "max_context_chars"):
         if not isinstance(getattr(mb, key), int) or getattr(mb, key) < 0:

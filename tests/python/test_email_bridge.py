@@ -71,29 +71,57 @@ class FakeInboxes:
 
 
 class FakeHub:
+    """Fake hub + worker: one-shot tasks and sessions. ``held`` is the set of
+    sessions the worker holds; clearing it is a worker restart without resume."""
+
     def __init__(self, result="Sure, done.", status="done"):
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str]] = []  # (worker, prompt) of every turn
+        self.ops: list[tuple[str, str | None]] = []  # (delegate|start|send|close, session)
+        self.held: set[str] = set()
         self.result, self.status = result, status
+
+    def _outcome(self, session_id=None):
+        n = len(self.calls)
+        return TaskOutcome(f"task-{n}", self.status, self.result,
+                           None if self.status == "done" else "boom", session_id=session_id)
 
     async def delegate(self, worker, prompt, timeout, on_start=None):
         self.calls.append((worker, prompt))
-        return TaskOutcome("task-1", self.status, self.result,
-                           None if self.status == "done" else "boom")
+        self.ops.append(("delegate", None))
+        return self._outcome()
+
+    async def start_session(self, worker, session_id, prompt, timeout, on_start=None,
+                            metadata=None):
+        self.calls.append((worker, prompt))
+        self.ops.append(("start", session_id))
+        self.held.add(session_id)
+        return self._outcome(session_id)
+
+    async def send_session(self, worker, session_id, prompt, timeout, on_start=None):
+        self.calls.append((worker, prompt))
+        self.ops.append(("send", session_id))
+        if session_id not in self.held:
+            return TaskOutcome(f"task-{len(self.calls)}", "error", None,
+                               f"unknown session {session_id} on worker {worker}", session_id)
+        return self._outcome(session_id)
+
+    async def close_session(self, worker, session_id):
+        self.ops.append(("close", session_id))
+        self.held.discard(session_id)
 
     async def serve_requests(self, handler):
         pass
 
 
-def make(tmp_path, hub=None, **mb_kw):
+def make(tmp_path, hub=None, clock=None, **mb_kw):
     mb = Mailbox(**{"address": "claude@acs.example.com", "agent": "claude", "inbox_id": "ib",
                     "allow_from": ("ada@example.org",), **mb_kw})
     cfg = PluginConfig(resend_api_key_file="k", state_path=str(tmp_path / "s.json"),
                        mailboxes=(mb,))
     api = FakeInboxes()
-    bridge = EmailBridge(cfg, api, hub or FakeHub(), State(cfg.state_path))
+    state = State(cfg.state_path, clock=clock) if clock else State(cfg.state_path)
+    bridge = EmailBridge(cfg, api, hub or FakeHub(), state)
     return bridge, api
-
-
 async def poll(bridge):
     await bridge.poll_once()
     await bridge.drain()
@@ -261,6 +289,26 @@ async def test_live_email_wakes_echo_worker_and_replies(tmp_path):
         assert len(api.replies) == 1, api.labels
         assert "ping from email"[::-1] in api.replies[0][3]  # echo reverses the prompt
         assert "acs-replied" in api.labels["t1"]
+        sid = bridge.state.thread_session("ib", "t1")["session_id"]  # D3: a hub session
+
+        # A follow-up in the same thread is a turn in the same session.
+        api.deliver("ib", "t1", "Ada <ada@example.org>", "second ping")
+        await poll(bridge)
+        assert len(api.replies) == 2 and "second ping"[::-1] in api.replies[1][3]
+        rec = bridge.state.thread_session("ib", "t1")
+        assert rec["session_id"] == sid and rec["turns"] == 2
+
+        # The worker restarts: the session is resumed, or replaced by a fresh
+        # one with the thread as context. Either way the email gets its reply.
+        worker.terminate()
+        worker.wait(timeout=5)
+        worker = subprocess.Popen([sys.executable, "echo_worker.py", "--identity", agent,
+                                   "--nats-url", url], cwd=REPO_ROOT,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        await asyncio.sleep(1.5)
+        api.deliver("ib", "t1", "Ada <ada@example.org>", "third ping")
+        await poll(bridge)
+        assert len(api.replies) == 3 and "third ping"[::-1] in api.replies[2][3], api.labels
 
         # Agent → plugin DM (as the MCP send_direct tool sends it) → email out.
         sender = f"agent-{uuid.uuid4().hex[:6]}"

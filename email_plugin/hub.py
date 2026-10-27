@@ -3,6 +3,11 @@
 - ``delegate``: the reply contract (refocus.md §6): subscribe the task channel
   first, DM ``{prompt, task_channel}``, wait for the terminal result; on
   timeout send the §4.2 cancel.
+- ``start_session`` / ``send_session`` / ``close_session``: a hub session per
+  email thread (docs/EMAIL_PLUGIN.md §4.3), the same wire shapes as
+  ``hub-session`` and the MCP session tools. Each turn is a DM to the worker on
+  ``session.<id>`` (so a restarted worker gets it from its inbox and can
+  resume or report ``unknown session``); its result arrives on that channel.
 - ``serve_requests``: agents DM the plugin identity to send email; the plugin
   answers with a §6.6 plain-DM result.
 """
@@ -12,7 +17,7 @@ import asyncio
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
@@ -20,6 +25,7 @@ from hub_delivery import subscribe_inbox, task_channel_for
 
 log = logging.getLogger("email_plugin.hub")
 SUB_READY_DELAY = 0.05
+API_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,12 @@ class TaskOutcome:
     status: str  # done | error | cancelled | timeout
     result: object = None
     error: str | None = None
+    session_id: str | None = None
+
+    @property
+    def session_gone(self) -> bool:
+        """The worker answered that it doesn't hold (and can't resume) the session."""
+        return self.status == "error" and "unknown session" in (self.error or "")
 
 
 def envelope(identity: str, channel: str, payload: dict, *, kind: str = "message",
@@ -72,13 +84,20 @@ class HubLink:
         await self.nc.publish(f"hub.pub.{self.identity}.{channel}", json.dumps(env).encode())
         await self.nc.flush()
 
-    async def delegate(self, worker: str, prompt: str, timeout: float,
-                       on_start: Callable[[str], None] | None = None) -> TaskOutcome:
-        env = envelope(self.identity, "task", {}, to=worker)
-        task_id = env["meta"]["id"]
-        channel = task_channel_for(task_id)
-        env["meta"]["channel"] = channel
-        env["payload"] = {"prompt": prompt, "task_channel": channel}
+    async def api_request(self, op: str, params: dict) -> dict:
+        """Query API (``hub.api.<identity>.<op>``); errors come back as ``ok: false``."""
+        req = json.dumps({"op": op, "params": params}).encode()
+        try:
+            reply = await self.nc.request(f"hub.api.{self.identity}.{op}", req, timeout=API_TIMEOUT)
+            return json.loads(reply.data)
+        except Exception as e:  # noqa: BLE001 - session records are best effort
+            return {"ok": False, "error": str(e)}
+
+    async def _turn(self, worker: str, env: dict, timeout: float,
+                    on_start: Callable[[str], None] | None) -> TaskOutcome:
+        """Subscribe ``env``'s channel, publish it, wait for the terminal result
+        (reply contract); on timeout send the §4.2 cancel."""
+        task_id, channel = env["meta"]["id"], env["meta"]["channel"]
         done: asyncio.Future = asyncio.get_running_loop().create_future()
 
         async def on_msg(msg) -> None:
@@ -107,6 +126,51 @@ class HubLink:
             await sub.unsubscribe()
         status = payload.get("status") or "done"
         return TaskOutcome(task_id, status, payload.get("result"), payload.get("error"))
+
+    async def delegate(self, worker: str, prompt: str, timeout: float,
+                       on_start: Callable[[str], None] | None = None) -> TaskOutcome:
+        env = envelope(self.identity, "task", {}, to=worker)
+        channel = task_channel_for(env["meta"]["id"])
+        env["meta"]["channel"] = channel
+        env["payload"] = {"prompt": prompt, "task_channel": channel}
+        return await self._turn(worker, env, timeout, on_start)
+
+    async def start_session(self, worker: str, session_id: str, prompt: str, timeout: float,
+                            on_start: Callable[[str], None] | None = None,
+                            metadata: dict | None = None) -> TaskOutcome:
+        """``session_start`` with the first turn's prompt. The session record
+        (``session.create``) is written first, so the worker can persist its
+        backend context and resume the session after a restart."""
+        channel = f"session.{session_id}"
+        env = envelope(self.identity, channel, {
+            "action": "session_start", "session_id": session_id,
+            "session_channel": channel, "prompt": prompt}, to=worker)
+        now = env["meta"]["timestamp"]
+        resp = await self.api_request("session.create", {
+            "session_id": session_id, "orchestrator": self.identity, "worker": worker,
+            "status": "active", "created_at": now, "updated_at": now,
+            "metadata": {"session_channel": channel, **(metadata or {})}})
+        if not resp.get("ok"):
+            log.warning("session.create %s failed (worker can't resume it): %s",
+                        session_id, resp.get("error"))
+        return replace(await self._turn(worker, env, timeout, on_start), session_id=session_id)
+
+    async def send_session(self, worker: str, session_id: str, prompt: str, timeout: float,
+                           on_start: Callable[[str], None] | None = None) -> TaskOutcome:
+        channel = f"session.{session_id}"
+        env = envelope(self.identity, channel, {
+            "action": "session_send", "session_id": session_id, "message": prompt}, to=worker)
+        return replace(await self._turn(worker, env, timeout, on_start), session_id=session_id)
+
+    async def close_session(self, worker: str, session_id: str) -> None:
+        channel = f"session.{session_id}"
+        await self._publish(channel, envelope(
+            self.identity, channel, {"action": "session_close", "session_id": session_id},
+            to=worker))
+        resp = await self.api_request("session.update_status",
+                                      {"session_id": session_id, "status": "closed"})
+        if not resp.get("ok"):
+            log.debug("session.update_status %s: %s", session_id, resp.get("error"))
 
     async def serve_requests(self, handler: Callable[[str, dict], Awaitable[str]]) -> None:
         """DMs to ``inbox.<identity>`` with ``payload.email`` → ``handler(sender,

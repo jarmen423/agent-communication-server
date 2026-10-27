@@ -1,5 +1,6 @@
-"""Local state: which emails were handled, wake history (budget) and
-per-thread agent turns (loop guard). One JSON file, written atomically.
+"""Local state: which emails were handled, wake history (budget),
+per-thread agent turns (loop guard) and the hub session of each email thread
+(D3). One JSON file, written atomically.
 
 Resend's ``read`` flag is not used for this: reading a thread through the API
 can mark it read, and humans read mail in the dashboard too.
@@ -12,6 +13,7 @@ import time
 from pathlib import Path
 
 MAX_PROCESSED = 20_000
+MAX_SEEN = 500  # email ids remembered per thread session
 DAY = 86_400.0
 
 
@@ -20,7 +22,7 @@ class State:
         self.path = Path(os.path.expanduser(str(path)))
         self.clock = clock
         self.data: dict = {"processed": {}, "thread_counts": {}, "wakes": {},
-                           "agent_turns": {}, "baselined": []}
+                           "agent_turns": {}, "baselined": [], "sessions": {}}
         if self.path.exists():
             loaded = json.loads(self.path.read_text())
             for k, v in loaded.items():
@@ -76,3 +78,33 @@ class State:
 
     def add_agent_turn(self, thread_id: str) -> None:
         self.data["agent_turns"][thread_id] = self.agent_turns(thread_id) + 1
+
+    # ── thread → hub session (D3) ──────────────────────────────────────
+    # {"session_id", "agent", "started", "last_turn", "turns" (done turns),
+    #  "seen" (ids of thread emails the session has been shown)}
+    def thread_session(self, inbox_id: str, thread_id: str) -> dict | None:
+        return self.data["sessions"].get(f"{inbox_id}/{thread_id}")
+
+    def thread_sessions(self) -> list[tuple[str, str, dict]]:
+        return [(*k.split("/", 1), v) for k, v in self.data["sessions"].items()]
+
+    def set_thread_session(self, inbox_id: str, thread_id: str, session_id: str,
+                           agent: str) -> dict:
+        now = self.clock()
+        rec = {"session_id": session_id, "agent": agent, "started": now,
+               "last_turn": now, "turns": 0, "seen": []}
+        self.data["sessions"][f"{inbox_id}/{thread_id}"] = rec
+        return rec
+
+    def session_turn(self, inbox_id: str, thread_id: str, *, done: bool,
+                     seen: list[str] = ()) -> None:
+        rec = self.thread_session(inbox_id, thread_id)
+        if rec is None:
+            return
+        rec["last_turn"] = self.clock()
+        if done:
+            rec["turns"] += 1
+            rec["seen"] = (rec["seen"] + [i for i in seen if i not in rec["seen"]])[-MAX_SEEN:]
+
+    def drop_thread_session(self, inbox_id: str, thread_id: str) -> dict | None:
+        return self.data["sessions"].pop(f"{inbox_id}/{thread_id}", None)

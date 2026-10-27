@@ -115,6 +115,25 @@ def evaluate(email: InboundEmail, mb: Mailbox, *, own_addresses: dict[str, str],
     return Verdict(WAKE, "peer agent" if peer else f"{sender} is allowed", peer)
 
 
+def reply_action(email: InboundEmail, mb: Mailbox, verdict: Verdict) -> tuple[str, str]:
+    """D7: ``("send" | "draft", why)`` for the reply to a woken email.
+
+    ``per_sender`` sends only to an *authenticated* sender that is a peer agent
+    or matches ``auto_send_from`` (empty: ``allow_from``, where a bare ``*``
+    opens the gate but makes nobody trusted); everyone else gets a draft for a
+    human to approve. ``send`` / ``draft`` apply to every sender."""
+    if mb.reply_mode != "per_sender":
+        return mb.reply_mode, f"reply_mode {mb.reply_mode}"
+    if not authenticated(email):
+        return "draft", "sender not authenticated"
+    if verdict.peer:
+        return "send", f"peer agent {verdict.peer}"
+    trusted = mb.auto_send_from or tuple(p for p in mb.allow_from if p != "*")
+    if matches(email.from_addr, trusted):
+        return "send", f"{email.from_addr} is allowlisted"
+    return "draft", f"{email.from_addr} is not allowlisted for auto-send"
+
+
 def may_send(mb: Mailbox, recipients: list[str]) -> str | None:
     """None when the agent may email every recipient, else the reason not."""
     if not recipients:
