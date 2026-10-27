@@ -86,10 +86,7 @@ impl ChannelCatchUp {
                 }
             };
             self.available = Some(true);
-            let seq = msg
-                .headers
-                .as_ref()
-                .and_then(|h| delivery::header(h, "Nats-Sequence"))
+            let seq = delivery::header(&msg.headers, "Nats-Sequence")
                 .and_then(|v| v.parse::<u64>().ok())
                 .ok_or_else(|| anyhow!("direct get reply without Nats-Sequence"))?;
             self.last_seq = seq;

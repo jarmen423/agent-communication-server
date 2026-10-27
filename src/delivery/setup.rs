@@ -106,8 +106,11 @@ pub async fn ensure_streams(js: &jetstream::Context, cfg: &DeliveryConfig) -> Re
 }
 
 fn is_not_found(kind: CreateStreamErrorKind) -> bool {
-    matches!(kind, CreateStreamErrorKind::JetStream(ref e)
-        if e.error_code() == jetstream::ErrorCode::STREAM_NOT_FOUND)
+    // async-nats 0.50 reports a missing stream as `NotFound`; older
+    // versions passed the JetStream error code through.
+    matches!(kind, CreateStreamErrorKind::NotFound)
+        || matches!(kind, CreateStreamErrorKind::JetStream(ref e)
+            if e.error_code() == jetstream::ErrorCode::STREAM_NOT_FOUND)
 }
 
 /// The shared durable pull consumer all hub-servers route from.
