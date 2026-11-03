@@ -14,6 +14,9 @@ const { wideLayout, tallLayout } = await import("./layout.ts");
 const { createTraffic, Deposits, emit, exposure, HISTORY, POSTER_T, STRIDE } = await import("./schedule.ts");
 const { WIDE, TALL } = await import("../../components/hero/geometry.ts");
 const { startHero } = await import("./scene.ts");
+const ascii = await import("./ascii.ts");
+const { fieldRows, glyphTable, glyphAt, GRID, RAMP, TUNE } = await import("./field.ts");
+const { hubLamp, LAMP_EVENTS } = await import("./schedule.ts");
 
 const layouts = { wide: wideLayout(WIDE), tall: tallLayout(TALL) };
 
@@ -147,6 +150,88 @@ test("startHero renders, pauses, recolours and disposes on the mock adapter", as
     hero.setPaused(false); // still held by the visitor's pause
     canvas.dispatchEvent(new CustomEvent("hero:pause", { detail: false }));
     await new Promise((r) => setTimeout(r, 30));
+    hero.dispose();
+  }
+});
+
+// ---- the ASCII variant: light through the junction, the hub lamp, the field ----
+
+const asciiLayouts = { wide: wideLayout(WIDE, TUNE.wide), tall: tallLayout(TALL, TUNE.tall) };
+
+for (const [name, layout] of Object.entries(asciiLayouts)) {
+  test(`${name}: light crosses the junction without a gap`, () => {
+    const traffic = createTraffic(layout, 7, { through: true });
+    traffic.advance(60);
+    const { plate } = layout;
+    for (const m of traffic.pending().slice(0, 80)) {
+      assert.ok(m.mid, "a crossing path");
+      const [ax, ay] = [m.a.pts.at(-2), m.a.pts.at(-1)];
+      const [bx, by] = [m.b.pts[0], m.b.pts[1]];
+      assert.ok(Math.hypot(m.mid.pts[0] - ax, m.mid.pts[1] - ay) < 1e-3, "starts where the lane enters");
+      assert.ok(Math.hypot(m.mid.pts.at(-2) - bx, m.mid.pts.at(-1) - by) < 1e-3, "ends where the next lane leaves");
+      const mx = m.mid.pts[16], my = m.mid.pts[17];
+      assert.ok(mx > plate.x && mx < plate.x + plate.w && my > plate.y && my < plate.y + plate.h, "passes through the plate");
+    }
+    assert.equal(createTraffic(layout).live(POSTER_T)[0].mid, null, "light B keeps its hidden hold");
+  });
+
+  test(`${name}: the hub lamp registers each envelope in its own colour`, () => {
+    const traffic = createTraffic(layout, 7, { through: true });
+    const msgs = traffic.live(POSTER_T);
+    const lamp = hubLamp(msgs, POSTER_T);
+    assert.equal(lamp.events.length, LAMP_EVENTS);
+    assert.ok(lamp.glow > 0.2 && lamp.glow < 1, `glow ${lamp.glow}`);
+    assert.ok(lamp.share >= 0 && lamp.share <= 1);
+    const live = lamp.events.filter((e) => e[2] < 99);
+    assert.ok(live.length > 0, "something passed through recently");
+    for (let i = 1; i < live.length; i++) assert.ok(live[i][2] >= live[i - 1][2], "freshest first");
+    for (const [x, y] of live) {
+      const p = layout.plate;
+      assert.ok(Math.abs(x - p.x) < 12 || Math.abs(x - (p.x + p.w)) < 12 || Math.abs(y - p.y) < 12 || Math.abs(y - (p.y + p.h)) < 12, "flash sits on the plate's rim");
+    }
+    // Sent envelopes flash positive (teal), received negative (orange).
+    const sentAt = new Set(msgs.filter((m) => m.channel === 0).map((m) => `${m.a.pts.at(-2)},${m.a.pts.at(-1)}`));
+    for (const [x, y, , w] of live) if (w > 0) assert.ok(sentAt.has(`${x},${y}`));
+  });
+
+  test(`${name}: the field is the hub's own traffic, still and deterministic`, () => {
+    const [cols, rows] = GRID[name];
+    const text = fieldRows(layout, cols, rows);
+    assert.equal(text.length, rows);
+    for (const row of text) assert.equal(row.length, cols);
+    assert.deepEqual(fieldRows(layout, cols, rows), text, "same text every time");
+    const all = text.join("\n");
+    for (const needle of ["channel.task.", "hub.pub.", '"status":"working"', '"event_type"']) assert.ok(all.includes(needle), needle);
+    const { chars, index } = glyphTable(text);
+    assert.equal(chars[0], " ");
+    for (const c of RAMP.chars) assert.ok(chars.includes(c));
+    assert.ok(Math.max(...index) < chars.length && chars.length < 256);
+    assert.equal(glyphAt("x", 0.9), "x", "text stays text");
+    assert.equal(glyphAt(" ", 0), " ");
+    assert.equal(glyphAt(" ", 0.9), RAMP.chars.at(-1), "a bright space steps up the ramp");
+  });
+}
+
+test("wide field rows carry the agents whose trunks pass through them", () => {
+  const layout = asciiLayouts.wide;
+  const [cols, rows] = GRID.wide;
+  const text = fieldRows(layout, cols, rows);
+  const row = Math.floor(102 / (layout.height / rows)); // the claude.ai gate's row
+  assert.match(text.slice(row - 1, row + 2).join(" "), /web-1|web-2|claude-1|claude-3|claude-4|cursor-1|grok-1/);
+});
+
+test("the ASCII variant starts, recolours, resizes and disposes on the mock adapter", async () => {
+  const fakeCtx = { font: "", fillStyle: "", textAlign: "", textBaseline: "", fillText() {}, getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }) };
+  globalThis.OffscreenCanvas ??= class { constructor(w, h) { this.width = w; this.height = h; } getContext() { return fakeCtx; } };
+  globalThis.document ??= { fonts: { load: async () => [], ready: Promise.resolve() } };
+  globalThis.getComputedStyle ??= () => ({ getPropertyValue: () => "'IBM Plex Mono', monospace" });
+  const palette = { lane: [0, 0, 0], laneRaised: [0, 0, 0], laneLine: [0, 0, 0], laneInk: [1, 1, 1], laneMuted: [0.6, 0.6, 0.6], teal: [0.24, 0.72, 0.67], orange: [0.96, 0.65, 0.26] };
+  for (const scene of [WIDE, TALL]) {
+    const canvas = new MockCanvas();
+    const hero = await ascii.startHero(canvas, { scene, palette });
+    await new Promise((r) => setTimeout(r, 40));
+    hero.setPalette({ ...palette, laneMuted: [0.5, 0.5, 0.5] });
+    hero.setPaused(true);
     hero.dispose();
   }
 });

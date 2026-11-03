@@ -95,7 +95,11 @@ function lane(points: Pt[]): Lane {
   return { pts, cum, length: cum[cum.length - 1] };
 }
 
-function build(base: Omit<Layout, "agents" | "lanes">): Layout {
+/** Per-variant overrides: the ASCII field wants lanes a character row apart. */
+export type Tune = Partial<Pick<Layout, "gap" | "drift">>;
+
+function build(base: Omit<Layout, "agents" | "lanes">, tune: Tune = {}): Layout {
+  base = { ...base, ...tune };
   const agents = base.machines.flatMap((m) => m.agents);
   const lanes: Layout["lanes"] = {};
   for (const m of base.machines) {
@@ -116,7 +120,7 @@ const H = (cx: number, cy: number, size: number, r: number) => {
 };
 
 /** Desktop, 1200 × 440: orchestrators left, workers right. */
-export function wideLayout(scene: Pick<Scene, "width" | "height" | "hub"> = { width: 1200, height: 440, hub: { cx: 600, cy: 220, size: 72 } }): Layout {
+export function wideLayout(scene: Pick<Scene, "width" | "height" | "hub"> = { width: 1200, height: 440, hub: { cx: 600, cy: 220, size: 72 } }, tune?: Tune): Layout {
   const { hub, plate } = H(scene.hub.cx, scene.hub.cy, scene.hub.size, 20);
   const L = plate.x;
   const R = plate.x + plate.w;
@@ -136,11 +140,11 @@ export function wideLayout(scene: Pick<Scene, "width" | "height" | "hub"> = { wi
     machine({ id: "ci-runner", role: "worker", ids: ["ci-1", "ci-2", "ci-3", "ci-4", "ci-5", "ci-6"], at: [714, 410], step: [18, 0], labels: {},
       gate: [759, 362], axis: [0, -1], entry: [R, 248], edge: right, label: { x: 818, y: 414, anchor: "start" } }),
   ];
-  return build({ compact: false, width: scene.width, height: scene.height, hub, plate, machines, sigma: 0.65, halo: 2.4, gap: 4.4, drift: 2.4, speed: 1 });
+  return build({ compact: false, width: scene.width, height: scene.height, hub, plate, machines, sigma: 0.65, halo: 2.4, gap: 4.4, drift: 2.4, speed: 1 }, tune);
 }
 
 /** Phones, 360 × 440: orchestrators on top, workers along the bottom. */
-export function tallLayout(scene: Pick<Scene, "width" | "height" | "hub"> = { width: 360, height: 440, hub: { cx: 180, cy: 226, size: 60 } }): Layout {
+export function tallLayout(scene: Pick<Scene, "width" | "height" | "hub"> = { width: 360, height: 440, hub: { cx: 180, cy: 226, size: 60 } }, tune?: Tune): Layout {
   const { hub, plate } = H(scene.hub.cx, scene.hub.cy, scene.hub.size, 14);
   const T = plate.y;
   const B = plate.y + plate.h;
@@ -159,8 +163,40 @@ export function tallLayout(scene: Pick<Scene, "width" | "height" | "hub"> = { wi
     row("home-server", ["hermes-1", "hermes-2", "hermes-3", "agy-1"], 224, 192),
     row("ci-runner", ["ci-1", "ci-2", "ci-3", "ci-4"], 312, 214),
   ];
-  return build({ compact: true, width: scene.width, height: scene.height, hub, plate, machines, sigma: 0.55, halo: 2, gap: 3.2, drift: 1.6, speed: 0.55 });
+  return build({ compact: true, width: scene.width, height: scene.height, hub, plate, machines, sigma: 0.55, halo: 2, gap: 3.2, drift: 1.6, speed: 0.55 }, tune);
 }
 
-export const layoutFor = (scene: Pick<Scene, "compact" | "width" | "height" | "hub">): Layout =>
-  scene.compact ? tallLayout(scene) : wideLayout(scene);
+export const layoutFor = (scene: Pick<Scene, "compact" | "width" | "height" | "hub">, tune?: Tune): Layout =>
+  scene.compact ? tallLayout(scene, tune) : wideLayout(scene, tune);
+
+// ---- through the junction ----
+
+const crossings = new WeakMap<Layout, Map<string, Lane>>();
+
+/**
+ * The path a message takes across the hub plate, from where `from`'s lane
+ * enters to where `to`'s lane leaves: a smooth S that keeps each lane's
+ * heading, so light visibly passes through the junction (behind the lens).
+ */
+export function crossing(layout: Layout, from: string, to: string): Lane {
+  let cache = crossings.get(layout);
+  if (!cache) crossings.set(layout, (cache = new Map()));
+  const key = `${from}>${to}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
+  const a = layout.lanes[from].toHub.pts;
+  const b = layout.lanes[to].fromHub.pts;
+  const p0: Pt = [a[a.length - 2], a[a.length - 1]];
+  const p3: Pt = [b[0], b[1]];
+  const dirA = unit([p0[0] - a[a.length - 4], p0[1] - a[a.length - 3]]);
+  const dirB = unit([b[2] - p3[0], b[3] - p3[1]]);
+  const k = dist(p0, p3) * 0.4;
+  const l = lane(cubic(p0, add(p0, dirA, k), add(p3, dirB, -k), p3, 16));
+  cache.set(key, l);
+  return l;
+}
+
+function unit(v: Pt): Pt {
+  const n = Math.hypot(v[0], v[1]) || 1;
+  return [v[0] / n, v[1] / n];
+}
