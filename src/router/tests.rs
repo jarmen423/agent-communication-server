@@ -247,7 +247,10 @@ async fn legacy_subject_passthrough_in_permissive_mode() {
     let (dest, routed, publish) = core.on_send("hub.send.chat", &payload).unwrap();
     assert_eq!(dest, "channel.chat");
     assert_eq!(routed.meta.from, "self-asserted", "compat: from untouched");
-    assert_eq!(publish, payload, "compat: bytes untouched");
+    let on_wire = Envelope::from_json_bytes(&publish).unwrap();
+    assert_eq!(on_wire.meta.from, "self-asserted");
+    assert_eq!(on_wire.meta.id, env.meta.id);
+    assert_eq!(on_wire.payload, env.payload);
 }
 
 #[tokio::test]
@@ -336,16 +339,6 @@ async fn bound_send_overwrites_meta_channel_from_subject() {
         Envelope::from_json_bytes(&publish).unwrap().meta.channel,
         "chat"
     );
-
-    // an unchanged envelope keeps its original bytes
-    let clean = bytes(&Envelope::new(
-        "alice",
-        "chat",
-        MessageKind::Message,
-        json!({}),
-    ));
-    let (_, _, publish) = core.on_send("hub.pub.alice.chat", &clean).unwrap();
-    assert_eq!(publish, clean);
 }
 
 #[tokio::test]

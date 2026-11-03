@@ -1,6 +1,6 @@
 use super::{args::Args, database::Database, info_log, shutdown::Services};
 use anyhow::{Context, Result};
-use nats_hub::{ControlPlane, MetricsCollector, Storage};
+use nats_hub::{ControlPlane, IdentityManifest, MetricsCollector, Storage};
 use std::sync::Arc;
 
 pub(super) async fn attach(
@@ -8,6 +8,7 @@ pub(super) async fn attach(
     cp: ControlPlane,
     metrics: Arc<MetricsCollector>,
     api_authz: nats_hub::query_api::ApiAuthz,
+    manifest: &IdentityManifest,
     services: &mut Services,
 ) -> Result<(ControlPlane, Option<Database>)> {
     if !args.db_path.is_empty() {
@@ -21,6 +22,12 @@ pub(super) async fn attach(
             .context("SurrealDB migration failed")?;
         storage.ping().await.context("SurrealDB ping failed")?;
         info_log(&format!("attached SurrealDB storage at '{}'", args.db_path));
+
+        // Fatal: routing on an empty manifest would silently lose provenance.
+        manifest
+            .load(&*storage)
+            .await
+            .context("failed to load the identity manifest")?;
 
         // Start the query API so CLI tools can route DB ops through hub-server
         // (solves RocksDB single-writer lock contention).

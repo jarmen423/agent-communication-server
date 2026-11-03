@@ -42,7 +42,8 @@ export NATS_HUB_TEST_STACK=1
 # hub-server with --require-bound-identity + a test API admin. API clients then
 # need an identity — ApiClient/tools pick up NATS_HUB_IDENTITY=test-admin, and
 # tests can branch on the same env var for mode-dependent assertions.
-HUB_ARGS=(--nats-url "$NATS_URL" --db-path "$tmp/db")
+HUB_ARGS=(--nats-url "$NATS_URL" --db-path "$tmp/db"
+  --tenant test-tenant --manifest-writer test-manifest)
 if [[ -n "${NATS_HUB_REQUIRE_BOUND:-}" ]]; then
   HUB_ARGS+=(--require-bound-identity --api-admin test-admin)
   export NATS_HUB_IDENTITY=test-admin

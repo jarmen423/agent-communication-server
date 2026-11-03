@@ -123,6 +123,9 @@ pub struct MetricsCollector {
     /// Counted whether or not `--require-bound-identity` is on, so an
     /// operator can watch the migration to bound identity drain to zero.
     pub unbound_sends_total: AtomicU64,
+    /// Envelopes dropped because the router's provenance stamp left them over
+    /// the NATS payload limit, even with `origin.reported` removed.
+    pub router_oversize_dropped_total: AtomicU64,
     /// Rows deleted by the retention pruner (envelopes + session/wave/task
     /// records), summed across passes.
     pub retention_pruned_total: AtomicU64,
@@ -192,6 +195,18 @@ impl MetricsCollector {
     /// Legacy-subject arrivals so far.
     pub fn unbound_sends(&self) -> u64 {
         self.unbound_sends_total.load(Ordering::Relaxed)
+    }
+
+    /// Count one envelope dropped for being over the payload limit once
+    /// stamped. Non-blocking; safe on the hot path.
+    pub fn record_oversize_drop(&self) {
+        self.router_oversize_dropped_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Envelopes dropped as oversize so far.
+    pub fn oversize_dropped(&self) -> u64 {
+        self.router_oversize_dropped_total.load(Ordering::Relaxed)
     }
 
     /// Count `n` rows deleted by a retention pass. Non-blocking.
@@ -284,6 +299,16 @@ impl MetricsCollector {
         out.push_str(&format!(
             "natshub_unbound_sends_total {}\n",
             self.unbound_sends_total.load(Ordering::Relaxed)
+        ));
+
+        // Envelopes too large to publish once stamped
+        out.push_str(
+            "# HELP nats_hub_router_oversize_dropped_total Envelopes dropped because stamping left them over the NATS payload limit\n",
+        );
+        out.push_str("# TYPE nats_hub_router_oversize_dropped_total counter\n");
+        out.push_str(&format!(
+            "nats_hub_router_oversize_dropped_total {}\n",
+            self.router_oversize_dropped_total.load(Ordering::Relaxed)
         ));
 
         // Retention pruner

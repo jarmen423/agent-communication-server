@@ -1,4 +1,6 @@
+use anyhow::{bail, Context, Result};
 use clap::Parser;
+use std::collections::BTreeSet;
 
 #[derive(Parser)]
 #[command(name = "hub-server", about = "Run the nats-hub control plane router")]
@@ -80,6 +82,18 @@ pub(super) struct Args {
     #[arg(long = "api-admin")]
     pub(super) api_admin: Vec<String>,
 
+    /// Label stamped on every routed envelope as `origin.tenant`: one or more
+    /// of [A-Za-z0-9_-], at most 64 bytes. Falls back to env NATS_HUB_TENANT.
+    /// Unset = no `origin.tenant`.
+    #[arg(long)]
+    pub(super) tenant: Option<String>,
+
+    /// Bound identity allowed to write the identity manifest. Repeatable; env
+    /// `NATS_HUB_MANIFEST_WRITERS` (comma-separated) is merged in. Needs
+    /// --db-path.
+    #[arg(long = "manifest-writer")]
+    pub(super) manifest_writer: Vec<String>,
+
     /// Directory the `backup.export` op (and `hub-server backup`) writes
     /// into. Without it the op is disabled. Callers only pick a file name.
     #[arg(long)]
@@ -134,6 +148,50 @@ pub(super) struct Args {
     /// router — all flags above apply to that mode.
     #[command(subcommand)]
     pub(super) command: Option<HubCommand>,
+}
+
+impl Args {
+    /// The validated `--tenant` / `NATS_HUB_TENANT` label.
+    pub(super) fn tenant_label(&self) -> Result<Option<String>> {
+        let label = self
+            .tenant
+            .clone()
+            .or_else(|| std::env::var("NATS_HUB_TENANT").ok())
+            .filter(|t| !t.is_empty());
+        if let Some(label) = &label {
+            if !nats_hub::protocol::valid_identity(label) || label.len() > 64 {
+                bail!("--tenant {label:?}: must be 1 to 64 of [A-Za-z0-9_-]");
+            }
+        }
+        Ok(label)
+    }
+
+    /// The validated `--manifest-writer` / `NATS_HUB_MANIFEST_WRITERS` set. A
+    /// writer without storage is an error: its manifest could never be
+    /// written.
+    pub(super) fn manifest_writers(&self) -> Result<BTreeSet<String>> {
+        let mut writers: BTreeSet<String> = self.manifest_writer.iter().cloned().collect();
+        if let Ok(from_env) = std::env::var("NATS_HUB_MANIFEST_WRITERS") {
+            writers.extend(
+                from_env
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from),
+            );
+        }
+        for writer in &writers {
+            nats_hub::manifest::check_identity(writer)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("--manifest-writer {writer:?}"))?;
+        }
+        if !writers.is_empty() && self.db_path.is_empty() {
+            bail!(
+                "--manifest-writer needs --db-path: without storage the manifest can't be written"
+            );
+        }
+        Ok(writers)
+    }
 }
 
 #[derive(clap::Subcommand)]

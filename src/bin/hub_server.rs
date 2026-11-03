@@ -1,7 +1,7 @@
 //! hub-server — control plane startup and ordered shutdown.
 use anyhow::{Context, Result};
 use clap::Parser;
-use nats_hub::{ControlPlane, MetricsCollector};
+use nats_hub::{ControlPlane, IdentityManifest, MetricsCollector};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
@@ -44,6 +44,10 @@ async fn run_server(
     services: &mut shutdown::Services,
     metrics: Arc<MetricsCollector>,
 ) -> Result<()> {
+    let tenant = args.tenant_label()?;
+    let writers = args.manifest_writers()?;
+    let manifest = Arc::new(IdentityManifest::new(writers));
+
     // Set up the live metrics collector (always available, storage-independent).
     if let Some(ref addr) = args.metrics_addr {
         metrics::spawn_metrics_server(addr.clone(), metrics.clone());
@@ -144,6 +148,8 @@ async fn run_server(
         require_bound: args.require_bound_identity,
         admins: api_admins,
         backup_dir: args.backup_dir.clone(),
+        // No storage means no query API, so nothing can reach the manifest.
+        manifest: (!args.db_path.is_empty()).then(|| manifest.clone()),
     };
     if args.require_bound_identity {
         info_log("require-bound-identity: legacy hub.send/hub.register/hub.presence/hub.api.<op> subjects are rejected");
@@ -155,7 +161,9 @@ async fn run_server(
     let mut cp = cp
         .with_metrics(metrics.clone())
         .with_ws_events(ws_tx)
-        .with_require_bound_identity(args.require_bound_identity);
+        .with_require_bound_identity(args.require_bound_identity)
+        .with_manifest(manifest.clone())
+        .with_tenant(tenant.clone());
     if args.durable {
         let path = args.delivery_config.clone().or_else(|| {
             std::env::var_os("NATS_HUB_DELIVERY_CONFIG")
@@ -177,7 +185,8 @@ async fn run_server(
         cp = cp.with_durable(cfg);
     }
 
-    let (cp, storage) = storage::attach(&args, cp, metrics, api_authz, services).await?;
+    let (cp, storage) = storage::attach(&args, cp, metrics, api_authz, &manifest, services).await?;
+    log_manifest(tenant.as_deref(), &manifest, args.require_bound_identity);
     let nats = cp.nats_client();
     info_log("control plane connected, entering routing loop");
     cp.run(services.intake_stop.clone()).await?;
@@ -192,6 +201,26 @@ async fn run_server(
     }
     shutdown::drain_nats(&nats).await?;
     Ok(())
+}
+
+fn log_manifest(tenant: Option<&str>, manifest: &IdentityManifest, require_bound: bool) {
+    let writers: Vec<&str> = manifest.writers().iter().map(String::as_str).collect();
+    info_log(&format!(
+        "tenant={} manifest writers=[{}]",
+        tenant.unwrap_or("none"),
+        writers.join(", ")
+    ));
+    info_log(&format!(
+        "identity manifest: {} live, {} removed",
+        manifest.live_count(),
+        manifest.removed_count()
+    ));
+    if !require_bound && (manifest.writer_configured() || manifest.live_count() > 0) {
+        tracing::warn!(
+            "identity manifest is set but --require-bound-identity is off: origin is only \
+             trustworthy with per-identity credentials and bound subjects"
+        );
+    }
 }
 
 fn info_log(msg: &str) {

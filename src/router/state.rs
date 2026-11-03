@@ -11,9 +11,19 @@ use super::routing::{
     RoutingTable,
 };
 use crate::client::AgentRegistry;
+use crate::manifest::stamp::{stamp, Sender};
+use crate::manifest::IdentityManifest;
 use crate::protocol::{subjects, valid_identity, Envelope};
 use crate::storage::AgentRecord;
 use crate::MetricsCollector;
+
+/// NATS's default `max_payload`, used until a connection says otherwise.
+const DEFAULT_MAX_PAYLOAD: usize = 1 << 20;
+
+/// Bytes of a durable republish's `Nats-Msg-Id` header block other than the
+/// sender and message id: the version line, the header name, the value's
+/// `hub-router:` prefix and `:` separator, and the line endings.
+pub(super) const ROUTER_HEADER_OVERHEAD: usize = 64;
 
 /// Router state and per-message logic, independent of the NATS connection
 /// (so it can be exercised without a server).
@@ -30,6 +40,16 @@ pub(crate) struct RouterCore {
     pub(super) ws_event_tx: Option<crate::ws_bridge::EventTx>,
     /// Set once by `ControlPlane::run` when storage is attached.
     pub(super) mirror: OnceLock<StorageMirror>,
+    /// Who owns each identity, for stamping `meta.origin`.
+    pub(super) manifest: Arc<IdentityManifest>,
+    /// `--tenant`, stamped as `origin.tenant`.
+    pub(super) tenant: Option<String>,
+    /// Largest publish NATS accepts.
+    pub(super) max_payload: usize,
+    /// Durable routing republishes with a `Nats-Msg-Id` header, which counts
+    /// against `max_payload`. Over the limit, that publish would fail and the
+    /// ingress message would be retried forever, so leave room for it.
+    pub(super) reserve_router_header: bool,
 }
 
 impl RouterCore {
@@ -41,6 +61,10 @@ impl RouterCore {
             require_bound: false,
             ws_event_tx: None,
             mirror: OnceLock::new(),
+            manifest: Arc::new(IdentityManifest::default()),
+            tenant: None,
+            max_payload: DEFAULT_MAX_PAYLOAD,
+            reserve_router_header: false,
         }
     }
 
@@ -91,12 +115,13 @@ impl RouterCore {
     /// Returns `(dest_subject, envelope, publish_bytes)`. On a bound subject
     /// `meta.from` and `meta.channel` are overwritten from the subject (the
     /// subject is the proof; the payload is self-asserted). On any subject:
-    /// an invalid `meta.to` drops the message, and a send on channel
-    /// `inbox.<id>` without `meta.to` gets `meta.to = <id>` so storage and
-    /// read scoping treat it as the DM it is. `publish_bytes` is the
-    /// re-serialized envelope when anything changed, else the original
-    /// payload verbatim. `None` = drop (undecodable, invalid identity or
-    /// recipient, or a legacy subject while `--require-bound-identity` is on).
+    /// `meta.origin` is stamped, an invalid `meta.to` drops the message, and a
+    /// send on channel `inbox.<id>` without `meta.to` gets `meta.to = <id>` so
+    /// storage and read scoping treat it as the DM it is. `publish_bytes` is
+    /// the re-serialized envelope, and the metrics, the WS feed and the mirror
+    /// all see that same stamped envelope. `None` = drop (undecodable, invalid
+    /// identity or recipient, a legacy subject while
+    /// `--require-bound-identity` is on, or too large to publish once stamped).
     pub(crate) fn on_send(
         &self,
         subject: &str,
@@ -110,7 +135,7 @@ impl RouterCore {
             }
         };
 
-        let mut changed = false;
+        let tenant = self.tenant.as_deref();
         let channel: &str = match bound_send_subject(subject) {
             Some((ident, channel)) if valid_identity(ident) => {
                 // The subject is the identity proof: overwrite the
@@ -119,8 +144,8 @@ impl RouterCore {
                 if env.meta.from != ident || env.meta.channel != channel {
                     env.meta.from = ident.to_string();
                     env.meta.channel = channel.to_string();
-                    changed = true;
                 }
+                stamp(&mut env, Sender::Bound(ident), tenant, &self.manifest);
                 channel
             }
             Some((bad, _)) => {
@@ -131,6 +156,7 @@ impl RouterCore {
                 if !self.legacy_subject(subject) {
                     return None;
                 }
+                stamp(&mut env, Sender::Legacy, tenant, &self.manifest);
                 channel_from_send_subject(subject)
             }
         };
@@ -144,10 +170,13 @@ impl RouterCore {
             None => {
                 if let Some(owner) = inbox_channel_owner(channel) {
                     env.meta.to = Some(owner.to_string());
-                    changed = true;
                 }
             }
         }
+
+        // Encode first: the guard can still change `origin`, and a dropped
+        // envelope must not show up in the metrics or on the WS feed.
+        let publish = self.encode_within_limit(subject, &mut env)?;
 
         // Live metrics: non-blocking atomic increments.
         if let Some(metrics) = &self.metrics {
@@ -155,23 +184,12 @@ impl RouterCore {
         }
         // Push to WS bridge for visualizer (broadcast::send is non-blocking).
         if let Some(tx) = &self.ws_event_tx {
-            if let Ok(json) = serde_json::to_string(&env) {
-                let _ = tx.send(json);
+            if let Ok(json) = std::str::from_utf8(&publish) {
+                let _ = tx.send(json.to_string());
             }
         }
 
         let dest = route_channel(channel, &env);
-        let publish = if changed {
-            match env.to_json_bytes() {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    warn!(%subject, error = %e, "failed to re-encode envelope, dropping");
-                    return None;
-                }
-            }
-        } else {
-            payload.to_vec()
-        };
         debug!(
             id = %env.meta.id,
             from = %env.meta.from,
@@ -181,6 +199,39 @@ impl RouterCore {
             "routing envelope"
         );
         Some((dest, env, publish))
+    }
+
+    /// Encode a stamped envelope for publishing. Over the limit, drop
+    /// `origin.reported` and try once more; if it still doesn't fit, count it
+    /// and return `None`. The durable router terminates a `None`, so an
+    /// oversize message is never retried in a loop.
+    fn encode_within_limit(&self, subject: &str, env: &mut Envelope) -> Option<Vec<u8>> {
+        let limit = self.publish_limit(env);
+        let bytes = encode(subject, env)?;
+        if bytes.len() <= limit {
+            return Some(bytes);
+        }
+        if let Some(origin) = env.meta.origin.as_mut().filter(|o| !o.reported.is_empty()) {
+            origin.reported = Default::default();
+            let bytes = encode(subject, env)?;
+            if bytes.len() <= limit {
+                return Some(bytes);
+            }
+        }
+        warn!(%subject, id = %env.meta.id, limit, "envelope over the payload limit once stamped, dropping");
+        if let Some(metrics) = &self.metrics {
+            metrics.record_oversize_drop();
+        }
+        None
+    }
+
+    fn publish_limit(&self, env: &Envelope) -> usize {
+        if self.reserve_router_header {
+            let header = ROUTER_HEADER_OVERHEAD + env.meta.from.len() + env.meta.id.len();
+            self.max_payload.saturating_sub(header)
+        } else {
+            self.max_payload
+        }
     }
 
     /// Queue a routed envelope for the storage mirror (non-blocking).
@@ -259,6 +310,12 @@ impl RouterCore {
         self.registry.touch(ident).await;
         self.enqueue(MirrorOp::Touch(ident.to_string()));
     }
+}
+
+fn encode(subject: &str, env: &Envelope) -> Option<Vec<u8>> {
+    env.to_json_bytes()
+        .map_err(|e| warn!(%subject, error = %e, "failed to re-encode envelope, dropping"))
+        .ok()
 }
 
 /// Identity a register/presence message applies to: the bound subject's

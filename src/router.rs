@@ -15,12 +15,15 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::AgentInfo;
 use crate::delivery::DeliveryConfig;
+use crate::manifest::IdentityManifest;
 use crate::protocol::subjects;
 use crate::storage::{AgentFilter, AgentRecord, Storage};
 use crate::MetricsCollector;
 
 mod durable;
 mod mirror;
+#[cfg(all(test, feature = "storage-surreal"))]
+mod provenance_tests;
 mod routing;
 mod state;
 #[cfg(all(test, feature = "storage-surreal"))]
@@ -80,9 +83,16 @@ impl ControlPlane {
         let nats = crate::connect_opts::connect_with_hub_opts(url, &opts)
             .await
             .with_context(|| format!("control plane: connect to {url} failed"))?;
+        let mut core = RouterCore::new();
+        // Zero means the server hasn't said; keep the default then, or every
+        // envelope would look oversize.
+        let max_payload = nats.server_info().max_payload;
+        if max_payload > 0 {
+            core.max_payload = max_payload;
+        }
         Ok(Self {
             nats,
-            core: RouterCore::new(),
+            core,
             storage: None,
             mirror_capacity: DEFAULT_MIRROR_CAPACITY,
             durable: None,
@@ -114,6 +124,19 @@ impl ControlPlane {
         self
     }
 
+    /// The identity manifest used to stamp `meta.origin`. Default: empty, so
+    /// stamping gives only the tenant, the bound identity and `reported`.
+    pub fn with_manifest(mut self, manifest: Arc<IdentityManifest>) -> Self {
+        self.core.manifest = manifest;
+        self
+    }
+
+    /// The label stamped as `origin.tenant` (`--tenant`). Default: none.
+    pub fn with_tenant(mut self, tenant: Option<String>) -> Self {
+        self.core.tenant = tenant;
+        self
+    }
+
     /// Attach a storage backend for persistence (agent registry, message
     /// history, conversation threading). Must be called before `run()`.
     pub fn with_storage(mut self, storage: Arc<dyn Storage>) -> Self {
@@ -133,6 +156,7 @@ impl ControlPlane {
     /// task/session/wave traffic (see [`crate::delivery`]). Without it the
     /// router uses plain core-NATS subscriptions, exactly as before.
     pub fn with_durable(mut self, cfg: DeliveryConfig) -> Self {
+        self.core.reserve_router_header = true;
         self.durable = Some(Arc::new(cfg));
         self
     }
