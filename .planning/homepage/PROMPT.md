@@ -6,9 +6,9 @@ Paste everything below the line into the design agent.
 
 You are the design engineer for **ACS**, the hosted version of the
 open-source **nats-hub** project. Design and build its public homepage,
-with a documentation section and a pricing section, and deploy a Vercel
-preview. Go well past a template: the site should look as if a devtool
-company with taste made it.
+with a documentation section and a pricing section, and GPU motion
+graphics built with vgpu. Go well past a template: the site should look
+as if a devtool company with taste made it.
 
 ## Repo and branch
 
@@ -26,8 +26,35 @@ company with taste made it.
 
 ## Skills and tools to use
 
-1. **`bespoke`** (my design-engineering skill, a router with six
-   sub-skills). Load it first and follow its workflow end to end:
+Load all four skills before you design anything. Each one has its own
+job.
+
+1. **`frontend-design-skill-router`** (`~/.agents/skills/frontend-design-skill-router`).
+   This is the main front-end router. Its rule is that every choice must
+   be beautiful and fast at once. Match each part of the work to its
+   routing question, then open the content skill it points to. The ones
+   that apply here:
+   - `high-end-visuals-3d-webgl`: the vgpu hero (see item 5);
+   - `performance-architecture`;
+   - `microinteractions-loading-transitions`;
+   - `layout-composition`;
+   - `navigation-wayfinding`: the nav and the docs sidebar;
+   - `theming-personalization`;
+   - `data-display-visualization`: if the hero or the features show
+     live message flow.
+2. **`design-mentor`** (`~/.agents/skills/design-mentor`). Use it for
+   every conversation with me about design.
+   - When you check in or report, explain each decision in plain words
+     and name the principle behind it.
+   - Show options side by side with one recommendation and its
+     trade-off.
+   - When I give vague feedback ("feels off"), diagnose it into a named
+     principle before you change anything.
+   - Check in with me once, after the static build and before the
+     motion pass, and show the direction (palette, type, hero concept)
+     this way.
+3. **`bespoke`** (my design-engineering skill, a router with six
+   sub-skills). Follow its workflow end to end:
    intent → references → static build → motion → sanding → perf/a11y →
    review. Load each sub-skill when the work reaches its area:
    - `devtool-visual-system`: tokens, the dark theme, type, and
@@ -42,16 +69,41 @@ company with taste made it.
 
    Note: bespoke's "In this repo" sections were written for a different
    site (agent-memory-labs-frontend). Ignore them here.
-2. **`frontend-design`**: use it alongside bespoke for build quality and
-   to stay clear of generic AI aesthetics.
-3. **Vercel MCP and the Vercel CLI**: create the project, deploy
-   previews, and read build logs. If the Vercel MCP isn't connected in your
-   session, use `npx vercel` (it may ask me to run `vercel login` once;
-   ask me). Deploy **preview builds only**. No production deploy, and no
-   custom domain.
-4. **[OWNER: confirm the "GPU" item before sending, then delete this line.]**
+4. **`frontend-design`**: use it alongside the others for build quality
+   and to stay clear of generic AI aesthetics.
+5. **vgpu** (Vercel Labs' agent-first WebGPU library for shaders and GPU
+   motion graphics: https://vgpu.sh, npm `vgpu`, MIT). Use it for the
+   signature motion graphics, starting with the hero, plus at most one
+   or two smaller GPU moments elsewhere. Use its agent tooling rather
+   than guessing the API from memory:
+   - **Skill:** `npx skills add vercel-labs/vgpu`. It's a thin docs
+     router that queries the docs for the installed version.
+   - **MCP:** `npx vgpu mcp --project-from-cwd` (local stdio, docs for
+     the installed version), or the read-only endpoint
+     `https://vgpu.sh/api/mcp`.
+   - **CLI:** `npx vgpu docs find <topic>`,
+     `npx vgpu docs cat getting-started.md`,
+     `npx vgpu examples search "<idea>"`,
+     `npx vgpu examples pull <id> --out <dir>`. Run `npx vgpu check` on
+     every shader before you call it done.
+   - **It is pre-1.0** (0.6.0 at the time of writing). Pin the exact
+     version.
+   - **WebGPU is not supported in every browser yet.** Every vgpu moment
+     must be a progressive enhancement:
+     - Server-render a static poster frame first (an image or CSS),
+       with the same size, so nothing shifts.
+     - Feature-detect `navigator.gpu`, and lazy-load vgpu only after
+       first paint and only where WebGPU exists.
+     - Pause rendering when it is off-screen or the tab is hidden.
+     - Under `prefers-reduced-motion`, keep the poster frame.
+     - The page must look finished with no GPU at all.
+   - Test the shaders with vgpu's mock adapter in Node, so the site
+     check runs without a GPU.
 
-Stack: Next.js (App Router) + TypeScript + Tailwind, hosted on Vercel.
+Stack: Next.js (App Router) + TypeScript + Tailwind. Plan for Vercel
+hosting, but deploying is optional: do it only if a Vercel login already
+works in your session (`npx vercel`), and then only as a preview. No
+production deploy, and no custom domain.
 Prefer static rendering for every page. Self-host fonts with
 `next/font`. Don't use component kits that dictate the look, and no stock
 illustrations.
@@ -96,6 +148,10 @@ The core idea for the design to come from is **many agents, many
 machines, one conversation you can see**. The signature moment should
 grow out of that, for example a live view of a task going from an
 orchestrator to a worker and back. It must not be a generic glowing orb.
+Build it as a vgpu shader or scene: for example, messages travelling as
+light along routes between agent nodes, with the reply contract
+(progress, then one terminal result) visible in the motion. Its poster
+frame has to tell the same story without the GPU.
 
 ## Pages and sections
 
@@ -198,7 +254,12 @@ without asking me.
   - Lighthouse 95+ on Performance, Accessibility, Best Practices and SEO
     for `/`, `/pricing` and one docs page;
   - nothing that shifts the layout;
-  - honour `prefers-reduced-motion`.
+  - honour `prefers-reduced-motion`;
+  - vgpu stays out of the critical path: Lighthouse runs (no GPU) must
+    still score 95+;
+  - on a real WebGPU browser, the hero holds 60 fps on a mid-range
+    laptop, and its added JS is reported in the PR. Measure it with
+    vgpu's `performance-measurement` guidance.
 - **Themes:** dark first. Light mode too if bespoke's
   `devtool-visual-system` gives a clean ladder for it.
 
@@ -206,20 +267,28 @@ without asking me.
 
 1. `site/` builds with `npm run build` and no warnings, and
    `npm run lint` is clean.
-2. A Vercel preview URL works for `/`, `/pricing`, `/docs`, three docs
-   pages, the 404 page, and ⌘K search.
+2. A running preview (a local production build; a Vercel preview URL as
+   well if you deployed one) works for:
+   - `/`, `/pricing`, `/docs` and three docs pages;
+   - the 404 page;
+   - ⌘K search;
+   - the vgpu hero both with WebGPU and with the fallback (WebGPU
+     disabled).
+   Every shader passes `npx vgpu check`.
 3. `scan.sh` findings are fixed or justified, and Lighthouse scores are
    reported for the three pages.
 4. Screenshots at 1440 px and 390 px of the homepage, pricing and one
-   docs page, in each theme you shipped. Use the built-in preview tools.
+   docs page, in each theme you shipped, plus the hero's poster frame and
+   a short recording of the live hero. Use the built-in preview tools.
 5. Every link and command on the site is checked: internal links
    resolve, and each command copied from the site matches `docs/`.
 6. `iter2/homepage` is pushed, with a PR to `main`. The PR description
    includes:
-   - the preview URL;
+   - the preview URL, if you deployed one;
    - the screenshots;
-   - the design rationale: palette, type and the signature moment, each
-     with a one-line reason;
+   - the design rationale, written the design-mentor way: palette,
+     type and the signature moment, each with the principle behind it in
+     one line;
    - the dependencies;
    - open questions for me (at least: the invite address, the final
      domain, and the pricing copy).
