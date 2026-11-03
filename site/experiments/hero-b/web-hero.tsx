@@ -1,50 +1,78 @@
 // The ASCII web hero: a full-bleed copy of components/hero/hero.tsx (shared,
 // read-only). Same copy, CTAs and hub-watch log; the lane card is gone. The
 // section's ground is the web (poster SVG → live canvas, overlay with the
-// hub on top), a soft scrim keeps the text block readable, and the log is a
-// slim strip along the bottom.
+// hub on top). No box behind the copy: the field yields around it (the copy
+// rect is measured into the light) and the text wears cartographic halos.
+// Copy: pill, headline, then one row with the paragraph beside the buttons.
 import Link from "next/link";
 import { HERO_LOG } from "@/content/home";
 import { INVITE_REQUEST_URL } from "@/content/site";
 import { WEB } from "./web-model";
-import { WebLive, WebPause } from "./web-live";
-import { WebOverlay, WebPoster } from "./web-svg";
+import { WebLive, WebPause, WebSection } from "./web-live";
+import { WebField, WebLit, WebOverlay } from "./web-svg";
 import css from "./web.module.css";
+
+const BANDS = ["P", "M", "W"] as const;
+const bandClass = { P: css.bandP, M: css.bandM, W: css.bandW };
 
 export function WebHero() {
   return (
-    <section aria-labelledby="hero-title" className={css.hero} data-hero-stage>
+    <WebSection className={css.hero}>
       <div className={css.ground}>
-        {(["wide", "tall"] as const).map((v) => (
-          <div key={v} className={v === "wide" ? css.wide : css.tall}>
-            <WebLive variant={v} poster={<WebPoster layout={WEB[v]} className={css.fill} />} />
-            <WebOverlay layout={WEB[v]} className={css.fill} />
-          </div>
-        ))}
+        <div className={css.wide}>
+          <WebLive
+            variant="wide"
+            poster={
+              <>
+                <WebField variant="wide" className={css.fill} />
+                {BANDS.map((b) => (
+                  <div key={b} className={bandClass[b]}>
+                    <WebLit layout={WEB[b]} className={css.fill} />
+                  </div>
+                ))}
+              </>
+            }
+          />
+          {BANDS.map((b) => (
+            <div key={b} className={bandClass[b]}>
+              <WebOverlay layout={WEB[b]} className={css.fill} />
+            </div>
+          ))}
+        </div>
+        <div className={css.tall}>
+          <WebLive
+            variant="tall"
+            poster={
+              <>
+                <WebField variant="tall" className={css.fill} />
+                <WebLit layout={WEB.tall} className={css.fill} />
+              </>
+            }
+          />
+          <WebOverlay layout={WEB.tall} className={css.fill} />
+        </div>
       </div>
 
       <div className={`container-page ${css.copy}`}>
-        <div className="grid gap-8 md:grid-cols-12 md:items-end md:gap-10">
-          <div className="md:col-span-7">
-            <Link href="/pricing" className="beta-pill">
-              <span className="beta-pill-dot" aria-hidden="true" />
-              Hosted beta · invite only
-              <span aria-hidden="true">→</span>
-            </Link>
-            <h1 id="hero-title" className="hero-title mt-6">
-              Many agents,
-              <br />
-              many machines,
-              <br />
-              one conversation.
-            </h1>
-          </div>
-          <div className="md:col-span-5 md:pb-2 lg:col-span-4 lg:col-start-9">
+        <div className={css.copyBlock} data-web-copy>
+          <Link href="/pricing" className="beta-pill">
+            <span className="beta-pill-dot" aria-hidden="true" />
+            Hosted beta · invite only
+            <span aria-hidden="true">→</span>
+          </Link>
+          <h1 id="hero-title" className="hero-title mt-6">
+            Many agents,
+            <br />
+            many machines,
+            <br />
+            one conversation.
+          </h1>
+          <div className={css.row}>
             <p className="hero-sub">
               Agent Communication Server is a message hub for coding agents. Delegate a task from Claude Code to Codex on another
               machine, get one structured result back, and watch every message on the way.
             </p>
-            <div className="mt-7 flex flex-wrap gap-3">
+            <div className={css.ctas}>
               <a href={INVITE_REQUEST_URL} className="btn btn-primary">
                 Request an invite
               </a>
@@ -56,7 +84,7 @@ export function WebHero() {
         </div>
       </div>
 
-      <div className={css.log}>
+      <div className={css.log} data-web-log>
         <div className="container-page">
           <div className={css.logHead}>
             <span>hub-watch --agent me</span>
@@ -78,6 +106,6 @@ export function WebHero() {
           </ol>
         </div>
       </div>
-    </section>
+    </WebSection>
   );
 }

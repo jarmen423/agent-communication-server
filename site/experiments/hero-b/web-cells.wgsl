@@ -2,8 +2,10 @@
 // (no feedback buffer): for every live line, the distance from the cell to
 // the line and the arc length there; the line lifts nearby cells while alive,
 // and each signal is a pulse with a sharp front and a fading tail. Ripples
-// from the hub add rings. Mirrors cellLight() in web-light.ts, which renders
-// the server poster. Output: R sent (teal), G received (orange), B neutral.
+// from the hub and visitor clicks add neutral rings. Around the copy block the
+// field yields: everything falls to a floor inside a feathered rounded rect.
+// Mirrors cellLight() in web-light.ts, which renders the server poster.
+// Output: R sent (teal), G received (orange), B neutral, A yield (0 under the copy; for tests and tools).
 
 struct Web {
   grid: vec2f,                // columns, rows
@@ -16,6 +18,9 @@ struct Web {
   pts: array<vec4f, 48>,      // per line 16 points, two per vec4
   pulses: array<vec4f, 36>,   // per line 6: head arc length, amp (+ sent, - received), direction, tail
   ripples: array<vec4f, 8>,   // radius, amp, width
+  clicks: array<vec4f, 4>,    // x, y, radius, amp
+  mask: vec4f,                // copy block x0, y0, x1, y1
+  mask2: vec4f,               // feather, floor, corner radius, click weight
 }
 
 @group(0) @binding(0) var<uniform> web: Web;
@@ -69,5 +74,18 @@ fn point(i: i32, j: i32) -> vec2f {
     let x = (d - q.x) / q.z;
     ripple += q.y * exp(-x * x);
   }
-  return vec4f(sent, received, lift * web.look.y + ripple * web.look.z, 1.0);
+  var click = 0.0;
+  for (var c = 0; c < 4; c++) {
+    let q = web.clicks[c];
+    let x = (length(u - q.xy) - q.z) / (26.0 + q.z * 0.05);
+    click += q.w * exp(-x * x);
+  }
+  let half = (web.mask.zw - web.mask.xy) * 0.5;
+  let r = web.mask2.z;
+  let m = abs(u - (web.mask.xy + half)) - half + vec2f(r);
+  let sd = length(max(m, vec2f(0.0))) + min(max(m.x, m.y), 0.0) - r;
+  let yielded = smoothstep(0.0, web.mask2.x, sd);
+  let k = web.mask2.y + (1.0 - web.mask2.y) * yielded;
+  let neutral = lift * web.look.y + ripple * web.look.z + click * web.mask2.w;
+  return vec4f(sent * k, received * k, neutral * k, yielded);
 }

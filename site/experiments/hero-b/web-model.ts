@@ -9,9 +9,17 @@
 import { rng } from "./schedule";
 
 export type WebAgent = { id: string; role: "orchestrator" | "worker"; x: number; y: number; label?: "left" | "right" };
+/** Desktop aspect bands (P under 1.3, M to 1.9, W beyond) and the phone layout. */
+export type Band = "P" | "M" | "W" | "tall";
 export type WebLayout = {
+  band: Band;
   variant: "wide" | "tall";
-  /** Design space, mapped onto the section with SVG `slice` (cover) maths. */
+  /**
+   * Design space, cover-mapped onto the hero. Desktop is 2400 × 1000: up to an
+   * aspect of 2.4 the full height stays visible, so the safe band between the
+   * header and the log strip is stable in design units; only the visible width
+   * changes with aspect, which is what the bands are for.
+   */
   width: number;
   height: number;
   hub: { cx: number; cy: number; size: number };
@@ -22,7 +30,21 @@ export type WebLayout = {
   every: readonly [number, number];
   maxLines: number;
   speed: number;
+  /**
+   * The copy block (+16 px) measured at this band's reference viewport (P 768 × 1024,
+   * M 1440 × 900, W 1894 × 920, phone 390 × 844), design units: the poster's mask.
+   * The live layer measures the real one.
+   */
+  copy: readonly [number, number, number, number];
 };
+
+/**
+ * Band queries on the viewport's aspect ratio. CSS shows a band's poster layers
+ * with these exact strings and the live layer picks its layout with
+ * matchMedia on them, so the poster and the first live frame always agree.
+ */
+export const BAND_QUERY = { M: "(min-aspect-ratio: 13/10)", W: "(min-aspect-ratio: 19/10)" } as const;
+export const bandFor = (matches: (q: string) => boolean): "P" | "M" | "W" => (matches(BAND_QUERY.W) ? "W" : matches(BAND_QUERY.M) ? "M" : "P");
 
 const plateOf = (cx: number, cy: number, size: number, r: number) => {
   const half = size * 0.82;
@@ -32,50 +54,85 @@ const plateOf = (cx: number, cy: number, size: number, r: number) => {
 const O = "orchestrator" as const;
 const W = "worker" as const;
 
-export const WEB: Record<"wide" | "tall", WebLayout> = {
-  wide: {
-    variant: "wide",
-    width: 1600,
-    height: 1000,
-    hub: { cx: 800, cy: 640, size: 96 },
-    plate: plateOf(800, 640, 96, 24),
-    grid: [200, 71],
-    every: [1.5, 2.2],
-    maxLines: 6,
-    speed: 1,
-    agents: [
-      { id: "claude-web-1", role: O, x: 210, y: 500, label: "left" },
-      { id: "me", role: O, x: 150, y: 720, label: "left" },
-      { id: "codex-2", role: O, x: 470, y: 835 },
-      { id: "claude-web-2", role: O, x: 70, y: 150 },
-      { id: "claude-1", role: W, x: 1360, y: 480, label: "right" },
-      { id: "codex-1", role: W, x: 1470, y: 680, label: "right" },
-      { id: "hermes-1", role: W, x: 1290, y: 830, label: "right" },
-      { id: "opencode-1", role: W, x: 1545, y: 300 },
-      { id: "ci-1", role: W, x: 1010, y: 845 },
-      { id: "grok-1", role: W, x: 1560, y: 820 },
-      { id: "cursor-1", role: W, x: 1480, y: 110 },
-    ],
-  },
+const desktop = (band: "P" | "M" | "W", hub: [number, number, number], agents: WebAgent[], maxLines: number, copy: WebLayout["copy"]): WebLayout => ({
+  band,
+  variant: "wide",
+  width: 2400,
+  height: 1000,
+  hub: { cx: hub[0], cy: hub[1], size: hub[2] },
+  plate: plateOf(hub[0], hub[1], hub[2], 24),
+  grid: [300, 71],
+  every: maxLines > 4 ? [1.5, 2.2] : [2.2, 3],
+  maxLines,
+  speed: 1,
+  agents,
+  copy,
+});
+
+export const WEB: Record<Band, WebLayout> = {
+  // 768–1023 px and other near-portrait screens: copy stacked on top, the web below it.
+  P: desktop("P", [1200, 740, 92], [
+    { id: "me", role: O, x: 880, y: 700, label: "right" },
+    { id: "claude-web-1", role: O, x: 900, y: 835 },
+    { id: "claude-1", role: W, x: 1520, y: 690, label: "left" },
+    { id: "codex-1", role: W, x: 1520, y: 830, label: "left" },
+    { id: "hermes-1", role: W, x: 1360, y: 850 },
+  ], 4, [840, 120, 1332, 558]),
+  // Laptops (1280 × 720 to 1440 × 900): copy upper left, hub right of centre.
+  M: desktop("M", [1700, 700, 96], [
+    { id: "me", role: O, x: 640, y: 790, label: "right" },
+    { id: "claude-web-1", role: O, x: 900, y: 745, label: "right" },
+    { id: "codex-2", role: O, x: 1150, y: 830 },
+    { id: "claude-1", role: W, x: 1800, y: 470, label: "left" },
+    { id: "codex-1", role: W, x: 1800, y: 565, label: "left" },
+    { id: "hermes-1", role: W, x: 1490, y: 830, label: "right" },
+    { id: "cursor-1", role: W, x: 1780, y: 190 },
+    { id: "opencode-1", role: W, x: 1645, y: 330 },
+    { id: "ci-1", role: W, x: 1350, y: 760 },
+    { id: "claude-3", role: W, x: 1570, y: 210 },
+  ], 5, [551, 133, 1442, 583]),
+  // Wide and short (1894 × 920, 2560 × 1080): the web also reaches the far left.
+  W: desktop("W", [1760, 680, 100], [
+    { id: "me", role: O, x: 380, y: 610, label: "right" },
+    { id: "claude-web-1", role: O, x: 660, y: 785, label: "right" },
+    { id: "codex-2", role: O, x: 400, y: 790 },
+    { id: "claude-web-2", role: O, x: 420, y: 330 },
+    { id: "claude-1", role: W, x: 2020, y: 430, label: "left" },
+    { id: "codex-1", role: W, x: 2040, y: 700, label: "left" },
+    { id: "hermes-1", role: W, x: 1400, y: 790, label: "right" },
+    { id: "cursor-1", role: W, x: 1960, y: 200 },
+    { id: "opencode-1", role: W, x: 2050, y: 560 },
+    { id: "ci-1", role: W, x: 1100, y: 775 },
+    { id: "grok-1", role: W, x: 2040, y: 790 },
+    { id: "claude-3", role: W, x: 1650, y: 260 },
+  ], 6, [565, 130, 1437, 570]),
   tall: {
+    band: "tall",
     variant: "tall",
     width: 400,
     height: 860,
-    hub: { cx: 200, cy: 640, size: 62 },
-    plate: plateOf(200, 640, 62, 16),
+    hub: { cx: 200, cy: 610, size: 62 },
+    plate: plateOf(200, 610, 62, 16),
     grid: [40, 50],
     every: [2.6, 3.4],
     maxLines: 3,
     speed: 0.5,
     agents: [
-      { id: "me", role: O, x: 40, y: 600, label: "right" },
-      { id: "claude-web-1", role: O, x: 52, y: 735 },
-      { id: "claude-1", role: W, x: 360, y: 590, label: "left" },
-      { id: "codex-1", role: W, x: 352, y: 728, label: "left" },
-      { id: "hermes-1", role: W, x: 300, y: 770 },
+      { id: "me", role: O, x: 40, y: 560, label: "right" },
+      { id: "claude-web-1", role: O, x: 56, y: 672 },
+      { id: "claude-1", role: W, x: 360, y: 556, label: "left" },
+      { id: "codex-1", role: W, x: 352, y: 672, label: "left" },
+      { id: "hermes-1", role: W, x: 290, y: 690 },
     ],
+    copy: [17, 80, 384, 495],
   },
 };
+
+/** Cover ("slice") mapping of the design space onto a box of `w` × `h` (any unit). */
+export function cover(l: Pick<WebLayout, "width" | "height">, w: number, h: number) {
+  const k = Math.max(w / l.width, h / l.height);
+  return { k, x: (w - l.width * k) / 2, y: (h - l.height * k) / 2 };
+}
 
 // ---- lines ----
 
@@ -194,10 +251,29 @@ export type WebFrame = {
   events: [number, number, number, number][];
   ripples: [number, number, number, number][];
   glow: number;
+  /** Visitor clicks: [x, y, radius, amp], neutral rings (at most CLICKS). */
+  clicks: [number, number, number, number][];
+  /** The copy block the field yields around (design units): x0, y0, x1, y1, feather. */
+  mask: [number, number, number, number, number];
 };
 
+export const CLICKS = 4;
+/** Feather of the copy mask, design units (at least 120 CSS px down to a 760 px tall hero). */
+export const FEATHER = 170;
+const CLICK_LIFE = 1.5;
+
+/** A visitor's click: one neutral ring out from the pointer, a little stronger than a hub ripple. */
+export function clickRings(clicks: readonly { x: number; y: number; t: number }[], t: number): WebFrame["clicks"] {
+  const out: WebFrame["clicks"] = clicks
+    .filter((c) => t >= c.t && t - c.t < CLICK_LIFE)
+    .slice(-CLICKS)
+    .map((c) => [c.x, c.y, (t - c.t) * 520, Math.exp(-(t - c.t) / 0.5)]);
+  while (out.length < CLICKS) out.push([0, 0, 0, 0]);
+  return out;
+}
+
 /** Everything visible at `t`: line lift, pulse heads, hub rim flashes, ripples and the throughput glow. */
-export function frameAt(l: WebLayout, lines: readonly Line[], t: number): WebFrame {
+export function frameAt(l: WebLayout, lines: readonly Line[], t: number, extra: { clicks?: WebFrame["clicks"]; copy?: readonly number[] } = {}): WebFrame {
   const events: WebFrame["events"] = [];
   const ripples: WebFrame["ripples"] = [];
   let glow = 0;
@@ -225,5 +301,7 @@ export function frameAt(l: WebLayout, lines: readonly Line[], t: number): WebFra
   ripples.length = Math.min(ripples.length, RIPPLES);
   while (events.length < LAMP_EVENTS) events.push([0, 0, 99, 0]);
   while (ripples.length < RIPPLES) ripples.push([0, 0, 1, 0]);
-  return { lines: out, events, ripples, glow: 1 - Math.exp(-glow / 4) };
+  const c = extra.copy ?? l.copy;
+  const clicks = extra.clicks ?? clickRings([], t);
+  return { lines: out, events, ripples, glow: 1 - Math.exp(-glow / 4), clicks, mask: [c[0], c[1], c[2], c[3], FEATHER] };
 }

@@ -4,12 +4,34 @@
 // same progressive enhancement (poster first, the GPU module only after first
 // paint, only with WebGPU, never under reduced motion, paused off-screen and in
 // hidden tabs, ?gpu=off forces the poster), but the stage fills its parent
-// instead of an aspect-ratio box, and it starts the web with its own layout.
+// instead of an aspect-ratio box, and it starts the web with its own layout:
+// the aspect band's (the same media queries the poster's CSS uses). Once live
+// it also measures the copy block into design space (the field yields around
+// it) and turns a pointerdown on empty field into a neutral ring.
 // The poster crossfades out once the live canvas has a frame.
 import { useEffect, useRef, useState } from "react";
-import { readPalette, type HeroRenderer } from "@/components/hero/gpu-stage";
-import { WEB } from "./web-model";
+import { readPalette } from "@/components/hero/gpu-stage";
+import type { WebRenderer } from "./web";
+import { BAND_QUERY, bandFor, cover, WEB, type Band } from "./web-model";
 import css from "./web.module.css";
+
+/** Pointerdowns here are the page's own controls and text, not the field. */
+const NOT_FIELD = "a, button, input, header, [data-web-log], [data-web-copy]";
+/** The copy rect grows by this much (CSS px) before the feather starts. */
+const COPY_MARGIN = 16;
+
+function useBand(variant: "wide" | "tall"): Band {
+  const [band, setBand] = useState<Band>(variant === "tall" ? "tall" : "M");
+  useEffect(() => {
+    if (variant === "tall") return;
+    const qs = [matchMedia(BAND_QUERY.M), matchMedia(BAND_QUERY.W)];
+    const sync = () => setBand(bandFor((q) => matchMedia(q).matches));
+    sync();
+    qs.forEach((q) => q.addEventListener("change", sync));
+    return () => qs.forEach((q) => q.removeEventListener("change", sync));
+  }, [variant]);
+  return band;
+}
 
 const load = () => import("./web");
 const idle = (cb: () => void): number =>
@@ -19,6 +41,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
   const stage = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [live, setLive] = useState(false);
+  const band = useBand(variant);
 
   useEffect(() => {
     const el = stage.current;
@@ -28,7 +51,9 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     if (!("gpu" in navigator) || reduced.matches || new URLSearchParams(location.search).get("gpu") === "off") return;
     if (el.offsetParent === null) return; // only the variant that is displayed starts
 
-    let renderer: HeroRenderer | null = null;
+    const layout = WEB[band];
+    const section = el.closest("section");
+    let renderer: WebRenderer | null = null;
     let disposed = false;
     let onScreen = true;
     const sync = () => renderer?.setPaused(!onScreen || document.hidden);
@@ -36,13 +61,37 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       try {
         const mod = await load();
         if (disposed) return;
-        renderer = await mod.startWeb(cv, { layout: WEB[variant], palette: readPalette(el) });
+        renderer = await mod.startWeb(cv, { layout, palette: readPalette(el) });
         if (disposed) return renderer.dispose();
         sync();
+        measure();
+        section?.addEventListener("pointerdown", onPointer);
         setLive(true);
       } catch (err) {
         console.info("hero: keeping the poster frame", err);
       }
+    };
+    // Client px → design units, through the canvas's own cover mapping.
+    const toDesign = (x: number, y: number) => {
+      const r = cv.getBoundingClientRect();
+      const m = cover(layout, r.width, r.height);
+      return [(x - r.left - m.x) / m.k, (y - r.top - m.y) / m.k] as const;
+    };
+    const copy = section?.querySelector("[data-web-copy]");
+    const measure = () => {
+      if (!renderer || !copy) return;
+      const c = copy.getBoundingClientRect();
+      const [x0, y0] = toDesign(c.left - COPY_MARGIN, c.top - COPY_MARGIN);
+      const [x1, y1] = toDesign(c.right + COPY_MARGIN, c.bottom + COPY_MARGIN);
+      renderer.setCopy([x0, y0, x1, y1]);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (copy) ro.observe(copy);
+    const onPointer = (e: PointerEvent) => {
+      if (!renderer || (e.target instanceof Element && e.target.closest(NOT_FIELD))) return;
+      const [x, y] = toDesign(e.clientX, e.clientY);
+      renderer.click(x, y);
     };
     const handle = idle(() => void start());
     const io = new IntersectionObserver(([e]) => {
@@ -53,6 +102,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     document.addEventListener("visibilitychange", sync);
     const onReduced = () => {
       if (reduced.matches) {
+        section?.removeEventListener("pointerdown", onPointer);
         renderer?.dispose();
         renderer = null;
         setLive(false);
@@ -67,18 +117,62 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(handle);
       else clearTimeout(handle);
       io.disconnect();
+      ro.disconnect();
       mo.disconnect();
+      section?.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("visibilitychange", sync);
       reduced.removeEventListener("change", onReduced);
       renderer?.dispose();
     };
-  }, [variant]);
+  }, [band]);
 
   return (
     <div ref={stage} className={css.stage} data-gpu={live ? "on" : "off"}>
       <div className={css.stagePoster}>{poster}</div>
       <canvas ref={canvas} className={css.stageCanvas} data-hero-web="" aria-hidden="true" />
     </div>
+  );
+}
+
+/**
+ * Safety net for agent labels (poster and live share the overlay, so this
+ * covers both, with or without a GPU): any label that would touch the copy,
+ * the header or the log strip (+12 px) is hidden at this viewport.
+ */
+export function useLabelGuard(ref: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const section = ref.current;
+    if (!section) return;
+    const check = () => {
+      const keep = ["[data-web-copy]", "[data-web-log]", "header"]
+        .map((q) => document.querySelector(q)?.getBoundingClientRect())
+        .filter((r): r is DOMRect => !!r);
+      section.querySelectorAll<SVGTextElement>("[data-agent-label]").forEach((label) => {
+        label.style.visibility = "";
+        const r = label.getBoundingClientRect();
+        if (!r.width) return;
+        const hit = keep.some((k) => r.left < k.right + 12 && r.right > k.left - 12 && r.top < k.bottom + 12 && r.bottom > k.top - 12);
+        if (hit) label.style.visibility = "hidden";
+      });
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(section);
+    const copy = section.querySelector("[data-web-copy]");
+    if (copy) ro.observe(copy);
+    document.fonts?.ready.then(check);
+    return () => ro.disconnect();
+  }, [ref]);
+}
+
+/** The section's client half: runs the label guard. Children are server-rendered. */
+export function WebSection({ children, className }: { children: React.ReactNode; className?: string }) {
+  const ref = useRef<HTMLElement>(null);
+  useLabelGuard(ref);
+  return (
+    <section ref={ref} aria-labelledby="hero-title" className={className} data-hero-stage>
+      {children}
+    </section>
   );
 }
 

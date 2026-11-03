@@ -43,7 +43,11 @@
   overflow: hidden;
 }
 @media (min-width: 768px) {
-  .hero { padding-top: calc(64px + 72px); min-height: clamp(760px, 100svh, 980px); }
+  /* Near-portrait (band P): stacked copy, hub and strip need a taller hero; it may scroll. */
+  .hero { padding-top: calc(64px + 72px); min-height: clamp(920px, 100svh, 1000px); }
+}
+@media (min-width: 768px) and (min-aspect-ratio: 13/10) {
+  .hero { min-height: clamp(760px, 100svh, 980px); }
 }
 
 .ground { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
@@ -62,20 +66,38 @@
 .stage[data-gpu="on"] .stageCanvas { opacity: 1; }
 .stage[data-gpu="on"] .stagePoster { opacity: 0; }
 
-/* The copy: a soft scrim keeps the field (and lines passing behind) well under the text. */
-.copy { position: relative; z-index: 1; }
-.copy::before {
-  content: "";
-  position: absolute;
-  inset: -64px -24px -88px;
-  z-index: -1;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 72% 64% at 46% 48%,
-    color-mix(in oklch, var(--paper) 88%, transparent) 35%,
-    color-mix(in oklch, var(--paper) 60%, transparent) 68%,
-    transparent 100%
-  );
+/*
+ * The copy. No box behind it: the field yields around the copy block (its
+ * measured rect dims lines and pulses in the light itself), and the text
+ * wears cartographic halos in the ground colour, like the agent labels.
+ */
+.copy { position: relative; z-index: 1; pointer-events: none; }
+.copyBlock { width: fit-content; max-width: 100%; pointer-events: auto; }
+.copyBlock :global(.hero-title),
+.copyBlock :global(.hero-sub),
+.copyBlock :global(.beta-pill) {
+  text-shadow:
+    0 0 2px var(--paper),
+    0 0 14px color-mix(in oklch, var(--paper) 85%, transparent),
+    0 0 32px color-mix(in oklch, var(--paper) 60%, transparent);
+}
+.row { display: grid; gap: 24px; margin-top: 28px; }
+.row :global(.hero-sub) { max-width: 46ch; }
+.ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+@media (min-width: 1024px) {
+  .row { grid-template-columns: minmax(0, 46ch) auto; align-items: center; column-gap: 40px; margin-top: 32px; }
+}
+
+/* Aspect bands: these query strings match BAND_QUERY in web-model.ts (the live layer uses matchMedia on them). */
+.bandP, .bandM, .bandW { position: absolute; inset: 0; }
+.bandM, .bandW { display: none; }
+@media (min-aspect-ratio: 13/10) {
+  .bandP { display: none; }
+  .bandM { display: block; }
+}
+@media (min-aspect-ratio: 19/10) {
+  .bandM { display: none; }
+  .bandW { display: block; }
 }
 
 /* hub-watch, slim: the three latest lines on a backing. */
