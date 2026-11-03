@@ -1,0 +1,227 @@
+# Prompt: design and build the ACS homepage
+
+Paste everything below the line into the design agent.
+
+---
+
+You are the design engineer for **ACS**, the hosted version of the
+open-source **nats-hub** project. Design and build its public homepage,
+with a documentation section and a pricing section, and deploy a Vercel
+preview. Go well past a template: the site should look as if a devtool
+company with taste made it.
+
+## Repo and branch
+
+- Repo: `/data/code/agent-communication-server`
+  (`github.com/jarmen423/agent-communication-server`). Start from an
+  up-to-date `main`.
+- Work on a new branch, `iter2/homepage`, in its own worktree:
+  `git worktree add /data/code/acs-wt/homepage -b iter2/homepage main`.
+  Don't commit to `main`.
+- Put the site in a new top-level `site/` directory. Don't edit anything
+  outside `site/`, except `REUSE.toml`, which needs an entry for `site/**`
+  (see "Constraints").
+- Read `AGENTS.md` first. It covers the conventions, file-size limit and
+  licensing.
+
+## Skills and tools to use
+
+1. **`bespoke`** (my design-engineering skill, a router with six
+   sub-skills). Load it first and follow its workflow end to end:
+   intent → references → static build → motion → sanding → perf/a11y →
+   review. Load each sub-skill when the work reaches its area:
+   - `devtool-visual-system`: tokens, the dark theme, type, and
+     `references/marketing-anatomy.md` for the page structure. Use
+     `scripts/theme.py` to generate the palette.
+   - `bento-grids`: the features section.
+   - `signature-effects`: one signature hero moment, not several.
+   - `interface-motion`: motion budget and choreography.
+   - `interface-guidelines`: focus, keyboard, forms, copy and a11y. Run
+     its `scripts/scan.sh` on `site/` before you finish.
+   - `command-menu`: ⌘K search for the docs.
+
+   Note: bespoke's "In this repo" sections were written for a different
+   site (agent-memory-labs-frontend). Ignore them here.
+2. **`frontend-design`**: use it alongside bespoke for build quality and
+   to stay clear of generic AI aesthetics.
+3. **Vercel MCP and the Vercel CLI**: create the project, deploy
+   previews, and read build logs. If the Vercel MCP isn't connected in your
+   session, use `npx vercel` (it may ask me to run `vercel login` once;
+   ask me). Deploy **preview builds only**. No production deploy, and no
+   custom domain.
+4. **[OWNER: confirm the "GPU" item before sending, then delete this line.]**
+
+Stack: Next.js (App Router) + TypeScript + Tailwind, hosted on Vercel.
+Prefer static rendering for every page. Self-host fonts with
+`next/font`. Don't use component kits that dictate the look, and no stock
+illustrations.
+
+## What the product is
+
+Use only real facts. Read these files and quote or paraphrase them; don't
+invent capabilities:
+
+- `README.md`: the pitch, quick start, and section D (hosted).
+- `docs/HOSTED_PLAN.md` §1 and §4: what hosted ACS is, and the `acs`
+  connector.
+- `docs/ACS_CONNECTOR.md`: `acs login`, `acs agent add`,
+  `acs mcp install`, `acs worker run`.
+- `docs/REMOTE_MCP.md`: the remote MCP endpoint for claude.ai, ChatGPT
+  and Grok.
+- `docs/WORKER_BACKENDS.md`: the agents that are supported.
+- `docs/SECURITY.md`, `docs/DELIVERY.md`, `docs/WAVES.md`,
+  `docs/FILE_LOCKS.md`, `docs/EMAIL_PLUGIN.md` (experimental; label it
+  that way).
+- `LICENSING.md`: the Apache-2.0 client and BUSL-1.1 server split.
+
+In short: ACS is a message hub for coding agents. An orchestrator (you,
+or an agent through MCP) delegates a task to a worker agent (Claude Code,
+Codex, Cursor, Hermes, Grok, Kilo, OpenCode, or any CLI) on any machine.
+It gets a structured result back under one reply contract, and every
+message can be watched live and queried later. The supporting features
+are:
+- multi-turn sessions;
+- parallel waves with dependencies and merge gates;
+- advisory file locks between agents;
+- durable delivery on JetStream;
+- history, stats and a visualizer.
+
+**Hosted** means sign in at `acs.agentmemorylabs.com` and get your own
+isolated hub (one NATS account per tenant). Then
+`acs login && acs mcp install claude` on each machine, or add the remote
+MCP connector in a web chat app. **Self-hosting** stays first-class and
+free.
+
+The core idea for the design to come from is **many agents, many
+machines, one conversation you can see**. The signature moment should
+grow out of that, for example a live view of a task going from an
+orchestrator to a worker and back. It must not be a generic glowing orb.
+
+## Pages and sections
+
+Homepage (`/`), in roughly this order. Adjust the order using the
+marketing-anatomy reference.
+
+1. **Nav:** logo, Docs, Pricing, GitHub, **Sign in** (links to
+   `https://acs.agentmemorylabs.com/signin`), and a primary CTA, **Request
+   an invite**.
+2. **Hero:** one sharp line, one supporting sentence, the two CTAs, and
+   the signature visual.
+3. **How it works:** three steps (sign in → connect your agents →
+   delegate), with real commands in copyable code blocks.
+4. **Features (bento):** delegation and the reply contract, sessions,
+   waves, file locks, durable delivery, observability (history, stats,
+   visualizer).
+5. **Works with:** the supported agents and clients: Claude Code, Codex,
+   Cursor, Hermes, Grok, Kilo, OpenCode, any CLI, and web chat apps
+   through remote MCP. Use text or wordmarks. Don't use other companies'
+   logos unless their brand guidelines allow it.
+6. **Hosted vs self-host:** what you get with each, honestly.
+7. **Security:** tenant isolation, short-lived credentials, instant
+   revocation, and identity stamped by the server. Source: `SECURITY.md`
+   and `HOSTED_PLAN.md` §3 and §8. No compliance badges we don't have.
+8. **Pricing teaser,** linking to `/pricing`.
+9. **FAQ.**
+10. **Final CTA.**
+11. **Footer:** Docs, Pricing, GitHub, Terms
+    (`https://acs.agentmemorylabs.com/terms`), Privacy
+    (`https://acs.agentmemorylabs.com/privacy`), licensing, and
+    © Agent Memory Labs.
+
+**`/pricing`:** the pricing unit is **not decided yet** (seat, agent
+identity, or usage). Don't invent prices. Use three columns:
+- **Self-host:** free, open source. Apache-2.0 client and BUSL-1.1
+  server.
+- **Hosted beta:** free during the invite-only beta. Include the real
+  beta limits from `acs-private` if you can find them; otherwise leave
+  them out.
+- **Team:** "Coming later". Ask to be told when it launches.
+
+Put every price, limit and plan name in one data file
+(`site/content/pricing.ts`), so I can change them without touching the
+layout. Add a short FAQ on pricing.
+
+**`/docs`:** a real documentation section, not a link out.
+- Render the repo's own Markdown from `../docs` and `README.md` at build
+  time, so the docs never fork. Choose and order the pages in one
+  manifest (`site/content/docs-manifest.ts`):
+  - Getting started: hosted, and self-host;
+  - the `acs` connector;
+  - remote MCP;
+  - worker backends;
+  - delivery;
+  - waves;
+  - file locks;
+  - security;
+  - bridges;
+  - the email plugin (experimental).
+- Leave out the internal planning docs: `HOSTED_PLAN.md`,
+  `OPEN_DECISIONS.md`, `docs/archive`, `docs/refocus*`.
+- Include a sidebar, a table of contents for the current page, heading
+  anchors, code blocks with copy buttons, previous/next links, and
+  **⌘K search** across the docs.
+- Fix links between docs so they resolve inside the site.
+
+Also add a 404 page, Open Graph and social images, a favicon, and
+`sitemap.xml` / `robots.txt`.
+
+## The invite CTA
+
+There is no waitlist backend. "Request an invite" goes to a single
+constant, `INVITE_REQUEST_URL` in `site/content/site.ts`. Default it to
+`mailto:` with a placeholder address I will replace, and flag it in your
+report. Don't add a form backend, analytics or third-party scripts
+without asking me.
+
+## Constraints
+
+- **Honesty:**
+  - no fake testimonials, customer logos, user counts or benchmarks;
+  - mark anything experimental as experimental;
+  - make no claim that the docs don't support.
+- **Licensing:** add a `REUSE.toml` annotation for `site/**`
+  (Apache-2.0, the same as the client code). CI runs `reuse lint` and
+  `tests/python/test_licensing.py`, and both must stay green. Don't add
+  per-file license headers.
+- **Keep CI green:** the site must not be picked up by the Rust or Python
+  suites. Don't add Node to the existing CI jobs. If you want a site
+  check (build, lint, link check), add it as its own job in
+  `.github/workflows/`, limited to `site/**`.
+- **Size and dependencies:** keep files under ~400 LOC. Keep the
+  dependency list short and justify each one in your report.
+- **Don't touch:**
+  - DNS or Cloudflare;
+  - the running production stack on this VM (`/data/acs-beta`, Docker);
+  - the private repo `acs-private`;
+  - the existing `agentmemorylabs.com` site.
+- **Performance:**
+  - Lighthouse 95+ on Performance, Accessibility, Best Practices and SEO
+    for `/`, `/pricing` and one docs page;
+  - nothing that shifts the layout;
+  - honour `prefers-reduced-motion`.
+- **Themes:** dark first. Light mode too if bespoke's
+  `devtool-visual-system` gives a clean ladder for it.
+
+## Definition of done
+
+1. `site/` builds with `npm run build` and no warnings, and
+   `npm run lint` is clean.
+2. A Vercel preview URL works for `/`, `/pricing`, `/docs`, three docs
+   pages, the 404 page, and ⌘K search.
+3. `scan.sh` findings are fixed or justified, and Lighthouse scores are
+   reported for the three pages.
+4. Screenshots at 1440 px and 390 px of the homepage, pricing and one
+   docs page, in each theme you shipped. Use the built-in preview tools.
+5. Every link and command on the site is checked: internal links
+   resolve, and each command copied from the site matches `docs/`.
+6. `iter2/homepage` is pushed, with a PR to `main`. The PR description
+   includes:
+   - the preview URL;
+   - the screenshots;
+   - the design rationale: palette, type and the signature moment, each
+     with a one-line reason;
+   - the dependencies;
+   - open questions for me (at least: the invite address, the final
+     domain, and the pricing copy).
+
+Don't merge. I'll review the preview first.
