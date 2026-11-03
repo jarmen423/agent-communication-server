@@ -257,9 +257,20 @@ without asking me.
   - honour `prefers-reduced-motion`;
   - vgpu stays out of the critical path: Lighthouse runs (no GPU) must
     still score 95+;
-  - on a real WebGPU browser, the hero holds 60 fps on a mid-range
-    laptop, and its added JS is reported in the PR. Measure it with
-    vgpu's `performance-measurement` guidance.
+  - report the hero's added JS in the PR.
+- **Where you run:** a cloud VM with **no GPU**.
+  - For headless checks, launch Playwright Chromium with
+    `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader`.
+    That gives a software WebGPU adapter: good for correctness,
+    screenshots and recordings, but not for frame rate.
+  - WebGPU needs a secure context, so load pages from
+    `http://localhost:<port>`, not `about:blank`.
+  - Report the SwiftShader frame time as a rough guide only.
+  - The real-GPU check (60 fps, how it actually looks) is mine. Run the
+    dev server on port 3000 and tell me when it's ready; I'll view it
+    from my laptop through `ssh -L 3000:localhost:3000`. Follow vgpu's
+    `performance-measurement` guidance so the measurement is easy to
+    repeat there.
 - **Themes:** dark first. Light mode too if bespoke's
   `devtool-visual-system` gives a clean ladder for it.
 
