@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Bricolage_Grotesque, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
-import { GeistSerif } from "geist/font/serif";
+import localFont from "next/font/local";
 import { FontTrial } from "@/components/font-trial";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/content/site";
 import "./globals.css";
@@ -11,6 +11,8 @@ const display = Bricolage_Grotesque({
   weight: ["600", "700"],
   variable: "--font-bricolage",
   display: "swap",
+  // During the headline trial Bricolage only sets the wordmark: don't let it compete for first paint.
+  preload: false,
 });
 const sans = IBM_Plex_Sans({
   subsets: ["latin"],
@@ -23,6 +25,16 @@ const mono = IBM_Plex_Mono({
   weight: ["400", "500"],
   variable: "--font-plex-mono",
   display: "swap",
+});
+// TEMPORARY headline trial (see app/display-trial.css). Only the Regular cut:
+// importing "geist/font/serif" would register and preload all five cuts.
+const geistSerif = localFont({
+  src: "../node_modules/geist/dist/fonts/geist-serif/GeistSerif-Regular.woff2",
+  variable: "--font-geist-serif",
+  weight: "400",
+  display: "swap",
+  fallback: ["Times New Roman", "Times", "serif"],
+  adjustFontFallback: "Times New Roman",
 });
 
 export const metadata: Metadata = {
@@ -54,7 +66,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`${display.variable} ${sans.variable} ${mono.variable} ${GeistSerif.variable}`}
+      className={`${display.variable} ${sans.variable} ${mono.variable} ${geistSerif.variable}`}
       suppressHydrationWarning
     >
       <head>
