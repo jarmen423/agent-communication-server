@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::default_nats_url;
 use nats_hub_client::storage::{AgentFilter, AgentRecord};
 use nats_hub_client::ApiClient;
 use tracing_subscriber::EnvFilter;
@@ -15,7 +16,8 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(name = "hub-agents", about = "List and search persisted agents")]
 struct Args {
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
     #[arg(long, value_delimiter = ',')]
     capability: Vec<String>,

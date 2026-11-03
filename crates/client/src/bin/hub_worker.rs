@@ -42,6 +42,7 @@ use clap::Parser;
 use exec::{execute_command, ExecOutcome};
 use inbox::{cancel_target, task_prompt, warn_denied, CancelTarget, Inbox};
 use nats_hub_client::client::{task_channel, TaskOutcome};
+use nats_hub_client::connect_opts::{default_nats_url, sender_identity};
 use nats_hub_client::{Envelope, HubClient, MessageKind};
 use serde_json::json;
 use std::time::Duration;
@@ -58,16 +59,16 @@ fn capabilities() -> Vec<String> {
 #[derive(Parser)]
 #[command(name = "hub-worker", about = "Universal agent worker for nats-hub")]
 struct Args {
-    /// Worker identity (agent name)
+    /// Worker identity, its agent name (env: NATS_HUB_IDENTITY)
     #[arg(long)]
-    identity: String,
+    identity: Option<String>,
 
     /// Command to execute for each task (receives prompt via stdin, result via stdout)
     #[arg(long)]
     execute: String,
 
-    /// NATS server URL
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 
     /// Also subscribe to this broadcast channel (in addition to inbox)
@@ -96,23 +97,24 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    let identity = sender_identity(args.identity.clone(), "--identity")?;
     // Installed first, so a SIGTERM during startup is not lost either.
     let mut stop = Stop::install()?;
 
     info!(
-        identity = %args.identity,
+        %identity,
         execute = %args.execute,
         nats_url = %args.nats_url,
         timeout_secs = args.timeout_secs,
         "hub-worker starting"
     );
 
-    let client = HubClient::connect(&args.nats_url, &args.identity).await?;
+    let client = HubClient::connect(&args.nats_url, &identity).await?;
 
     // Subscribe first, then announce: once we are visible on the bus we can
     // already receive tasks.
     let inbox_rx = client.subscribe_inbox().await?;
-    info!(identity = %args.identity, "subscribed to inbox");
+    info!(%identity, "subscribed to inbox");
 
     let broadcast_rx = match args.channel {
         Some(ref ch) => {
@@ -124,7 +126,7 @@ async fn main() -> Result<()> {
     };
 
     client.register(capabilities()).await?;
-    info!(identity = %args.identity, "registered on bus");
+    info!(%identity, "registered on bus");
 
     if args.heartbeat_secs > 0 {
         let hb_client = client.clone();

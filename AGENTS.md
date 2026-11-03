@@ -189,20 +189,22 @@ Manual commands (against a running stack):
 
 | Command | Description |
 |---|---|
-| `acs login/logout/status/up/down` | Device login, status and per-identity credential renewal |
-| `acs agent add/rm`, `acs mcp install claude\|codex\|hermes`, `acs worker run` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
+| *every `hub-*` CLI* | `--nats-url` defaults to `$NATS_URL`, then `nats://127.0.0.1:4222`. The sender identity (`--from`, or `--identity` on `hub-worker`/`hub-register`) defaults to `$NATS_HUB_IDENTITY`. On hosted ACS run them under `acs exec <id> --`. |
+| `acs login/logout/status/up/down` | Device login (default server: hosted ACS, `https://acs.agentmemorylabs.com`; `--server`/`ACS_SERVER` for self-host and dev), status and per-identity credential renewal |
+| `acs agent add/rm`, `acs mcp install claude\|codex\|hermes`, `acs worker run <backend> --identity ID -- ARGS` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
+| `acs env ID`, `acs exec ID -- CMD [ARGS…]` | Print `export` lines for, or run `CMD` with, that identity's `NATS_URL`, `NATS_CREDENTIALS_FILE` and `NATS_HUB_IDENTITY` (other `NATS_*` auth vars stripped) |
 | `hub-server [--db-path PATH] [--metrics-addr ADDR] [--ws-addr ADDR --static-dir DIR]` | Router + query API; optional Prometheus `/metrics` and WS bridge/visualizer |
-| `hub-publish --channel CH [--to AGENT] [--kind KIND] --from ID --message MSG` | Send a message (broadcast or DM) |
+| `hub-publish --channel CH [--to AGENT] [--kind KIND] [--from ID] --message MSG` | Send a message (broadcast or DM) |
 | `hub-observe [--channel CH]` | Watch messages (read-only, live) |
-| `hub-interact --from ID --channel CH` | Interactive REPL |
-| `hub-register --identity ID --capabilities CAP1,CAP2` | Register an agent |
+| `hub-interact [--from ID] --channel CH` | Interactive REPL |
+| `hub-register [--identity ID] --capabilities CAP1,CAP2` | Register an agent |
 | `hub-agents [--capability CAP] [--alive SECS] [--identity ID]` | List/search agents |
-| `hub-worker --identity ID --execute CMD` | Universal worker: prompt on stdin → CMD → result |
+| `hub-worker [--identity ID] --execute CMD` | Universal worker: prompt on stdin → CMD → result |
 | `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
-| `hub-delegate --to AGENT (--prompt MSG \| --prompt-file PATH \| --prompt -) [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel. Only the result goes to stdout; logs go to stderr. Ctrl-C sends a cancel (§4.2) and a second Ctrl-C exits. Exit codes: 0 done, 1 worker error, 2 timeout, 3 channel closed, 4 cancelled, 130 interrupted. |
+| `hub-delegate --to AGENT (--prompt MSG \| --prompt-file PATH \| --prompt -) [--from ID] [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel. `--from` falls back to `orchestrator` when `NATS_HUB_IDENTITY` is unset. Only the result goes to stdout; logs go to stderr. Ctrl-C sends a cancel (§4.2) and a second Ctrl-C exits. Exit codes: 0 done, 1 worker error, 2 timeout, 3 channel closed, 4 cancelled, 130 interrupted. |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
-| `hub-wave create/spawn/status/close/list` | Parallel wave orchestration |
+| `hub-wave create --goal G [--from ID] --tasks FILE`, `spawn/status/cancel/list` | Parallel wave orchestration |
 | `hub-lock acquire/renew/release/list/get/wait` | Advisory file locks across agents (`docs/FILE_LOCKS.md`) |
 | `hub-thread show/pending` | Reply chains and unanswered messages |
 | `hub-stats [--since DUR] [--agent ID] [--top-channels N] [--json]` | Rates, latency, activity, hotspots, error rate |

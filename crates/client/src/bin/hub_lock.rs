@@ -18,6 +18,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use nats_hub_client::connect_opts::default_nats_url;
 use nats_hub_client::locks::{wait_for_locks, AcquireOptions, WaitOutcome};
 use nats_hub_client::{ApiClient, HubClient};
 use std::time::Duration;
@@ -28,7 +29,8 @@ struct Args {
     #[command(subcommand)]
     command: Command,
 
-    #[arg(long, default_value = "nats://127.0.0.1:4222", global = true)]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url(), global = true)]
     nats_url: String,
 
     /// Caller identity — the lock holder. Falls back to

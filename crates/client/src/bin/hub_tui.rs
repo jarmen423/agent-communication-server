@@ -5,13 +5,14 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::default_nats_url;
 
 /// nats-hub terminal dashboard.
 #[derive(Parser)]
 #[command(name = "hub-tui", about = "nats-hub terminal dashboard")]
 struct Args {
-    /// NATS server URL.
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 
     /// Query API poll interval in seconds.

@@ -13,6 +13,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use nats_hub_client::connect_opts::{default_nats_url, sender_identity};
 use nats_hub_client::wave::{validate_tasks, WaveTaskInput};
 use nats_hub_client::{ApiClient, HubClient, MessageKind, WaveRecord, WaveTaskRecord};
 use std::path::PathBuf;
@@ -24,7 +25,8 @@ struct Args {
     #[command(subcommand)]
     command: Command,
 
-    #[arg(long, default_value = "nats://127.0.0.1:4222", global = true)]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url(), global = true)]
     nats_url: String,
 }
 
@@ -32,8 +34,14 @@ struct Args {
 enum Command {
     /// Create a wave + its tasks (validated server-side, atomically).
     Create {
+        /// What the wave should achieve
+        #[arg(long)]
         goal: String,
-        from: String,
+        /// Your identity, the orchestrator (env: NATS_HUB_IDENTITY)
+        #[arg(long)]
+        from: Option<String>,
+        /// Tasks JSON file (docs/WAVES.md)
+        #[arg(long)]
         tasks: PathBuf,
     },
     /// Hand a pending wave to the hub-server orchestrator and return.
@@ -72,6 +80,7 @@ async fn main() -> Result<()> {
 
     match args.command {
         Command::Create { goal, from, tasks } => {
+            let from = sender_identity(from, "--from")?;
             create_wave(&api, &args.nats_url, &goal, &from, &tasks).await
         }
         Command::Spawn {

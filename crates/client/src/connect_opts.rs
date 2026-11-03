@@ -8,6 +8,36 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tracing::debug;
 
+/// The local dev hub: the `--nats-url` fallback when `NATS_URL` is unset.
+pub const LOCAL_NATS_URL: &str = "nats://127.0.0.1:4222";
+
+/// Default `--nats-url` of every CLI: `$NATS_URL` (what `acs exec` and
+/// `acs env` set), else [`LOCAL_NATS_URL`].
+pub fn default_nats_url() -> String {
+    env_value("NATS_URL").unwrap_or_else(|| LOCAL_NATS_URL.to_string())
+}
+
+/// `$NATS_HUB_IDENTITY`, the default sender identity (`--from`/`--identity`).
+pub fn env_identity() -> Option<String> {
+    env_value("NATS_HUB_IDENTITY")
+}
+
+/// The sender identity: the flag (`name`) when given, else
+/// `$NATS_HUB_IDENTITY`, else an error naming both.
+pub fn sender_identity(flag: Option<String>, name: &str) -> Result<String> {
+    let hint = "(`acs exec <id> -- <cmd>` sets it)";
+    flag.filter(|v| !v.trim().is_empty())
+        .or_else(env_identity)
+        .with_context(|| {
+            format!("no sender identity: pass {name} <id> or set NATS_HUB_IDENTITY {hint}")
+        })
+}
+
+fn env_value(key: &str) -> Option<String> {
+    let v = std::env::var(key).ok()?;
+    (!v.trim().is_empty()).then(|| v.trim().to_string())
+}
+
 /// Authentication + transport options for [`crate::HubClient::connect_with_opts`].
 ///
 /// Mirrors the subset of `async_nats::ConnectOptions` auth knobs needed to
@@ -256,9 +286,16 @@ pub async fn connect_with_hub_opts(
     }
 
     debug!(%url, has_auth = opts.has_auth(), require_tls = opts.require_tls, ?inbox_prefix, "async_nats connect_with_options");
+    // A local nats-server on the built-in default is the usual cause of an
+    // "authorization violation" when the hub's URL wasn't passed (F2).
+    let default = url == LOCAL_NATS_URL && env_value("NATS_URL").is_none();
+    let hint = match default {
+        true => " (the built-in default: pass --nats-url or set NATS_URL; for hosted ACS run `acs exec <identity> -- <cmd>`)",
+        false => "",
+    };
     async_nats::connect_with_options(url, co)
         .await
-        .with_context(|| format!("failed to connect to NATS at {url}"))
+        .with_context(|| format!("failed to connect to NATS at {url}{hint}"))
 }
 
 /// Parse a decorated credentials file without including secrets in errors.

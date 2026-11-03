@@ -9,7 +9,9 @@ and query it later.
 nats-hub is one `nats-server`, one Rust router (`hub-server`), and thin
 clients: CLIs, Python workers, an MCP server, a terminal dashboard and a
 browser visualizer. Workers on other machines dial in over `wss://` with a
-token or credentials. They don't run a server of their own.
+token or credentials. They don't run a server of their own. You can use the
+hosted service, ACS (see the [hosted quick start](#hosted-quick-start)), or
+run your own hub.
 
 - **Delegate and get an answer.** `hub-delegate --to codex-1 --prompt "…"`
   opens an isolated task channel, streams progress events, and returns
@@ -34,9 +36,99 @@ token or credentials. They don't run a server of their own.
                                    └─ async mirror ─▶ SurrealDB (history, registry, sessions, waves)
 ```
 
-## Quick start (5 minutes)
+## Hosted quick start
 
-### A. Run a hub locally, from source
+Hosted ACS at `https://acs.agentmemorylabs.com` runs the hub for you: no
+server, no checkout, no hub URL to type. You need Linux (x86_64 or arm64,
+glibc ≥ 2.35) or macOS on Apple silicon. On Windows, use the web connector
+below.
+
+1. **Install** `acs` and the `hub-*` CLIs. The installer verifies them against
+   the release's `SHA256SUMS` and links them into `~/.local/bin`; if that
+   isn't on your `PATH`, it prints the line to add.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh | sh
+   ```
+
+2. **Sign in.** Approve this device in your browser. `acs login --headless`
+   prints a link to open on another device instead.
+
+   ```bash
+   acs login
+   ```
+
+3. **Add an identity** for each agent on this machine. An identity is an
+   orchestrator unless you add `--role worker`.
+
+   ```bash
+   acs agent add me
+   acs agent add claude-1 --role worker
+   ```
+
+4. **Start the credential daemon.** It runs as a user service (systemd on
+   Linux, launchd on macOS) and keeps every identity's credentials fresh.
+
+   ```bash
+   acs up
+   ```
+
+5. **Connect an agent.** Either let Claude Code orchestrate through MCP:
+
+   ```bash
+   acs mcp install claude --identity me
+   ```
+
+   or run Claude Code as a worker. It needs the `claude` CLI installed and
+   logged in, and it stays in the foreground. It can run on this machine or
+   on any other machine signed in to the same account.
+
+   ```bash
+   acs worker run claude --identity claude-1 -- --repo ~/code/my-project
+   ```
+
+6. **Delegate** to a running worker, here the one from step 5 (from another
+   terminal or machine). `acs exec` runs any `hub-*` CLI as one of your
+   identities: it sets `NATS_URL`, `NATS_CREDENTIALS_FILE` and
+   `NATS_HUB_IDENTITY`.
+
+   ```bash
+   acs exec me -- hub-delegate --to claude-1 --prompt "Summarize README.md" --verbose
+   ```
+
+   To drop the prefix for one shell, run `eval "$(acs env me)"`. After that,
+   `hub-delegate …`, `hub-agents` and `hub-history --tail` work as they are.
+
+**From claude.ai or ChatGPT** (nothing to install, so it also works on
+Windows), add a custom connector with the URL
+`https://acs.agentmemorylabs.com/mcp`. In claude.ai that's Customize →
+Connectors → "+" → Add custom connector. Sign in and approve. The chat gets
+its own identity on your account, and it can list your agents, delegate to
+your workers and read their results. See [`docs/REMOTE_MCP.md`](docs/REMOTE_MCP.md).
+
+## Self-hosted hub: join it from another machine (no Rust needed)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh \
+  | sh -s -- wss://hub.example.com:8080
+export NATS_TOKEN='…'                     # from the hub operator
+hub-delegate-remote --to claude-1 --from me --prompt "hi" --verbose
+```
+
+With a hub URL, the installer also writes `hub-delegate-remote`, a
+`hub-delegate` wrapper with that URL baked in. Every `hub-*` CLI also reads
+`NATS_URL` (for `--nats-url`) and `NATS_HUB_IDENTITY` (for `--from`), so
+`export NATS_URL=wss://hub.example.com:8080 NATS_HUB_IDENTITY=me` works
+too. When no release asset exists for your platform, the installer builds
+from source. Remote *workers* use `packaging/remote/install.sh`, a
+Python-only bundle. See [`docs/JOIN_HUB.md`](docs/JOIN_HUB.md) and
+[`docs/REMOTE_INSTALL.md`](docs/REMOTE_INSTALL.md).
+
+## Local development (from source)
+
+These run everything on your machine, for working on nats-hub itself.
+
+### A. Run a hub locally
 
 Needs Rust, a C/C++ toolchain with libclang, and Python ≥ 3.10.
 `make doctor` tells you what's missing. The **first** build compiles RocksDB and
@@ -57,6 +149,9 @@ In a second terminal:
 ./target/debug/hub-history --tail                                       # live history
 ```
 
+The CLIs default to `$NATS_URL`, then `nats://127.0.0.1:4222`. Run them in
+a shell that has no hosted `NATS_URL` exported (from `acs env`).
+
 Swap the echo worker for a real agent. The agent's CLI must be installed and
 logged in:
 
@@ -66,22 +161,7 @@ logged in:
 ./target/debug/hub-delegate --to claude-1 --prompt "Summarize README.md" --verbose
 ```
 
-### B. Join an existing hub from another machine (no Rust needed)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh \
-  | bash -s -- wss://hub.example.com:8080
-export NATS_TOKEN='…'                     # from the hub operator
-hub-delegate-remote --to claude-1 --from me --prompt "hi" --verbose
-```
-
-The installer downloads the release binaries for your platform over HTTPS and
-verifies them against the release's `SHA256SUMS`. When no release asset exists
-for your platform, it builds from source instead. Remote *workers* use
-`packaging/remote/install.sh`, a Python-only bundle. See
-[`docs/JOIN_HUB.md`](docs/JOIN_HUB.md) and [`docs/REMOTE_INSTALL.md`](docs/REMOTE_INSTALL.md).
-
-### C. Orchestrate from Claude Code
+### B. Orchestrate from Claude Code
 
 ```bash
 claude plugin marketplace add jarmen423/agent-communication-server   # then install "nats-hub"
@@ -89,13 +169,13 @@ claude plugin marketplace add jarmen423/agent-communication-server   # then inst
 ```
 
 The plugin's MCP server reads `NATS_URL` (default `nats://127.0.0.1:4222`),
-`NATS_HUB_IDENTITY` and the usual `NATS_*` auth env vars.
+`NATS_HUB_IDENTITY` and the usual `NATS_*` auth env vars. For hosted ACS,
+use `acs mcp install` (step 5 above) instead.
 
-### D. Preview the hosted flow (all local, DEV ONLY pieces)
+### C. Preview the hosted flow (all local, DEV ONLY pieces)
 
-Hosted ACS (`docs/HOSTED_PLAN.md`): sign in once with the `acs` connector,
-then every agent on the machine joins your tenant. Locally, against a stub
-control plane on an operator-mode stack:
+This runs the hosted flow against a stub control plane on a local
+operator-mode stack (`docs/HOSTED_PLAN.md`):
 
 ```bash
 scripts/dev/install_nsc.sh
@@ -112,8 +192,8 @@ apps), `docs/OPERATOR_MODE.md` (tenancy), `docs/FILE_LOCKS.md`.
 
 Each `v*` tag publishes `nats-hub-<version>-<target>.tar.gz` for
 `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` (glibc ≥ 2.35) and
-`aarch64-apple-darwin`. Every tarball holds all `hub-*` CLIs, including
-`hub-server` and `hub-tui`. Alongside them are the Python remote-worker bundle
+`aarch64-apple-darwin`. Every tarball holds `acs` and all `hub-*` CLIs,
+including `hub-server` and `hub-tui`. Alongside them are the Python remote-worker bundle
 and `SHA256SUMS`. See [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Use it as a crate

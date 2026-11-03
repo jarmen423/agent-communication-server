@@ -9,6 +9,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::{default_nats_url, env_identity};
 use nats_hub_client::events::{format_event_line, resolve_watch_target, WatchQuery};
 use nats_hub_client::{HubClient, MessageKind};
 use tracing_subscriber::EnvFilter;
@@ -34,11 +35,13 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 
-    #[arg(long, default_value = "watcher")]
-    identity: String,
+    /// Watcher identity (env: NATS_HUB_IDENTITY; else watcher)
+    #[arg(long)]
+    identity: Option<String>,
 }
 
 #[tokio::main]
@@ -50,7 +53,8 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let json = args.json;
     let nats_url = args.nats_url.clone();
-    let identity = args.identity.clone();
+    let identity = args.identity.clone().or_else(env_identity);
+    let identity = identity.unwrap_or_else(|| "watcher".to_string());
     let query = WatchQuery {
         session: args.session,
         wave: args.wave,

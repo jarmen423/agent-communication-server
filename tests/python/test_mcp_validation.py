@@ -106,7 +106,7 @@ def test_tool_rejects_unknown_and_missing_args(monkeypatch, name):
         res = await H[name]({**SAMPLE_ARGS[name], "bogus_arg": 1})
         assert not res["ok"] and "'bogus_arg' was unexpected" in res["error"]
         assert res["error"].startswith(f"{name}: invalid arguments")
-        assert "Expected:" in res["error"]
+        assert "Valid arguments:" in res["error"]
         for req in TOOLS[name].inputSchema.get("required", []):
             args = {k: v for k, v in SAMPLE_ARGS[name].items() if k != req}
             res = await H[name](args)
@@ -116,6 +116,38 @@ def test_tool_rejects_unknown_and_missing_args(monkeypatch, name):
         assert not res["ok"] and "must be a JSON object" in res["error"]
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("name", ["delegate_task", "delegate_async"])
+def test_wrong_argument_names_get_the_valid_ones(monkeypatch, name):
+    """F4 (dogfood 2026-11-03): a wrong name reports every problem, the name
+    it probably meant, and the valid arguments, so one retry fixes it."""
+    async def run():
+        _bus(monkeypatch)
+        r = await H[name]({"worker": "w1", "task": "p", "timeout_secs": 5})
+        err = r["error"]
+        assert not r["ok"]
+        assert "'to' is a required property" in err
+        assert "'prompt' is a required property" in err
+        assert "use 'to' instead of 'worker'" in err
+        assert "use 'prompt' instead of 'task'" in err
+        valid = err.split("Valid arguments: ", 1)[1]
+        assert valid.startswith("to (string, required), prompt (string, required)")
+        if name == "delegate_task":
+            assert "use 'timeout' instead of 'timeout_secs'" in err
+            assert "timeout (number, default 120)" in valid
+        else:
+            assert "timeout" not in valid
+        r = await H[name]({"to": "w1", "promt": "p"})
+        assert "use 'prompt' instead of 'promt'" in r["error"]
+
+    asyncio.run(run())
+
+
+def test_delegate_descriptions_name_their_arguments():
+    for name in ("delegate_task", "delegate_async"):
+        desc = TOOLS[name].description
+        assert "Arguments: to (" in desc and "prompt (" in desc, name
 
 
 def test_type_errors_name_the_field(monkeypatch):

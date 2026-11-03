@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::{default_nats_url, sender_identity};
 use nats_hub_client::{Envelope, HubClient, MessageKind};
 use std::io::{self, BufRead, Write};
 use tracing_subscriber::EnvFilter;
@@ -18,16 +19,16 @@ use tracing_subscriber::EnvFilter;
     about = "Interactive human messaging on nats-hub"
 )]
 struct Args {
-    /// Sender identity (your name)
+    /// Sender identity, your name (env: NATS_HUB_IDENTITY)
     #[arg(long)]
-    from: String,
+    from: Option<String>,
 
     /// Channel to send to
     #[arg(long, default_value = "agents.broadcast")]
     channel: String,
 
-    /// NATS server URL
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 }
 
@@ -38,14 +39,15 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let client = HubClient::connect(&args.nats_url, &args.from).await?;
+    let from = sender_identity(args.from.clone(), "--from")?;
+    let client = HubClient::connect(&args.nats_url, &from).await?;
     let mut channel = args.channel.clone();
 
     println!("╔════════════════════════════════════════════╗");
     println!("║         nats-hub interactive mode          ║");
     println!("╚════════════════════════════════════════════╝");
     println!();
-    println!("  identity : {}", args.from);
+    println!("  identity : {from}");
     println!("  channel : {channel}");
     println!("  NATS    : {}", args.nats_url);
     println!();
@@ -85,7 +87,7 @@ async fn main() -> Result<()> {
                 "/status" => {
                     let text = parts.get(1).copied().unwrap_or("active");
                     let env = Envelope::new(
-                        args.from.clone(),
+                        from.clone(),
                         channel.clone(),
                         MessageKind::Status,
                         serde_json::json!({ "status": text }),
@@ -102,7 +104,7 @@ async fn main() -> Result<()> {
             }
         } else {
             let env = Envelope::new(
-                args.from.clone(),
+                from.clone(),
                 channel.clone(),
                 MessageKind::Human,
                 serde_json::json!({ "text": line }),

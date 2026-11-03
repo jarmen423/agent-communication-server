@@ -46,6 +46,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use nats_hub_client::client::{is_task_result, task_channel_for, ChannelCatchUp};
+use nats_hub_client::connect_opts::{default_nats_url, env_identity};
+use nats_hub_client::query_api_client::NO_IDENTITY_HINT;
 use nats_hub_client::{Envelope, HubClient, MessageKind};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -92,8 +94,8 @@ struct Args {
     #[arg(long, value_name = "CHANNEL", requires = "resume")]
     channel: Option<String>,
 
-    /// NATS server URL
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 
     /// Timeout in seconds to wait for a reply (0 = wait forever)
@@ -108,9 +110,9 @@ struct Args {
     #[arg(long)]
     verbose: bool,
 
-    /// Your identity (the sender)
-    #[arg(long, default_value = "orchestrator")]
-    from: String,
+    /// Your identity, the sender (env: NATS_HUB_IDENTITY; else orchestrator)
+    #[arg(long)]
+    from: Option<String>,
 }
 
 /// The prompt from `--prompt TEXT`, `--prompt -` (stdin) or `--prompt-file`.
@@ -144,11 +146,16 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    // Without --from or NATS_HUB_IDENTITY, a bound-identity hub drops what
+    // the fallback identity sends; a timeout then says why.
+    let identity_unset = args.from.is_none() && env_identity().is_none();
+    let from = args.from.clone().or_else(env_identity);
+    let from = from.unwrap_or_else(|| "orchestrator".to_string());
     let prompt = match args.resume {
         None => Some(read_prompt(&args).await?),
         Some(_) => None,
     };
-    let client = HubClient::connect(&args.nats_url, &args.from).await?;
+    let client = HubClient::connect(&args.nats_url, &from).await?;
     let mut interrupts = Interrupts::new()?;
 
     let (task_id, task_channel, mut task_rx) = match (&args.resume, prompt) {
@@ -164,7 +171,7 @@ async fn main() -> Result<()> {
         (None, prompt) => {
             let prompt = prompt.unwrap_or_default();
             let mut env = Envelope::new(
-                args.from.clone(),
+                from.clone(),
                 "task",
                 MessageKind::Message,
                 serde_json::Value::Null,
@@ -198,7 +205,6 @@ async fn main() -> Result<()> {
                 "[hub-delegate] task {id} → {to} (resume: hub-delegate --resume {id} --to {to} --from {from})",
                 id = env.meta.id,
                 to = args.to,
-                from = args.from
             );
 
             if args.no_wait {
@@ -250,6 +256,7 @@ async fn main() -> Result<()> {
                         "\n[hub-delegate] TIMEOUT after {}s — no result yet for {task_id} (task left running)",
                         args.timeout
                     );
+                    identity_hint(identity_unset);
                     match exit(&client, 2).await {}
                 }
                 // Don't leave the worker running a task nobody waits for.
@@ -259,6 +266,7 @@ async fn main() -> Result<()> {
                     args.timeout,
                     to = args.to
                 );
+                identity_hint(identity_unset);
                 match exit(&client, 2).await {}
             }
             () = interrupts.recv() => {
@@ -338,6 +346,13 @@ async fn send_cancel(client: &HubClient, worker: &str, channel: &str, task_id: &
     .to(worker);
     if let Err(e) = client.send(&cancel).await {
         eprintln!("[hub-delegate] failed to send cancel: {e:#}");
+    }
+}
+
+/// After a timeout: say when no identity was set (F2).
+fn identity_hint(identity_unset: bool) {
+    if identity_unset {
+        eprintln!("[hub-delegate] {NO_IDENTITY_HINT}");
     }
 }
 

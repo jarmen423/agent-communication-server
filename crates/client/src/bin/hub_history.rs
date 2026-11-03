@@ -11,13 +11,15 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::{default_nats_url, env_identity};
 use nats_hub_client::{ApiClient, HistoryQuery};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "hub-history", about = "Query message history via query API")]
 struct Args {
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
     #[arg(long)]
     channel: Option<String>,
@@ -85,7 +87,8 @@ async fn main() -> Result<()> {
 
     if args.tail {
         println!("\n--- live tail (Ctrl+C to stop) ---");
-        let client = nats_hub_client::HubClient::connect(&args.nats_url, "hub-history").await?;
+        let identity = env_identity().unwrap_or_else(|| "hub-history".to_string());
+        let client = nats_hub_client::HubClient::connect(&args.nats_url, &identity).await?;
         let mut rx = client.subscribe_all().await?;
         while let Some(env) = rx.recv().await {
             let time = env.meta.timestamp.format("%H:%M:%S").to_string();
