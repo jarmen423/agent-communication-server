@@ -1,41 +1,86 @@
 use super::*;
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn mock(responses: Vec<String>) -> (Api, tokio::task::JoinHandle<Vec<String>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let api = Api::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let api = Api::new(&format!("http://{addr}")).unwrap();
+    let host = format!("host: {addr}");
     let task = tokio::spawn(async move {
+        let total = responses.len();
+        let pending = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut requests = Vec::new();
-        for response in responses {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut bytes = Vec::new();
-            loop {
-                let mut buf = [0; 4096];
-                let n = stream.read(&mut buf).await.unwrap();
-                assert_ne!(n, 0);
-                bytes.extend_from_slice(&buf[..n]);
-                if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let headers = String::from_utf8_lossy(&bytes[..end]);
-                    let len: usize = headers
-                        .lines()
-                        .find_map(|line| {
-                            line.to_lowercase()
-                                .strip_prefix("content-length: ")?
-                                .parse()
-                                .ok()
-                        })
-                        .unwrap_or(0);
-                    if bytes.len() >= end + 4 + len {
-                        break;
-                    }
+        while requests.len() < total {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted.unwrap();
+                    tokio::spawn(serve(stream, host.clone(), pending.clone(), tx.clone()));
                 }
+                Some(request) = rx.recv() => requests.push(request),
             }
-            requests.push(String::from_utf8(bytes).unwrap());
-            stream.write_all(response.as_bytes()).await.unwrap();
         }
         requests
     });
     (api, task)
+}
+
+/// Answer one request from `Api` with the next queued response. Other local
+/// processes probe a test's ephemeral port (a TLS ClientHello and a node
+/// `GET /` to `localhost:<port>` were seen), so a connection that isn't an
+/// HTTP request for `host` is dropped without using up a response.
+async fn serve(
+    mut stream: tokio::net::TcpStream,
+    host: String,
+    pending: Arc<Mutex<VecDeque<String>>>,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    let mut bytes = Vec::new();
+    loop {
+        let mut buf = [0; 4096];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) if n > 0 => n,
+            _ => return,
+        };
+        bytes.extend_from_slice(&buf[..n]);
+        let method = bytes.iter().take_while(|b| b.is_ascii_uppercase()).count();
+        if bytes.len() > method && (method == 0 || bytes[method] != b' ') {
+            return;
+        }
+        if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            let headers = String::from_utf8_lossy(&bytes[..end]);
+            let len: usize = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_lowercase()
+                        .strip_prefix("content-length: ")?
+                        .parse()
+                        .ok()
+                })
+                .unwrap_or(0);
+            if !headers.lines().any(|l| l.eq_ignore_ascii_case(&host)) {
+                return;
+            }
+            if bytes.len() >= end + 4 + len {
+                break;
+            }
+        }
+    }
+    let response = {
+        let mut queue = pending.lock().unwrap();
+        let response = queue.pop_front();
+        if response.is_some() {
+            tx.send(String::from_utf8(bytes).unwrap()).unwrap();
+        }
+        response
+    };
+    if let Some(response) = response {
+        stream.write_all(response.as_bytes()).await.unwrap();
+    }
 }
 
 fn response(status: u16, headers: &str, body: &str) -> String {
