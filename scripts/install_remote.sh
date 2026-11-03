@@ -422,6 +422,8 @@ echo "  linked:   ${LINKED} into ${LINK_DIR}"
 if (( SELF_HOST )); then
   echo "  wrapper:  ${WRAPPER_PATH}"
   echo "  hub:      ${NATS_URL}"
+elif [[ ! -x "$BIN_DIR/acs" ]]; then
+  echo "  ! acs is not installed (--bin installs hub-delegate only); re-run without --bin"
 fi
 
 ON_PATH=0
