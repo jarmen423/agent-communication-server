@@ -4,8 +4,8 @@ Paste everything below the line into the design agent.
 
 ---
 
-You are the design engineer for **ACS**, the hosted version of the
-open-source **nats-hub** project. Design and build its public homepage,
+You are the design engineer for **Agent Communication Server (ACS)**,
+the hosted version of the open-source **nats-hub** project. Design and build its public homepage,
 with a documentation section and a pricing section, and GPU motion
 graphics built with vgpu. Go well past a template: the site should look
 as if a devtool company with taste made it.
@@ -19,8 +19,7 @@ as if a devtool company with taste made it.
   `git worktree add /data/code/acs-wt/homepage -b iter2/homepage main`.
   Don't commit to `main`.
 - Put the site in a new top-level `site/` directory. Don't edit anything
-  outside `site/`, except `REUSE.toml`, which needs an entry for `site/**`
-  (see "Constraints").
+  outside `site/`. Read `brand/`, but don't change it.
 - Read `AGENTS.md` first. It covers the conventions, file-size limit and
   licensing.
 
@@ -108,6 +107,52 @@ Prefer static rendering for every page. Self-host fonts with
 `next/font`. Don't use component kits that dictate the look, and no stock
 illustrations.
 
+## Brand: `brand/` is the source of truth
+
+The brand already exists. Read `brand/README.md` first, then
+`brand/tokens.json`, `brand/logo/*.svg` and the two previews in
+`brand/previews/`. Its rules are not suggestions:
+- **Logo:** two overlapping speech bubbles. Teal is the sender, orange is
+  the reply, and the ink lens where they overlap is the server. Use the
+  SVGs as they are, with the lockup, clear space and minimum sizes from
+  the README. Never recolour, reorder, rotate or outline the mark.
+- **Colour:**
+  - `paper`/`ink` are the base, `relay-teal` is primary and
+    `signal-orange` is the accent.
+  - `lane` is the dark band for terminals, code and message queues.
+  - Draw edges with a `line` hairline rather than a shadow.
+  - **Teal always means sent, orange always means received**, and
+    direction is labelled in words too, never by colour alone.
+- **Type:**
+  - Bricolage Grotesque for display and the wordmark only;
+  - IBM Plex Sans for text;
+  - IBM Plex Mono for agent IDs, channels and payloads.
+
+  Load all three through `next/font/google`, which self-hosts them at
+  build time.
+- **Voice:**
+  - plain and exact, like a good log line ("planner sent 3 messages to
+    #build.queue");
+  - sentence case everywhere, no emoji;
+  - write the full name "Agent Communication Server" the first time on
+    every page, and "ACS" after that.
+- **Themes:** the tokens define light and dark. Ship both, follow the
+  system preference, and add a toggle.
+
+Generate the CSS variables and Tailwind theme from `tokens.json` with a
+small build-time script, rather than copying values by hand. That way a
+brand change flows through without edits.
+
+**How this fits bespoke's "elevate, don't maintain" mandate:** it applies
+to layout, composition, motion, effects and copy. Push those as far as
+the skill says. It does **not** apply to the logo, colours, type or
+voice. Extend the brand, and don't replace it. Use
+`devtool-visual-system`'s `theme.py` only to derive the in-between steps
+the tokens don't define (hover, pressed, subtle tints, borders), starting
+from the brand colours. If you think the brand itself has a real
+problem (contrast, scale), raise it with me the design-mentor way. Don't
+change it on your own.
+
 ## What the product is
 
 Use only real facts. Read these files and quote or paraphrase them; don't
@@ -148,10 +193,17 @@ The core idea for the design to come from is **many agents, many
 machines, one conversation you can see**. The signature moment should
 grow out of that, for example a live view of a task going from an
 orchestrator to a worker and back. It must not be a generic glowing orb.
-Build it as a vgpu shader or scene: for example, messages travelling as
-light along routes between agent nodes, with the reply contract
-(progress, then one terminal result) visible in the motion. Its poster
-frame has to tell the same story without the GPU.
+Build it as a vgpu shader or scene in the brand's own language. For
+example:
+- teal messages leave an orchestrator and travel along `lane`-coloured
+  routes to worker nodes;
+- orange replies come back;
+- the overlap or lens of the mark is where they meet, at the server;
+- the reply contract (a stream of progress, then one final result) is
+  visible in the rhythm.
+
+Use the mono style for real-looking agent IDs and channel names. Its
+poster frame has to tell the same story without the GPU.
 
 ## Pages and sections
 
@@ -235,10 +287,11 @@ without asking me.
   - no fake testimonials, customer logos, user counts or benchmarks;
   - mark anything experimental as experimental;
   - make no claim that the docs don't support.
-- **Licensing:** add a `REUSE.toml` annotation for `site/**`
-  (Apache-2.0, the same as the client code). CI runs `reuse lint` and
-  `tests/python/test_licensing.py`, and both must stay green. Don't add
-  per-file license headers.
+- **Licensing:** `REUSE.toml`'s default `**` rule already makes `site/`
+  Apache-2.0, so don't edit it or add per-file headers. CI runs
+  `reuse lint` and `tests/python/test_licensing.py`, and both must stay
+  green. Vendored assets under a different licence (fonts, if ever
+  vendored) would need their own entry, so ask me first.
 - **Keep CI green:** the site must not be picked up by the Rust or Python
   suites. Don't add Node to the existing CI jobs. If you want a site
   check (build, lint, link check), add it as its own job in
@@ -271,8 +324,6 @@ without asking me.
     from my laptop through `ssh -L 3000:localhost:3000`. Follow vgpu's
     `performance-measurement` guidance so the measurement is easy to
     repeat there.
-- **Themes:** dark first. Light mode too if bespoke's
-  `devtool-visual-system` gives a clean ladder for it.
 
 ## Definition of done
 
