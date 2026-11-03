@@ -5,6 +5,9 @@
 # against a hub. Verified by importing the adapter in a clean interpreter
 # and recording every module actually pulled in (see note at the bottom).
 #
+# Hosted ACS doesn't use it: `acs worker run` embeds the worker entrypoints
+# and their whole import closure (crates/acs/build.rs).
+#
 # Everything is a flat file at the repo root or under worker_backends/.
 # The install.sh helper copies exactly these files into the target
 # directory; you can also copy them by hand or via sparse checkout.
