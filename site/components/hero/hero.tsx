@@ -4,7 +4,11 @@ import { INVITE_REQUEST_URL } from "@/content/site";
 import { TALL, WIDE } from "./geometry";
 import { RouteDiagram } from "./route-diagram";
 
-export function Hero() {
+/**
+ * `stage` replaces the default poster stage (the hero bake-off passes its own
+ * <GpuStage> per concept). It must keep the same box: 1200:440 from md, 360:440 below.
+ */
+export function Hero({ stage }: { stage?: React.ReactNode } = {}) {
   return (
     <section aria-labelledby="hero-title" className="relative overflow-x-clip pb-20 pt-12 md:pb-28 md:pt-20">
       <div className="container-page grid gap-10 md:grid-cols-12 md:items-end">
@@ -42,13 +46,17 @@ export function Hero() {
       <div className="hero-band lane mt-14 md:mt-20">
         <div className="hero-band-inner">
           <div className="hero-stage" data-hero-stage>
-            {/* Poster frame: server-rendered, the same size as the GPU canvas that may replace it. */}
-            <div className="hero-poster hero-poster-wide" style={{ aspectRatio: `${WIDE.width} / ${WIDE.height}` }}>
-              <RouteDiagram scene={WIDE} className="h-full w-full" />
-            </div>
-            <div className="hero-poster hero-poster-tall" style={{ aspectRatio: `${TALL.width} / ${TALL.height}` }}>
-              <RouteDiagram scene={TALL} className="h-full w-full" />
-            </div>
+            {stage ?? (
+              <>
+                {/* Poster frame: server-rendered, the same size as the GPU canvas that may replace it. */}
+                <div className="hero-poster hero-poster-wide" style={{ aspectRatio: `${WIDE.width} / ${WIDE.height}` }}>
+                  <RouteDiagram scene={WIDE} className="h-full w-full" />
+                </div>
+                <div className="hero-poster hero-poster-tall" style={{ aspectRatio: `${TALL.width} / ${TALL.height}` }}>
+                  <RouteDiagram scene={TALL} className="h-full w-full" />
+                </div>
+              </>
+            )}
           </div>
           <HeroLog />
         </div>
