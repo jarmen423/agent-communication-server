@@ -221,7 +221,7 @@ impl IdentityManifest {
         let mut live: Vec<Arc<ManifestRecord>> = self
             .read_slots()
             .iter()
-            .filter(|(id, _)| after.is_none_or(|a| id.as_str() > a))
+            .filter(|(id, _)| after.map_or(true, |a| id.as_str() > a))
             .filter_map(|(_, slot)| match slot {
                 Slot::Live(rec) => Some(rec.clone()),
                 Slot::Removed { .. } => None,

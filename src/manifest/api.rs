@@ -181,7 +181,7 @@ fn get(manifest: &IdentityManifest, params: &Value) -> ApiResponse {
         "identity": identity,
         "rev": rev,
         "removed": removed,
-        "record": record,
+        "record": record.as_deref(),
     }))
 }
 
@@ -196,9 +196,11 @@ fn list(manifest: &IdentityManifest, params: &Value) -> ApiResponse {
         Some(_) => return ApiResponse::err("after must be a string"),
     };
     let (records, next_after) = manifest.list(after, limit);
+    let records: Vec<&ManifestRecord> = records.iter().map(AsRef::as_ref).collect();
     ApiResponse::ok(json!({"records": records, "next_after": next_after}))
 }
 
 fn self_record(manifest: &IdentityManifest, identity: &str) -> ApiResponse {
-    ApiResponse::ok(json!({"identity": identity, "record": manifest.get(identity)}))
+    let record = manifest.get(identity);
+    ApiResponse::ok(json!({"identity": identity, "record": record.as_deref()}))
 }

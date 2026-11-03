@@ -28,7 +28,7 @@ pub(super) struct ManifestArgs {
 #[derive(Subcommand)]
 enum ManifestCmd {
     /// Write one identity's record.
-    Put(PutArgs),
+    Put(Box<PutArgs>),
     /// Remove an identity, leaving a tombstone at its rev.
     Remove(RemoveArgs),
     /// Apply a full snapshot from a file: {"rev": N?, "records": [...]}.
@@ -178,7 +178,7 @@ fn snapshot(doc: &Value, now: i64) -> Result<Value> {
             .as_object()
             .cloned()
             .ok_or_else(|| bad_record("record: must be an object".to_string()))?;
-        if fields.get("rev").is_none_or(Value::is_null) {
+        if fields.get("rev").map_or(true, Value::is_null) {
             fields.insert("rev".to_string(), json!(rev));
         }
         let record: ManifestRecord = serde_json::from_value(Value::Object(fields))
