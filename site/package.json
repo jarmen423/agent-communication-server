@@ -1,0 +1,41 @@
+{
+  "name": "acs-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Communication Server homepage, pricing and docs",
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "tokens": "node scripts/build-tokens.mjs",
+    "predev": "npm run tokens",
+    "dev": "next dev --port 3000",
+    "prebuild": "npm run tokens",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "lint": "eslint . --max-warnings 0",
+    "typecheck": "tsc --noEmit",
+    "check:shaders": "node scripts/check-shaders.mjs",
+    "check:links": "node scripts/check-links.mjs"
+  },
+  "dependencies": {
+    "next": "16.4.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vgpu": "0.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.4",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vgpu/wgsl": "0.6.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "16.4.4",
+    "github-slugger": "2.0.0",
+    "marked": "18.1.3",
+    "shiki": "4.6.0",
+    "tailwindcss": "4.3.4",
+    "typescript": "6.0.3"
+  }
+}
