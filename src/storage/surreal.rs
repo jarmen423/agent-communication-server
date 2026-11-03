@@ -8,7 +8,7 @@
 //! get direct database access (BSL safeguard).
 //!
 //! The per-domain queries live in sibling modules (`agents`, `envelopes`,
-//! `session`, `wave`, `schema`); this file owns the connection and the
+//! `manifest`, `session`, `wave`, `schema`); this file owns the connection and the
 //! `Storage` trait wiring.
 
 use anyhow::{Context, Result};
@@ -18,9 +18,9 @@ use surrealdb::Surreal;
 use tracing::{debug, info};
 
 use crate::protocol::Envelope;
-use crate::storage::{agents, envelopes, locks, schema, session, wave};
+use crate::storage::{agents, envelopes, locks, manifest, schema, session, wave};
 use crate::storage::{
-    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, LockRecord, SessionFilter,
+    AgentFilter, AgentRecord, EnvelopeRecord, HistoryQuery, LockRecord, ManifestRow, SessionFilter,
     SessionRecord, Storage, WaveRecord, WaveTaskRecord, MAX_THREAD_DEPTH,
 };
 
@@ -253,6 +253,20 @@ impl Storage for SurrealStorage {
         expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool> {
         locks::renew_lock(&self.db, lock_id, ttl_secs, expires_at).await
+    }
+
+    // ── Identity manifest ────────────────────────────────────
+
+    async fn load_identity_manifest(&self) -> Result<Vec<ManifestRow>> {
+        manifest::load(&self.db).await
+    }
+
+    async fn save_identity_manifest_row(&self, row: &ManifestRow) -> Result<()> {
+        manifest::save_row(&self.db, row).await
+    }
+
+    async fn replace_identity_manifest(&self, rows: &[ManifestRow]) -> Result<()> {
+        manifest::replace(&self.db, rows).await
     }
 
     // ── Lifecycle ───────────────────────────────────────────

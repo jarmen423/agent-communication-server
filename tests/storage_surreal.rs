@@ -580,3 +580,251 @@ async fn test_migrate_converts_legacy_rows() {
     let err = storage.get_session("old-corrupt").await.unwrap_err();
     assert!(format!("{err:#}").contains("created_at"), "{err:#}");
 }
+
+// ── Provenance and the identity manifest ───────────────────────────
+
+use nats_hub::manifest::{AcceptPolicy, IdentityKind, OwnerKind, Role};
+use nats_hub::storage::ManifestRow;
+use nats_hub::{ManifestRecord, Origin};
+
+fn origin_envelope(channel: &str, origin: serde_json::Value) -> Envelope {
+    let mut env = Envelope::new("prov-a", channel, MessageKind::Message, json!({"n": 1}));
+    env.meta.origin = serde_json::from_value(origin).unwrap();
+    env
+}
+
+fn full_origin() -> serde_json::Value {
+    json!({
+        "tenant": "acme",
+        "identity": "prov-a",
+        "user": "alice",
+        "user_id": "0b6b7e0e-5b0c-4f4e-9d55-0a4b0ce1c111",
+        "owner_kind": "user",
+        "device": "laptop",
+        "agent": "claude-code",
+        "on_behalf_of": {"identity": "bob-agent", "user": "bob"},
+        "reported": {"session": "s-1", "model_provider": "acme-ai", "model": "m-1", "client_version": "2"},
+    })
+}
+
+#[tokio::test]
+async fn test_envelope_origin_round_trips_with_nested_keys() {
+    let storage = setup().await;
+    let env = origin_envelope("prov.round", full_origin());
+    storage.store_envelope(&env).await.unwrap();
+
+    let got = storage
+        .get_envelope(&env.meta.id)
+        .await
+        .unwrap()
+        .expect("stored");
+    let expected: Origin = serde_json::from_value(full_origin()).unwrap();
+    assert_eq!(got.origin, Some(expected.clone()));
+    assert_eq!(got.origin.unwrap().reported.extra["client_version"], "2");
+
+    let listed = storage
+        .query_history(&HistoryQuery::new().channel("prov.round"))
+        .await
+        .unwrap();
+    assert_eq!(listed[0].origin, Some(expected));
+}
+
+#[tokio::test]
+async fn test_envelope_without_origin_stays_absent() {
+    let storage = setup().await;
+    let env = Envelope::new("a", "prov.none", MessageKind::Message, json!({}));
+    storage.store_envelope(&env).await.unwrap();
+    let got = storage.get_envelope(&env.meta.id).await.unwrap().unwrap();
+    assert_eq!(got.origin, None);
+    let wire = serde_json::to_value(&got).unwrap();
+    assert!(wire.get("origin").is_none(), "absent, not null");
+}
+
+#[tokio::test]
+async fn test_history_filters_on_origin() {
+    let storage = setup().await;
+    let matching = origin_envelope("prov.filter", full_origin());
+    let other = origin_envelope(
+        "prov.filter",
+        json!({"user": "bob", "agent": "codex", "reported": {"model": "m-2", "session": "s-2"}}),
+    );
+    let bare = Envelope::new("a", "prov.filter", MessageKind::Message, json!({}));
+    for env in [&matching, &other, &bare] {
+        storage.store_envelope(env).await.unwrap();
+    }
+
+    let q = || HistoryQuery::new().channel("prov.filter");
+    for (query, name) in [
+        (q().user("alice"), "user"),
+        (q().agent("claude-code"), "agent"),
+        (q().model("m-1"), "model"),
+        (q().session("s-1"), "session"),
+    ] {
+        let rows = storage.query_history(&query).await.unwrap();
+        assert_eq!(rows.len(), 1, "filter {name} should match one row");
+        assert_eq!(
+            rows[0].origin.as_ref().unwrap().user.as_deref(),
+            Some("alice")
+        );
+    }
+    let combined = q().user("alice").model("m-2");
+    assert!(storage.query_history(&combined).await.unwrap().is_empty());
+    assert_eq!(storage.query_history(&q()).await.unwrap().len(), 3);
+}
+
+fn manifest_row(identity: &str, rev: i64) -> ManifestRow {
+    ManifestRow {
+        identity: identity.into(),
+        rev,
+        record: Some(ManifestRecord {
+            identity: identity.into(),
+            owner_kind: OwnerKind::User,
+            user: Some("alice".into()),
+            user_id: Some("0b6b7e0e-5b0c-4f4e-9d55-0a4b0ce1c111".into()),
+            device: Some("alice's laptop".into()),
+            device_id: None,
+            kind: IdentityKind::Connector,
+            agent: Some("claude.ai".into()),
+            role: Role::Orchestrator,
+            accept: Some(AcceptPolicy::Users {
+                users: vec!["alice".into(), "bob".into()],
+            }),
+            rev,
+        }),
+    }
+}
+
+fn tombstone(identity: &str, rev: i64) -> ManifestRow {
+    ManifestRow {
+        identity: identity.into(),
+        rev,
+        record: None,
+    }
+}
+
+async fn manifest_rows(storage: &SurrealStorage) -> Vec<ManifestRow> {
+    let mut rows = storage.load_identity_manifest().await.unwrap();
+    rows.sort_by(|a, b| a.identity.cmp(&b.identity));
+    rows
+}
+
+#[tokio::test]
+async fn test_manifest_rows_upsert_and_tombstone() {
+    let storage = setup().await;
+    assert!(manifest_rows(&storage).await.is_empty());
+
+    // Keys that look like numbers or carry dashes stay exactly as written.
+    for id in ["alice-agent", "123", "a_b"] {
+        storage
+            .save_identity_manifest_row(&manifest_row(id, 5_000_000_000_000))
+            .await
+            .unwrap();
+    }
+    storage
+        .save_identity_manifest_row(&manifest_row("alice-agent", 6_000_000_000_000))
+        .await
+        .unwrap();
+    storage
+        .save_identity_manifest_row(&tombstone("a_b", 7))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        manifest_rows(&storage).await,
+        vec![
+            manifest_row("123", 5_000_000_000_000),
+            tombstone("a_b", 7),
+            manifest_row("alice-agent", 6_000_000_000_000),
+        ]
+    );
+}
+
+fn reopen_rows() -> Vec<ManifestRow> {
+    vec![manifest_row("alice-agent", 3), tombstone("gone", 4)]
+}
+
+/// The first process of `test_manifest_rows_survive_a_reopen`; does nothing
+/// when the test harness runs it on its own.
+#[tokio::test]
+async fn reopen_test_writer_process() {
+    let Ok(path) = std::env::var("MANIFEST_REOPEN_TEST_DB") else {
+        return;
+    };
+    let storage = SurrealStorage::connect(&path).await.unwrap();
+    storage.migrate().await.unwrap();
+    for row in &reopen_rows() {
+        storage.save_identity_manifest_row(row).await.unwrap();
+    }
+}
+
+/// A real restart is a new process, which is also the only reliable way to
+/// get RocksDB's lock back: dropping the handle doesn't release it promptly.
+#[tokio::test]
+async fn test_manifest_rows_survive_a_reopen() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("db");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "reopen_test_writer_process"])
+        .env("MANIFEST_REOPEN_TEST_DB", &path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let storage = SurrealStorage::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    storage.migrate().await.unwrap();
+    assert_eq!(manifest_rows(&storage).await, reopen_rows());
+}
+
+#[tokio::test]
+async fn test_replace_identity_manifest_replaces_everything() {
+    let storage = setup().await;
+    storage
+        .save_identity_manifest_row(&manifest_row("old", 1))
+        .await
+        .unwrap();
+    storage
+        .save_identity_manifest_row(&tombstone("old-tombstone", 2))
+        .await
+        .unwrap();
+
+    let rows = vec![
+        manifest_row("123", 5),
+        manifest_row("alice-agent", 6),
+        tombstone("gone", 7),
+    ];
+    storage.replace_identity_manifest(&rows).await.unwrap();
+    assert_eq!(manifest_rows(&storage).await, rows);
+
+    storage.replace_identity_manifest(&[]).await.unwrap();
+    assert!(manifest_rows(&storage).await.is_empty());
+}
+
+#[tokio::test]
+async fn test_manifest_storage_with_the_cache() {
+    use nats_hub::manifest::{Apply, Lookup};
+    use nats_hub::IdentityManifest;
+
+    let storage = setup().await;
+    let manifest = IdentityManifest::default();
+    let record = manifest_row("a", 5).record.unwrap();
+    manifest.put(Some(&storage), record.clone()).await.unwrap();
+    manifest
+        .sync(
+            Some(&storage),
+            9,
+            vec![manifest_row("b", 8).record.unwrap()],
+        )
+        .await
+        .unwrap();
+
+    let fresh = IdentityManifest::default();
+    assert_eq!(fresh.load(&storage).await.unwrap(), 1);
+    assert_eq!(fresh.lookup("a"), Lookup::Removed { rev: 9 });
+    assert_eq!(
+        fresh.put(None, record).await.unwrap(),
+        Apply::Stale { current_rev: 9 }
+    );
+    assert!(fresh.get("b").is_some());
+}

@@ -14,7 +14,7 @@
 //!
 //! Ambiguity rule: after `hub.api.`, a first token that names a known op
 //! namespace (`wave`, `session`, `agent`, `history`, `thread`, `envelope`,
-//! `stats`, `ping`) keeps the legacy meaning — `hub.api.wave.get` is op
+//! `stats`, `ping`, `backup`, `lock`, `manifest`) keeps the legacy meaning — `hub.api.wave.get` is op
 //! `wave.get`, not a call from agent "wave". Agents must not be named after
 //! an op namespace; `hub-admin` refuses to mint such identities.
 //!
@@ -116,6 +116,10 @@ pub struct ApiAuthz {
     /// Directory `backup.export` writes into (`hub-server --backup-dir`).
     /// `None` disables the op: callers name a file, never a path.
     pub backup_dir: Option<std::path::PathBuf>,
+    /// The hub's identity manifest, when storage is attached. Its writer set
+    /// (`--manifest-writer`) lives on the manifest, so the router and the API
+    /// read the same one.
+    pub manifest: Option<Arc<crate::manifest::IdentityManifest>>,
 }
 
 impl ApiAuthz {

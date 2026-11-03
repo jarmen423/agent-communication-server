@@ -48,7 +48,11 @@ pub(super) async fn history_query(s: &dyn Storage, p: &Value) -> ApiResponse {
     };
     query.limit = Some(limit);
     match s.query_history(&query).await {
-        Ok(envelopes) => ApiResponse::ok(json!({"envelopes": envelopes, "limit": limit})),
+        Ok(envelopes) => ApiResponse::ok(json!({
+            "envelopes": envelopes,
+            "limit": limit,
+            "applied_filters": query.applied_filters(),
+        })),
         Err(e) => ApiResponse::err(e.to_string()),
     }
 }

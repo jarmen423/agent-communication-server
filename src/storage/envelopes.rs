@@ -16,14 +16,14 @@ use serde::{Deserialize, Serialize};
 use surrealdb::RecordId;
 use tracing::{debug, warn};
 
-use crate::protocol::Envelope;
+use crate::protocol::{Envelope, Origin};
 use crate::storage::dbtime::{db_time, DbTime};
 use crate::storage::surreal::Db;
 use crate::storage::{EnvelopeRecord, HistoryQuery};
 
 /// Columns selected for every envelope read.
 const COLUMNS: &str =
-    "id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at";
+    "id, from_identity, channel, to_identity, timestamp, kind, reply_to, payload, stored_at, origin";
 
 /// Internal row type for envelopes table (without ID — ID is the record key).
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,6 +36,8 @@ struct EnvelopeRow {
     reply_to: Option<String>,
     payload: serde_json::Value,
     stored_at: DbTime,
+    #[serde(default)]
+    origin: Option<serde_json::Value>,
 }
 
 /// Row type that includes the record ID (for queries that return it).
@@ -53,6 +55,8 @@ struct EnvelopeRowWithId {
     #[serde(default)]
     payload: serde_json::Value,
     stored_at: DbTime,
+    #[serde(default)]
+    origin: Option<serde_json::Value>,
 }
 
 impl EnvelopeRowWithId {
@@ -74,6 +78,8 @@ impl EnvelopeRowWithId {
             reply_to: self.reply_to,
             payload: self.payload,
             stored_at: self.stored_at.into(),
+            // Lossy, so one bad row never fails a whole query.
+            origin: self.origin.as_ref().map(Origin::from_value_lossy),
         }
     }
 }
@@ -90,6 +96,12 @@ pub async fn store_envelope(db: &Db, env: &Envelope) -> Result<()> {
     debug!(id = %env.meta.id, "storing envelope");
 
     let record = EnvelopeRecord::from_envelope(env);
+    let origin = record
+        .origin
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .context("failed to encode envelope origin")?;
     let row = EnvelopeRow {
         from_identity: record.from_identity,
         channel: record.channel,
@@ -99,6 +111,7 @@ pub async fn store_envelope(db: &Db, env: &Envelope) -> Result<()> {
         reply_to: record.reply_to,
         payload: record.payload,
         stored_at: db_time(record.stored_at),
+        origin,
     };
 
     let _: Option<EnvelopeRow> = db
@@ -142,6 +155,21 @@ pub async fn query_history(db: &Db, q: &HistoryQuery) -> Result<Vec<EnvelopeReco
         conditions.push("timestamp < $until".to_string());
     }
 
+    // `$session` is a protected SurrealDB parameter (the connection's session
+    // object), so these bind under an `origin_` prefix.
+    if q.user.is_some() {
+        conditions.push("origin.user = $origin_user".to_string());
+    }
+    if q.agent.is_some() {
+        conditions.push("origin.agent = $origin_agent".to_string());
+    }
+    if q.model.is_some() {
+        conditions.push("origin.reported.model = $origin_model".to_string());
+    }
+    if q.session.is_some() {
+        conditions.push("origin.reported.session = $origin_session".to_string());
+    }
+
     if !conditions.is_empty() {
         query.push_str(" WHERE ");
         query.push_str(&conditions.join(" AND "));
@@ -172,6 +200,19 @@ pub async fn query_history(db: &Db, q: &HistoryQuery) -> Result<Vec<EnvelopeReco
     }
     if let Some(until) = q.until {
         q_builder = q_builder.bind(("until", db_time(until)));
+    }
+
+    if let Some(ref user) = q.user {
+        q_builder = q_builder.bind(("origin_user", user.clone()));
+    }
+    if let Some(ref agent) = q.agent {
+        q_builder = q_builder.bind(("origin_agent", agent.clone()));
+    }
+    if let Some(ref model) = q.model {
+        q_builder = q_builder.bind(("origin_model", model.clone()));
+    }
+    if let Some(ref session) = q.session {
+        q_builder = q_builder.bind(("origin_session", session.clone()));
     }
 
     let rows: Vec<EnvelopeRowWithId> = q_builder.await?.check()?.take(0)?;

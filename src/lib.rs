@@ -72,6 +72,7 @@ pub use nats_hub_client::connect_opts;
 pub mod delivery;
 pub use nats_hub_client::events;
 pub mod locks;
+pub mod manifest;
 pub mod orchestrator;
 pub use nats_hub_client::protocol;
 pub mod query_api;
@@ -91,7 +92,8 @@ pub use connect_opts::HubConnectOptions;
 pub use events::{
     event_payload, event_summary, format_event_line, resolve_watch_target, WatchQuery, WatchTarget,
 };
-pub use protocol::{subjects, Envelope, MessageKind, Meta};
+pub use manifest::{IdentityManifest, ManifestRecord};
+pub use protocol::{subjects, Envelope, MessageKind, Meta, OnBehalfOf, Origin, Reported};
 pub use router::{ControlPlane, RoutingTable};
 
 // ── Public API: storage types ─────────────────────────────────

@@ -13,12 +13,24 @@ use async_trait::async_trait;
 
 use crate::protocol::Envelope;
 
+use nats_hub_client::manifest::ManifestRecord;
 pub use nats_hub_client::storage::*;
 
 // ── Limits ───────────────────────────────────────────────────
 
 /// Deepest reply level [`Storage::get_thread`] walks below the root.
 pub const MAX_THREAD_DEPTH: usize = 64;
+
+// ── Identity manifest ────────────────────────────────────────
+
+/// One stored identity-manifest slot. `record: None` is a tombstone: the
+/// identity was removed at `rev`, and older writes must not bring it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestRow {
+    pub identity: String,
+    pub rev: i64,
+    pub record: Option<ManifestRecord>,
+}
 
 // ── Storage Trait ────────────────────────────────────────────
 
@@ -225,6 +237,28 @@ pub trait Storage: Send + Sync {
         expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool>;
 
+    // ── Identity manifest ────────────────────────────────────
+    //
+    // Default methods, so a backend written before the manifest keeps
+    // compiling. Such a backend has no manifest and refuses writes.
+
+    /// Every manifest slot (live records and tombstones).
+    async fn load_identity_manifest(&self) -> Result<Vec<ManifestRow>> {
+        Ok(vec![])
+    }
+
+    /// Upsert one slot.
+    async fn save_identity_manifest_row(&self, row: &ManifestRow) -> Result<()> {
+        let _ = row;
+        anyhow::bail!("identity manifest not supported by this backend")
+    }
+
+    /// Replace every slot in one transaction (full sync).
+    async fn replace_identity_manifest(&self, rows: &[ManifestRow]) -> Result<()> {
+        let _ = rows;
+        anyhow::bail!("identity manifest not supported by this backend")
+    }
+
     // ── Lifecycle ───────────────────────────────────────────
 
     /// Initialize the schema (create tables, indexes, etc.).
@@ -248,6 +282,9 @@ mod dbtime;
 
 #[cfg(feature = "storage-surreal")]
 mod envelopes;
+
+#[cfg(feature = "storage-surreal")]
+mod manifest;
 
 #[cfg(feature = "storage-surreal")]
 pub mod schema;

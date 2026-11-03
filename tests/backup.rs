@@ -159,6 +159,7 @@ async fn backup_export_is_admin_only_and_confined_to_backup_dir() {
         require_bound: false,
         admins: ["ops".to_string()].into_iter().collect(),
         backup_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
     };
 
     // Bound non-admin caller → denied (write op, no ownership rule).

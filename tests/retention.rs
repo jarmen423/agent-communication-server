@@ -9,10 +9,13 @@
 use std::time::Duration;
 
 use chrono::Utc;
+use nats_hub::manifest::{IdentityKind, OwnerKind, Role};
 use nats_hub::protocol::{Envelope, MessageKind, Meta};
 use nats_hub::storage::retention::{run_pass, RetentionPolicy};
+use nats_hub::storage::ManifestRow;
 use nats_hub::{
-    HistoryQuery, SessionFilter, SessionRecord, Storage, SurrealStorage, WaveRecord, WaveTaskRecord,
+    HistoryQuery, ManifestRecord, SessionFilter, SessionRecord, Storage, SurrealStorage,
+    WaveRecord, WaveTaskRecord,
 };
 use serde_json::json;
 
@@ -33,6 +36,7 @@ fn env_at(from: &str, channel: &str, ts: chrono::DateTime<Utc>) -> Envelope {
             timestamp: ts,
             kind: MessageKind::Message,
             reply_to: None,
+            origin: None,
         },
         payload: json!({}),
     }
@@ -295,6 +299,58 @@ async fn disabled_policy_deletes_nothing() {
     let r = run_pass(&s, &RetentionPolicy::disabled()).await.unwrap();
     assert!(r.is_empty());
     assert_eq!(envelope_count(&s).await, 1);
+}
+
+#[tokio::test]
+async fn retention_leaves_the_identity_manifest_alone() {
+    let s = setup().await;
+    let live = ManifestRecord {
+        identity: "a".into(),
+        owner_kind: OwnerKind::Tenant,
+        user: None,
+        user_id: None,
+        device: None,
+        device_id: None,
+        kind: IdentityKind::Device,
+        agent: None,
+        role: Role::Service,
+        accept: None,
+        rev: 1,
+    };
+    let rows = [
+        ManifestRow {
+            identity: "a".into(),
+            rev: 1,
+            record: Some(live),
+        },
+        ManifestRow {
+            identity: "gone".into(),
+            rev: 2,
+            record: None,
+        },
+    ];
+    s.replace_identity_manifest(&rows).await.unwrap();
+    s.store_envelope(&env_at(
+        "a",
+        "chan.a",
+        Utc::now() - chrono::Duration::days(365),
+    ))
+    .await
+    .unwrap();
+
+    let aggressive = RetentionPolicy {
+        max_envelope_age: Some(Duration::from_secs(1)),
+        max_envelopes: Some(0),
+        terminal_retention: Some(Duration::from_secs(1)),
+        ..policy()
+    };
+    let report = run_pass(&s, &aggressive).await.unwrap();
+    assert!(!report.is_empty(), "the pass must have pruned something");
+    assert_eq!(envelope_count(&s).await, 0);
+
+    let mut kept = s.load_identity_manifest().await.unwrap();
+    kept.sort_by(|a, b| a.identity.cmp(&b.identity));
+    assert_eq!(kept, rows);
 }
 
 #[tokio::test]

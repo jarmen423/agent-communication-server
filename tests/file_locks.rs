@@ -240,6 +240,7 @@ async fn authz_gate_denies_non_holder_and_anonymous() {
         require_bound: false,
         admins: ["admin-1".into()].into_iter().collect(),
         backup_dir: None,
+        ..Default::default()
     };
     let call = |subject: &str, op: &str, params: Value| {
         let body = serde_json::to_vec(&json!({"op": op, "params": params})).unwrap();

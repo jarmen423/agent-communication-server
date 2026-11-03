@@ -53,6 +53,8 @@ pub(super) async fn fetch_visible(
     }
     page_req.params["limit"] = json!(MAX_LIMIT);
 
+    // Echoed from the first page: later pages carry the paging `until` too.
+    let mut applied_filters: Option<Value> = None;
     let mut kept: Vec<Value> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for _ in 0..pages {
@@ -61,10 +63,15 @@ pub(super) async fn fetch_visible(
             return resp;
         }
         let rows = match resp.data {
-            Some(Value::Object(mut data)) => match data.remove(key) {
-                Some(Value::Array(rows)) => rows,
-                _ => Vec::new(),
-            },
+            Some(Value::Object(mut data)) => {
+                if applied_filters.is_none() {
+                    applied_filters = data.remove("applied_filters");
+                }
+                match data.remove(key) {
+                    Some(Value::Array(rows)) => rows,
+                    _ => Vec::new(),
+                }
+            }
             _ => Vec::new(),
         };
         let full_page = rows.len() >= MAX_LIMIT;
@@ -93,7 +100,11 @@ pub(super) async fn fetch_visible(
         }
         page_req.params["until"] = next;
     }
-    ApiResponse::ok(json!({ key: kept, "limit": limit }))
+    let mut data = json!({ key: kept, "limit": limit });
+    if let Some(filters) = applied_filters {
+        data["applied_filters"] = filters;
+    }
+    ApiResponse::ok(data)
 }
 
 fn record_timestamp(row: &Value) -> Option<DateTime<Utc>> {

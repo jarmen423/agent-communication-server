@@ -22,8 +22,9 @@ use crate::storage::surreal::Db;
 /// Current schema version, stored in `schema_meta:nats_hub`.
 /// v1 = the original schema (never actually applied: it used `AT` instead
 /// of `ON`). v2 = typed fields applied, native datetimes, reply/recipient
-/// indexes. v3 = the `locks` table (W2-D file locks).
-pub const SCHEMA_VERSION: i64 = 3;
+/// indexes. v3 = the `locks` table (W2-D file locks). v4 = `identities`
+/// manifest table + `envelopes.origin`.
+pub const SCHEMA_VERSION: i64 = 4;
 
 const TABLES: &[&str] = &[
     "DEFINE TABLE IF NOT EXISTS agents SCHEMALESS",
@@ -33,6 +34,7 @@ const TABLES: &[&str] = &[
     "DEFINE TABLE IF NOT EXISTS waves SCHEMALESS",
     "DEFINE TABLE IF NOT EXISTS wave_tasks SCHEMALESS",
     "DEFINE TABLE IF NOT EXISTS locks SCHEMALESS",
+    "DEFINE TABLE IF NOT EXISTS identities SCHEMALESS",
     "DEFINE TABLE IF NOT EXISTS schema_meta SCHEMALESS",
 ];
 
@@ -78,12 +80,17 @@ const FIELDS_AND_INDEXES: &[&str] = &[
     "DEFINE FIELD OVERWRITE reply_to      ON TABLE envelopes TYPE option<string>",
     "DEFINE FIELD OVERWRITE payload       ON TABLE envelopes TYPE any",
     "DEFINE FIELD OVERWRITE stored_at     ON TABLE envelopes TYPE datetime",
+    "DEFINE FIELD OVERWRITE origin        ON TABLE envelopes TYPE option<object>",
     "DEFINE INDEX IF NOT EXISTS idx_env_channel_time ON TABLE envelopes COLUMNS channel, timestamp",
     "DEFINE INDEX IF NOT EXISTS idx_env_from_time    ON TABLE envelopes COLUMNS from_identity, timestamp",
     "DEFINE INDEX IF NOT EXISTS idx_env_kind_time    ON TABLE envelopes COLUMNS kind, timestamp",
     "DEFINE INDEX IF NOT EXISTS idx_env_to           ON TABLE envelopes COLUMNS to_identity",
     "DEFINE INDEX IF NOT EXISTS idx_env_reply_to     ON TABLE envelopes COLUMNS reply_to",
     "DEFINE INDEX IF NOT EXISTS idx_env_time         ON TABLE envelopes COLUMNS timestamp",
+    "DEFINE INDEX IF NOT EXISTS idx_env_origin_user_time  ON TABLE envelopes COLUMNS origin.user, timestamp",
+    "DEFINE INDEX IF NOT EXISTS idx_env_origin_agent_time ON TABLE envelopes COLUMNS origin.agent, timestamp",
+    "DEFINE INDEX IF NOT EXISTS idx_env_origin_model_time ON TABLE envelopes COLUMNS origin.reported.model, timestamp",
+    "DEFINE INDEX IF NOT EXISTS idx_env_origin_session    ON TABLE envelopes COLUMNS origin.reported.session",
     // Sessions
     "DEFINE FIELD OVERWRITE session_id   ON TABLE sessions TYPE string",
     "DEFINE FIELD OVERWRITE orchestrator ON TABLE sessions TYPE string",
@@ -137,6 +144,11 @@ const FIELDS_AND_INDEXES: &[&str] = &[
     "DEFINE INDEX IF NOT EXISTS idx_locks_scope   ON TABLE locks COLUMNS scope",
     "DEFINE INDEX IF NOT EXISTS idx_locks_holder  ON TABLE locks COLUMNS holder",
     "DEFINE INDEX IF NOT EXISTS idx_locks_expires ON TABLE locks COLUMNS expires_at",
+    // Identity manifest (one row per identity; `record` is NONE on a tombstone)
+    "DEFINE FIELD OVERWRITE rev        ON TABLE identities TYPE int",
+    "DEFINE FIELD OVERWRITE removed    ON TABLE identities TYPE bool",
+    "DEFINE FIELD OVERWRITE record     ON TABLE identities TYPE option<object>",
+    "DEFINE FIELD OVERWRITE updated_at ON TABLE identities TYPE datetime",
     // Schema bookkeeping
     "DEFINE FIELD OVERWRITE version ON TABLE schema_meta TYPE int",
 ];

@@ -6,7 +6,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::Envelope;
+use crate::protocol::{Envelope, Origin};
 
 // ── Query / Filter Types ─────────────────────────────────────
 
@@ -60,6 +60,18 @@ pub struct HistoryQuery {
     pub until: Option<DateTime<Utc>>,
     /// Limit number of results (most recent first).
     pub limit: Option<usize>,
+    /// Filter by owning user (`origin.user`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    /// Filter by agent client (`origin.agent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Filter by self-reported model (`origin.reported.model`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Filter by self-reported session (`origin.reported.session`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 impl HistoryQuery {
@@ -102,6 +114,50 @@ impl HistoryQuery {
         self.limit = Some(n);
         self
     }
+
+    /// Filter by owning user (`origin.user`).
+    pub fn user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
+        self
+    }
+
+    /// Filter by agent client (`origin.agent`).
+    pub fn agent(mut self, agent: impl Into<String>) -> Self {
+        self.agent = Some(agent.into());
+        self
+    }
+
+    /// Filter by self-reported model (`origin.reported.model`).
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Filter by self-reported session (`origin.reported.session`).
+    pub fn session(mut self, session: impl Into<String>) -> Self {
+        self.session = Some(session.into());
+        self
+    }
+
+    /// Names of the filters this query sets. `history.query` echoes them, so
+    /// a client can tell when an older hub ignored a filter it doesn't know.
+    pub fn applied_filters(&self) -> Vec<&'static str> {
+        [
+            ("channel", self.channel.is_some()),
+            ("from", self.from.is_some()),
+            ("to", self.to.is_some()),
+            ("kind", self.kind.is_some()),
+            ("since", self.since.is_some()),
+            ("until", self.until.is_some()),
+            ("user", self.user.is_some()),
+            ("agent", self.agent.is_some()),
+            ("model", self.model.is_some()),
+            ("session", self.session.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect()
+    }
 }
 
 // ── Record Types ─────────────────────────────────────────────
@@ -129,6 +185,9 @@ pub struct EnvelopeRecord {
     pub reply_to: Option<String>,
     pub payload: serde_json::Value,
     pub stored_at: DateTime<Utc>,
+    /// Provenance as stamped by the router when the envelope was routed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 impl EnvelopeRecord {
@@ -144,6 +203,7 @@ impl EnvelopeRecord {
             reply_to: env.meta.reply_to.clone(),
             payload: env.payload.clone(),
             stored_at: Utc::now(),
+            origin: env.meta.origin.clone(),
         }
     }
 }

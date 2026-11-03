@@ -198,6 +198,24 @@ async fn seed(s: &Arc<dyn Storage>) {
 }
 
 #[tokio::test]
+async fn history_echoes_applied_filters_for_every_scope() {
+    let s = storage().await;
+    seed(&s).await;
+    let authz = authz();
+    let params = json!({"channel": "chat", "user": "alice", "model": "m", "limit": 5});
+    // A scoped caller goes through the over-fetching path, an admin doesn't.
+    for subject in ["hub.api.bob.history.query", "hub.api.boss.history.query"] {
+        let resp = call(&s, &authz, subject, "history.query", params.clone()).await;
+        assert!(resp.ok, "{subject}: {:?}", resp.error);
+        assert_eq!(
+            resp.data.unwrap()["applied_filters"],
+            json!(["channel", "user", "model"]),
+            "{subject}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn bound_caller_sees_only_own_dms() {
     let s = storage().await;
     seed(&s).await;
