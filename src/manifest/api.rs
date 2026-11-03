@@ -1,0 +1,204 @@
+//! Hub API ops for the identity manifest: `manifest.put`, `remove`, `sync`,
+//! `get`, `list` and `self`.
+//!
+//! [`handle`] is the only way in. `handle_request_authorized` calls it before
+//! its write gate, so these ops never reach `dispatch` or read scoping.
+//!
+//! **Who may call what** (on every hub, permissive or not):
+//!
+//! - `manifest.self` needs a bound caller and answers about that caller only.
+//! - Every other op needs a bound caller that is a manifest writer
+//!   (`--manifest-writer`) or an API admin (`--api-admin`). A legacy
+//!   `hub.api.manifest.*` caller has no identity and is always refused.
+//!
+//! A bound subject proves who is calling only when NATS credentials pin it to
+//! that identity, so per-identity credentials are what make this gate real.
+//!
+//! **Answers:** `stale` is a success, so a provisioning retry is a no-op. A bad
+//! record is `bad manifest record: <field>: <why>`, and one bad record fails
+//! the whole of a sync with nothing applied.
+
+use serde_json::{json, Value};
+
+use super::{Apply, IdentityManifest, Lookup, ManifestRecord, ManifestRefused};
+use crate::query_api::{resolve_limit, ApiAuthz, ApiResponse, Caller};
+use crate::storage::Storage;
+
+/// Answer one `manifest.*` op. `op` is the request's effective op, the same one
+/// the rest of the query API acts on.
+pub(crate) async fn handle(
+    storage: &dyn Storage,
+    authz: &ApiAuthz,
+    caller: &Caller,
+    op: &str,
+    params: &Value,
+) -> ApiResponse {
+    let manifest = match manifest_gate(authz, caller, op) {
+        Ok(manifest) => manifest,
+        Err(refusal) => return refusal,
+    };
+    match op {
+        "manifest.put" => put(manifest, storage, params).await,
+        "manifest.remove" => remove(manifest, storage, params).await,
+        "manifest.sync" => sync(manifest, storage, params).await,
+        "manifest.get" => get(manifest, params),
+        "manifest.list" => list(manifest, params),
+        "manifest.self" => match caller {
+            Caller::Bound(identity) => self_record(manifest, identity),
+            // The gate lets only bound callers through to this op.
+            Caller::Legacy => ApiResponse::err(SELF_FORBIDDEN),
+        },
+        _ => ApiResponse::err(format!("unknown operation: {op}")),
+    }
+}
+
+const SELF_FORBIDDEN: &str =
+    "forbidden: manifest.self needs a bound caller; call hub.api.<identity>.manifest.self";
+
+/// Decide whether `caller` may run `op`, and hand back the hub's manifest.
+fn manifest_gate<'a>(
+    authz: &'a ApiAuthz,
+    caller: &Caller,
+    op: &str,
+) -> Result<&'a IdentityManifest, ApiResponse> {
+    let Some(manifest) = authz.manifest.as_deref() else {
+        return Err(ApiResponse::err("manifest: not enabled on this hub"));
+    };
+    let allowed = match (caller, op) {
+        (Caller::Bound(_), "manifest.self") => true,
+        (Caller::Legacy, "manifest.self") => return Err(ApiResponse::err(SELF_FORBIDDEN)),
+        (Caller::Bound(id), _) => manifest.is_writer(id) || authz.is_admin(id),
+        (Caller::Legacy, _) => false,
+    };
+    if allowed {
+        Ok(manifest)
+    } else {
+        Err(ApiResponse::err(
+            "forbidden: manifest ops need a manifest writer (--manifest-writer) or an API admin",
+        ))
+    }
+}
+
+fn bad_record(why: impl std::fmt::Display) -> ApiResponse {
+    ApiResponse::err(format!("bad manifest record: {why}"))
+}
+
+/// A refused write is the caller's fault; anything else is the hub's.
+fn write_failed(op: &str, err: anyhow::Error) -> ApiResponse {
+    match err.downcast_ref::<ManifestRefused>() {
+        Some(refused) => bad_record(refused),
+        None => ApiResponse::err(format!("{op}: {err}")),
+    }
+}
+
+fn parse_record(value: &Value) -> Result<ManifestRecord, ApiResponse> {
+    serde_json::from_value(value.clone()).map_err(|e| bad_record(format!("record: {e}")))
+}
+
+fn required_identity(params: &Value) -> Result<&str, ApiResponse> {
+    params
+        .get("identity")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_record("identity: must be a string"))
+}
+
+fn required_rev(params: &Value) -> Result<i64, ApiResponse> {
+    params
+        .get("rev")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| bad_record("rev: must be an integer"))
+}
+
+fn apply_answer(identity: &str, requested_rev: i64, outcome: Apply) -> ApiResponse {
+    let (result, rev) = match outcome {
+        Apply::Applied => ("applied", requested_rev),
+        Apply::Stale { current_rev } => ("stale", current_rev),
+    };
+    ApiResponse::ok(json!({"identity": identity, "result": result, "rev": rev}))
+}
+
+async fn put(manifest: &IdentityManifest, storage: &dyn Storage, params: &Value) -> ApiResponse {
+    let Some(value) = params.get("record") else {
+        return bad_record("record: missing");
+    };
+    let rec = match parse_record(value) {
+        Ok(rec) => rec,
+        Err(resp) => return resp,
+    };
+    let (identity, rev) = (rec.identity.clone(), rec.rev);
+    match manifest.put(Some(storage), rec).await {
+        Ok(outcome) => apply_answer(&identity, rev, outcome),
+        Err(e) => write_failed("manifest.put", e),
+    }
+}
+
+async fn remove(manifest: &IdentityManifest, storage: &dyn Storage, params: &Value) -> ApiResponse {
+    let (identity, rev) = match (required_identity(params), required_rev(params)) {
+        (Ok(identity), Ok(rev)) => (identity, rev),
+        (Err(resp), _) | (_, Err(resp)) => return resp,
+    };
+    match manifest.remove(Some(storage), identity, rev).await {
+        Ok(outcome) => apply_answer(identity, rev, outcome),
+        Err(e) => write_failed("manifest.remove", e),
+    }
+}
+
+async fn sync(manifest: &IdentityManifest, storage: &dyn Storage, params: &Value) -> ApiResponse {
+    let rev = match required_rev(params) {
+        Ok(rev) => rev,
+        Err(resp) => return resp,
+    };
+    let Some(values) = params.get("records").and_then(Value::as_array) else {
+        return bad_record("records: must be an array");
+    };
+    let records = match values.iter().map(parse_record).collect::<Result<_, _>>() {
+        Ok(records) => records,
+        Err(resp) => return resp,
+    };
+    match manifest.sync(Some(storage), rev, records).await {
+        Ok(report) => ApiResponse::ok(json!({
+            "rev": rev,
+            "applied": report.applied,
+            "stale": report.stale,
+            "removed": report.removed,
+            "live": report.live,
+        })),
+        Err(e) => write_failed("manifest.sync", e),
+    }
+}
+
+fn get(manifest: &IdentityManifest, params: &Value) -> ApiResponse {
+    let identity = match required_identity(params) {
+        Ok(identity) => identity,
+        Err(resp) => return resp,
+    };
+    let (rev, removed, record) = match manifest.lookup(identity) {
+        Lookup::Live(rec) => (Some(rec.rev), false, Some(rec)),
+        Lookup::Removed { rev } => (Some(rev), true, None),
+        Lookup::Unknown => (None, false, None),
+    };
+    ApiResponse::ok(json!({
+        "identity": identity,
+        "rev": rev,
+        "removed": removed,
+        "record": record,
+    }))
+}
+
+fn list(manifest: &IdentityManifest, params: &Value) -> ApiResponse {
+    let limit = match resolve_limit(params) {
+        Ok(limit) => limit,
+        Err(resp) => return resp,
+    };
+    let after = match params.get("after") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(after)) => Some(after.as_str()),
+        Some(_) => return ApiResponse::err("after must be a string"),
+    };
+    let (records, next_after) = manifest.list(after, limit);
+    ApiResponse::ok(json!({"records": records, "next_after": next_after}))
+}
+
+fn self_record(manifest: &IdentityManifest, identity: &str) -> ApiResponse {
+    ApiResponse::ok(json!({"identity": identity, "record": manifest.get(identity)}))
+}

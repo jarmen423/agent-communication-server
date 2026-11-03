@@ -37,6 +37,7 @@ pub use nats_hub_client::manifest::*;
 
 use crate::storage::{ManifestRow, Storage};
 
+pub(crate) mod api;
 pub(crate) mod stamp;
 #[cfg(test)]
 mod test_store;

@@ -105,6 +105,7 @@ fn reserved_identities_are_refused() {
         "visualizer",
         "wave",
         "ping",
+        "manifest",
     ] {
         let out = hub_admin(&["add-agent", id]);
         assert!(!out.status.success(), "add-agent {id} must fail");
@@ -152,6 +153,136 @@ fn secrets_that_break_the_config_are_refused() {
         let out = render(&format!("alice worker {secret}\n"));
         assert!(!out.status.success(), "secret {secret:?} must fail");
     }
+}
+
+/// `hub-admin manifest` validates before it connects, so a bad record fails
+/// the same way with or without a hub.
+#[test]
+fn manifest_put_validates_locally() {
+    let out = hub_admin(&[
+        "manifest",
+        "put",
+        "--as",
+        "someone",
+        "--nats-url",
+        "nats://127.0.0.1:1",
+        "--identity",
+        "alice-laptop",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("bad manifest record: user: "),
+        "{}",
+        stderr(&out)
+    );
+
+    let out = hub_admin(&[
+        "manifest",
+        "remove",
+        "--as",
+        "someone",
+        "--nats-url",
+        "nats://127.0.0.1:1",
+        "--identity",
+        "hub-orchestrator",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("bad manifest record: identity: "),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn manifest_needs_a_caller_identity() {
+    let out = Command::new(env!("CARGO_BIN_EXE_hub-admin"))
+        .args(["manifest", "get", "--identity", "alice"])
+        .env_remove("NATS_HUB_IDENTITY")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("--as"), "{}", stderr(&out));
+}
+
+#[test]
+fn add_agent_help_points_to_the_manifest() {
+    let out = hub_admin(&["add-agent", "--help"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("hub-admin manifest put"));
+}
+
+/// Against the live stack, as the writer `with_stack.sh` configures.
+#[test]
+fn manifest_put_get_against_the_live_stack() {
+    if std::env::var("NATS_HUB_TEST_STACK").ok().as_deref() != Some("1") {
+        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_STACK=1)");
+        return;
+    }
+    let as_writer = ["--as", "test-manifest"];
+    let identity = format!("cli-{}", uuid::Uuid::new_v4().simple());
+    let json_of = |out: &Output| -> serde_json::Value {
+        assert!(out.status.success(), "{}", stderr(out));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let run = |args: &[&str]| {
+        let mut all = vec!["manifest"];
+        all.extend_from_slice(args);
+        all.extend_from_slice(&as_writer);
+        hub_admin(&all)
+    };
+
+    let put = json_of(&run(&[
+        "put",
+        "--identity",
+        &identity,
+        "--user",
+        "alice",
+        "--agent",
+        "claude-code",
+        "--accept",
+        "users:alice,bob",
+        "--rev",
+        "5",
+    ]));
+    assert_eq!(put["result"], "applied");
+    assert_eq!(put["rev"], 5);
+
+    let got = json_of(&run(&["get", "--identity", &identity]));
+    assert_eq!(got["removed"], false);
+    assert_eq!(got["record"]["user"], "alice");
+    assert_eq!(got["record"]["agent"], "claude-code");
+    assert_eq!(got["record"]["accept"]["users"][1], "bob");
+
+    // A retry is a success; a refusal from the hub is exit code 1.
+    let again = json_of(&run(&[
+        "put",
+        "--identity",
+        &identity,
+        "--user",
+        "alice",
+        "--rev",
+        "5",
+    ]));
+    assert_eq!(again["result"], "stale");
+    let refused = run(&["put", "--identity", "test-manifest", "--user", "alice"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("reserved for the manifest writer"));
+
+    // The default rev is the current time, so it beats the explicit rev above.
+    let removed = json_of(&run(&["remove", "--identity", &identity]));
+    assert_eq!(removed["result"], "applied");
+    assert!(removed["rev"].as_i64().unwrap() > 1_000_000_000_000);
+
+    let forbidden = hub_admin(&[
+        "manifest",
+        "get",
+        "--identity",
+        &identity,
+        "--as",
+        "not-a-writer",
+    ]);
+    assert_eq!(forbidden.status.code(), Some(1));
+    assert!(stderr(&forbidden).contains("forbidden"));
 }
 
 fn nats_server() -> Option<PathBuf> {

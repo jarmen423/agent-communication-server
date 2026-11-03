@@ -29,6 +29,7 @@
 //!   hub-admin render-config --agents FILE [--out PATH] [--port N]
 //!                           [--ws-port N] [--tls-cert P --tls-key P --tls-ca P]
 //!                           [--durable [--js-store-dir D] [--js-max-file 10G]]
+//!   hub-admin manifest put|remove|sync|get|list --as WRITER ...
 //!
 //! Durable delivery: every agent may also attach to and read its own
 //! JetStream inbox consumer and `DIRECT.GET` the tasks stream — never create
@@ -46,6 +47,8 @@ use clap::{Args, Parser, Subcommand};
 
 #[path = "hub_admin/acl.rs"]
 mod acl;
+#[path = "hub_admin/manifest.rs"]
+mod manifest;
 use acl::{
     check_channel, check_identity, check_secret, hub_server_entry, user_entry, JsNames, ROLES,
 };
@@ -78,11 +81,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Print a `users[]` entry for one agent.
+    #[command(after_help = "To record who owns the identity, see `hub-admin manifest put`.")]
     AddAgent(AddAgentArgs),
     /// Render a complete nats-server.conf from an agents file.
     RenderConfig(RenderConfigArgs),
     /// Emit JWT scoped-signing-key permissions as JSON (identity = {{name()}}).
     PermissionTemplate(TemplateArgs),
+    /// Read or change the running hub's identity manifest (docs/PROVENANCE.md).
+    Manifest(manifest::ManifestArgs),
 }
 
 #[derive(Args)]
@@ -382,5 +388,6 @@ fn main() -> Result<()> {
         Cmd::AddAgent(a) => cmd_add_agent(a),
         Cmd::RenderConfig(a) => cmd_render_config(a),
         Cmd::PermissionTemplate(a) => cmd_template(a),
+        Cmd::Manifest(a) => manifest::run(a),
     }
 }

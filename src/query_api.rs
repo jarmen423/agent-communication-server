@@ -144,6 +144,13 @@ pub async fn handle_request_authorized(
 
     debug!(op, ?caller, "query API request");
 
+    // The identity manifest has its own gate (see `manifest::api`), which
+    // applies on every hub. Nothing here falls through to `dispatch`.
+    if op.starts_with("manifest.") {
+        return crate::manifest::api::handle(storage.as_ref(), authz, &caller, op, &req.params)
+            .await;
+    }
+
     // Writes are gated *before* dispatch — post-filtering cannot undo a
     // mutation the handler already applied. Non-admins may only mutate
     // waves/sessions they own (see `write_authz`); an anonymous legacy
