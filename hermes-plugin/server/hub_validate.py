@@ -5,7 +5,10 @@ One layer shared by the stdio MCP server and the Hermes plugin (which calls
 
 - Arguments are validated against the tool's ``inputSchema`` (JSON Schema via
   ``jsonschema``, a dependency of ``mcp``). Unknown arguments are rejected, so
-  a typo such as ``timeout_secs`` fails loudly instead of being ignored.
+  a typo such as ``timeout_secs`` fails loudly instead of being ignored. The
+  error reports every problem at once, suggests the valid name for a wrong
+  one (``worker`` → ``to``) and lists the valid arguments, so a model can
+  fix the call in one retry.
 - A legacy ``from``/``orchestrator`` identity argument is checked against
   ``NATS_HUB_IDENTITY`` first (identity is bound to the environment).
 - Exceptions and hub errors get a hint saying what to do next (start the bus,
@@ -14,6 +17,7 @@ One layer shared by the stdio MCP server and the Hermes plugin (which calls
 
 from __future__ import annotations
 
+import difflib
 import os
 from typing import Any, Awaitable, Callable
 
@@ -35,6 +39,15 @@ def strict_schema(schema: dict) -> dict:
     return schema
 
 
+# Names a model tends to guess for an argument. An unknown argument from a
+# group suggests the group's name that the tool does take.
+_SYNONYMS = (
+    ("to", "worker", "agent", "recipient", "target", "worker_id", "agent_id"),
+    ("prompt", "message", "task", "text", "instructions", "query", "content"),
+    ("timeout", "timeout_secs", "timeout_seconds", "timeout_s", "wait", "wait_secs"),
+)
+
+
 def _describe(schema: dict) -> str:
     props = schema.get("properties") or {}
     required = set(schema.get("required") or [])
@@ -43,8 +56,40 @@ def _describe(schema: dict) -> str:
         t = p.get("type", "any")
         if "enum" in p:
             t = "|".join(map(str, p["enum"]))
-        parts.append(f"{name} ({t}{', required' if name in required else ''})")
+        extra = ", required" if name in required else ""
+        if "default" in p:
+            extra += f", default {p['default']}"
+        parts.append(f"{name} ({t}{extra})")
     return ", ".join(parts) or "no arguments"
+
+
+def _suggest(unknown: str, props: dict, given: dict) -> str | None:
+    """The valid argument a wrong name most likely meant, if any."""
+    free = [n for n in props if n not in given]
+    for group in _SYNONYMS:
+        if unknown.lower() in group:
+            hits = [n for n in group if n in free]
+            if hits:
+                return hits[0]
+    close = difflib.get_close_matches(unknown, free or list(props), n=1, cutoff=0.6)
+    return close[0] if close else None
+
+
+def _problems(schema: dict, clean: dict) -> list[str]:
+    """Every schema violation, missing arguments first, each with a hint."""
+    validator = jsonschema.validators.validator_for(schema)(schema)
+    errors = sorted(validator.iter_errors(clean),
+                    key=lambda e: (e.validator != "required", list(map(str, e.absolute_path))))
+    props = schema.get("properties") or {}
+    out = []
+    for e in errors:
+        where = "/".join(str(p) for p in e.absolute_path)
+        msg = e.message + (f" (at '{where}')" if where else "")
+        out.append(msg)
+        if e.validator == "additionalProperties" and not e.absolute_path:
+            out += [f"use '{v}' instead of '{k}'" for k in clean if k not in props
+                    if (v := _suggest(k, props, clean))]
+    return out
 
 
 def validate_args(tool: str, schema: dict, args: Any) -> tuple[dict | None, str | None]:
@@ -53,7 +98,7 @@ def validate_args(tool: str, schema: dict, args: Any) -> tuple[dict | None, str 
         args = {}
     if not isinstance(args, dict):
         return None, (f"{tool}: arguments must be a JSON object, got "
-                      f"{type(args).__name__}. Expected: {_describe(schema)}")
+                      f"{type(args).__name__}. Valid arguments: {_describe(schema)}")
     props = schema.get("properties") or {}
     clean = dict(args)
     for key in _LEGACY_IDENTITY_ARGS:
@@ -65,13 +110,10 @@ def validate_args(tool: str, schema: dict, args: Any) -> tuple[dict | None, str 
             if bad:
                 return None, f"{tool}: {bad}"
             clean.pop(key)
-    try:
-        jsonschema.validate(instance=clean, schema=schema)
-    except jsonschema.ValidationError as e:
-        where = "/".join(str(p) for p in e.absolute_path)
-        loc = f" (at '{where}')" if where else ""
-        return None, (f"{tool}: invalid arguments — {e.message}{loc}. "
-                      f"Expected: {_describe(schema)}")
+    problems = _problems(schema, clean)
+    if problems:
+        return None, (f"{tool}: invalid arguments — {'; '.join(problems)}. "
+                      f"Valid arguments: {_describe(schema)}")
     return clean, None
 
 

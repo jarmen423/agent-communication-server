@@ -212,7 +212,8 @@ TOOLS = annotate([
             "task channel before sending (reply contract), buffers progress "
             "events and the terminal result in-process, and returns "
             "{task_id, task_channel} immediately. Follow with task_status or "
-            "wait_for_task."
+            "wait_for_task. Arguments: to (the worker's identity, from "
+            "list_agents), prompt (the task text)."
         ),
         inputSchema={
             "type": "object",
@@ -230,7 +231,9 @@ TOOLS = annotate([
             "arrives (or timeout, which also sends the worker a cancel). "
             "Equivalent to delegate_async + wait_for_task. "
             "Ignores status/event progress envelopes; returns only the real "
-            "result envelope (kind=message correlated to the task id)."
+            "result envelope (kind=message correlated to the task id). "
+            "Arguments: to (the worker's identity, from list_agents), prompt "
+            "(the task text), timeout (seconds, optional)."
         ),
         inputSchema={
             "type": "object",
