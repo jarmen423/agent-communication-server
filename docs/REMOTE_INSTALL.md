@@ -42,7 +42,7 @@ On the remote machine (Python 3.10+ required):
 curl -fsSL -o install.sh \
   https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/packaging/remote/install.sh
 bash install.sh --from-release latest          # or a tag, e.g. --from-release v0.2.0
-# → installs into ~/nats-hub-remote
+# → installs into ~/.local/share/nats-hub/remote
 
 # Option B: from a clone of the repo (uses the checkout's files)
 git clone https://github.com/jarmen423/agent-communication-server.git nats-hub && cd nats-hub
@@ -61,8 +61,8 @@ A checksum mismatch aborts the install. If the release can't be reached,
 Then activate and launch:
 
 ```bash
-source ~/nats-hub-remote/.venv/bin/activate
-cd ~/nats-hub-remote
+source ~/.local/share/nats-hub/remote/.venv/bin/activate
+cd ~/.local/share/nats-hub/remote
 
 export NATS_TOKEN='<token-from-operator>'
 python3 remote_agent_adapter.py \
@@ -119,8 +119,8 @@ argument. Use this to wrap any in-house agent that has a `--prompt`
 style flag.
 
 ```bash
-source ~/nats-hub-remote/.venv/bin/activate
-cd ~/nats-hub-remote
+source ~/.local/share/nats-hub/remote/.venv/bin/activate
+cd ~/.local/share/nats-hub/remote
 
 export NATS_TOKEN='<token-from-operator>'
 
@@ -151,8 +151,8 @@ NDJSON for structured events. Each hub session maps to a kilo session
 (resume is automatic on follow-up turns).
 
 ```bash
-source ~/nats-hub-remote/.venv/bin/activate
-cd ~/nats-hub-remote
+source ~/.local/share/nats-hub/remote/.venv/bin/activate
+cd ~/.local/share/nats-hub/remote
 
 python3 remote_agent_adapter.py \
     --identity laptop-kilo-1 \
@@ -254,7 +254,7 @@ When the adapter, runtime, or backends change upstream, re-run the
 installer from a newer release or a current checkout:
 
 ```bash
-bash install.sh --from-release latest     # refreshes ~/nats-hub-remote
+bash install.sh --from-release latest     # refreshes ~/.local/share/nats-hub/remote
 # or
 cd nats-hub && git pull
 bash packaging/remote/install.sh
@@ -274,7 +274,7 @@ fallback for hand-copied layouts without `FILES.txt`.
 
 | Symptom | Cause / fix |
 |---|---|
-| `ModuleNotFoundError: nats` | Venv not activated. `source ~/nats-hub-remote/.venv/bin/activate`. |
+| `ModuleNotFoundError: nats` | Venv not activated. `source ~/.local/share/nats-hub/remote/.venv/bin/activate`. |
 | `ImportError: worker_runtime` | A file is missing from the target dir. Re-run `install.sh` from a current checkout. |
 | `ConnectionRefusedError` | Wrong URL/port, or firewall blocks the WS port (default 8080). |
 | `ssl: certificate_verify_failed` | Mismatched `--ca-file`, or URL hostname doesn't match cert SAN. |
