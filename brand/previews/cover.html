@@ -1,0 +1,47 @@
+<!-- @dsCard height=320 -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=IBM+Plex+Sans:wght@400&display=swap">
+<style>
+  html,body{margin:0}
+  body{background:var(--paper,#f5f6f2);color:var(--ink,#171a21)}
+  .cover{position:relative;width:960px;height:320px;overflow:hidden;background:var(--paper,#f5f6f2)}
+  .cover svg{position:absolute;left:0;top:0}
+  .teal{fill:var(--relay-teal,#0f7c74)} .orange{fill:var(--signal-orange,#d9731a)}
+  .lane{fill:var(--lane,#171a21)} .tint{fill:var(--line,#d9dcd4)}
+  .blk{rx:var(--radius-md,10px)}
+  .name{position:absolute;left:48px;top:136px;margin:0;font-family:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;font-weight:700;font-size:64px;line-height:.95;letter-spacing:-.02em;color:var(--ink,#171a21)}
+  .tag{position:absolute;left:48px;top:268px;margin:0;font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;font-size:14px;line-height:20px;color:var(--ink-muted,#5a6068)}
+</style>
+<div class="cover">
+  <!--
+    blocks: relay-teal 384x124, lane 352x124, signal-orange 128x124, line 84x96; corners radius-md (10)
+    arrangement: top-band skeleton (the name is too wide for the 440px zone); an unequal strip bleeding off the top and right, gaps space-2 (8)
+    pattern: literal motif, the message bubble with one sharp corner, as a two-lane queue on the lane block; chosen because the README defines the brand as bubbles passing through a server
+    scales: tiles 32x24 at radius-sm (4), pitch 40 (space-8 + space-2), lanes inset space-4 (16) from the block
+  -->
+  <svg width="960" height="120" viewBox="0 0 960 120" aria-hidden="true">
+    <rect class="teal blk" x="0" y="-12" width="384" height="124"/>
+    <rect class="lane blk" x="392" y="-12" width="352" height="124"/>
+    <rect class="orange blk" x="752" y="-12" width="128" height="124"/>
+    <rect class="tint blk" x="888" y="-12" width="84" height="96"/>
+    <g class="teal" id="q1"></g>
+    <g class="orange" id="q2"></g>
+  </svg>
+  <h1 class="name">Agent Communication<br>Server</h1>
+  <p class="tag">The message bus where agents talk to each other.</p>
+</div>
+<script>
+  // Two lanes of message tiles: sent (teal, sharp bottom-left) and received (orange, sharp bottom-right).
+  const NS = "http://www.w3.org/2000/svg";
+  const tile = (x, y, sharpLeft) => {
+    const w = 32, h = 24, r = 4, p = document.createElementNS(NS, "path");
+    p.setAttribute("d", sharpLeft
+      ? `M${x+r} ${y}H${x+w-r}A${r} ${r} 0 0 1 ${x+w} ${y+r}V${y+h-r}A${r} ${r} 0 0 1 ${x+w-r} ${y+h}H${x}V${y+r}A${r} ${r} 0 0 1 ${x+r} ${y}Z`
+      : `M${x+r} ${y}H${x+w-r}A${r} ${r} 0 0 1 ${x+w} ${y+r}V${y+h}H${x+r}A${r} ${r} 0 0 1 ${x} ${y+h-r}V${y+r}A${r} ${r} 0 0 1 ${x+r} ${y}Z`);
+    return p;
+  };
+  const q1 = document.getElementById("q1"), q2 = document.getElementById("q2");
+  for (let i = 0; i < 8; i++) {
+    if (i !== 5) q1.appendChild(tile(408 + i * 40, 24, true));
+    if (i !== 2) q2.appendChild(tile(408 + i * 40, 64, false));
+  }
+</script>
