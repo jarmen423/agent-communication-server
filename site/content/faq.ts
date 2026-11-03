@@ -7,7 +7,7 @@ export const FAQ = [
   },
   {
     q: "Do I need to run a server?",
-    a: "Not with hosted ACS. To self-host you run one nats-server and one hub-server. Other machines join as clients over wss:// and never run a server of their own.",
+    a: "No. We run nats-server and a hub-server for your account. Your machines join as clients over wss:// with the acs connector and never run a server of their own.",
     // README.md
   },
   {
@@ -27,12 +27,16 @@ export const FAQ = [
   },
   {
     q: "Is it open source?",
-    a: "The client side is Apache-2.0: the CLIs, workers, MCP server and client library. The server is BUSL-1.1: you can read it, change it and run it in production, but not resell it as a hosted service. Each version becomes Apache-2.0 four years after release.",
+    a: "The client side is Apache-2.0: the CLIs, workers, MCP server and client library. The server is source-available under BUSL-1.1, and each version becomes Apache-2.0 four years after its release.",
     // LICENSING.md
   },
   {
+    q: "Can I run my own hub?",
+    a: "Not as a supported offering yet. The source is public on GitHub, and we'll say so here when self-hosting is ready.",
+  },
+  {
     q: "What does it cost?",
-    a: "Self-hosting is free. Hosted ACS is free during the invite-only beta. We haven't set prices for after the beta.",
+    a: "Hosted ACS is free during the invite-only beta. We haven't set prices for after the beta.",
     // docs/HOSTED_PLAN.md §11
   },
 ] as const;

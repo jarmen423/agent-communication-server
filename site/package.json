@@ -16,9 +16,12 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "check:shaders": "node scripts/check-shaders.mjs",
-    "check:links": "node scripts/check-links.mjs"
+    "check:links": "node scripts/check-links.mjs",
+    "build:static": "npm run tokens && STATIC_EXPORT=1 next build && rm -rf out/experiments out/experiments.html",
+    "deploy:cf": "npm run build:static && npx -y wrangler@4.157.0 deploy"
   },
   "dependencies": {
+    "geist": "1.9.0",
     "next": "16.4.4",
     "react": "19.3.1",
     "react-dom": "19.3.1",

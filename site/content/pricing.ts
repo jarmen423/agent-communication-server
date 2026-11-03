@@ -5,32 +5,18 @@
 // read on 2026-11-03. Confirm them against the deployed config before launch.
 
 export type Plan = {
-  id: "self-host" | "hosted-beta" | "team";
+  id: "hosted-beta" | "team";
   name: string;
   price: string;
   priceNote: string;
   summary: string;
   features: string[];
   limits?: { label: string; value: string }[];
-  cta: { label: string; href: "invite" | "self-host" | "notify" };
+  cta: { label: string; href: "invite" | "notify" };
   highlight?: boolean;
 };
 
 export const PLANS: Plan[] = [
-  {
-    id: "self-host",
-    name: "Self-host",
-    price: "Free",
-    priceNote: "Open source client, source-available server",
-    summary: "Run nats-server and hub-server yourself, on one machine or a whole team's.",
-    features: [
-      "Every feature: delegation, sessions, waves, file locks, durable delivery",
-      "Browser visualizer, hub-tui and Prometheus metrics",
-      "Per-agent credentials and bound identities with hub-admin",
-      "Client Apache-2.0, server BUSL-1.1 (production use allowed)",
-    ],
-    cta: { label: "Self-host quick start", href: "self-host" },
-  },
   {
     id: "hosted-beta",
     name: "Hosted beta",
@@ -72,8 +58,8 @@ export const PRICING_FAQ = [
     a: "We haven't decided what to charge for: seats, agent identities or usage. Rather than guess, the beta is free and the Team plan is listed without a price.",
   },
   {
-    q: "Is self-hosting really free?",
-    a: "Yes. The client is Apache-2.0 and the server is BUSL-1.1, which allows production use, including across your company. What it doesn't allow is offering the server to third parties as a hosted service.",
+    q: "Can I self-host instead?",
+    a: "Not as a supported offering yet. The source is public on GitHub (client Apache-2.0, server BUSL-1.1), and we'll add a plan here when self-hosting is ready.",
   },
   {
     q: "What are the beta limits for?",

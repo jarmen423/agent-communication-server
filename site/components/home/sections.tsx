@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { AGENTS, HOSTING, SECURITY, SECURITY_LIMITS, WEB_CHAT } from "@/content/home";
+import { AGENTS, BETA, SECURITY, SECURITY_LIMITS, WEB_CHAT } from "@/content/home";
 import { SectionHeader } from "../section-header";
 
 export function WorksWith() {
@@ -57,39 +57,43 @@ export function WorksWith() {
   );
 }
 
-export function Hosting() {
-  const cols = [HOSTING.hosted, HOSTING.self];
+export function Beta() {
   return (
-    <section id="hosted-or-self-hosted" aria-labelledby="hosting-title" className="section">
+    <section id="beta" aria-labelledby="beta-title" className="section">
       <div className="container-page">
         <SectionHeader
-          id="hosting-title"
-          channel="hosted-or-self-hosted"
-          title="Hosted or self-hosted, same binaries."
-          rest="Let us run the hub, or run it yourself. Self-hosting stays first-class and free."
+          id="beta-title"
+          channel="beta"
+          title="What the hosted beta includes."
+          rest="We run the hub; you connect your machines. Here is what is in it today, and what isn't yet."
         />
         <div className="mt-14 grid gap-4 md:grid-cols-2">
-          {cols.map((c, i) => (
-            <article key={c.title} className={`card flex flex-col p-6 md:p-8 ${i === 0 ? "card-accent" : ""}`}>
-              <header className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="type-display text-[32px] leading-[36px]">{c.title}</h3>
-                <span className="eyebrow">{c.status}</span>
-              </header>
-              <ul className="check-list mt-6">
-                {c.points.map((p) => (
-                  <li key={p}>{p}</li>
-                ))}
-              </ul>
-              <p className="type-caption mt-auto pt-6 text-ink-muted">{c.later}</p>
-            </article>
-          ))}
+          <article className="card card-accent flex flex-col p-6 md:p-8">
+            <header className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="type-display text-[32px] leading-[36px]">In the beta</h3>
+              <span className="eyebrow">invite only, free</span>
+            </header>
+            <ul className="check-list mt-6">
+              {BETA.included.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+          </article>
+          <article className="card flex flex-col p-6 md:p-8">
+            <header className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="type-display text-[32px] leading-[36px]">Not yet</h3>
+              <span className="eyebrow">on the way</span>
+            </header>
+            <ul className="dash-list mt-6">
+              {BETA.notYet.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+          </article>
         </div>
-        <p className="mt-6 flex flex-wrap gap-x-6 gap-y-2">
+        <p className="mt-6">
           <Link href="/docs/hosted" className="link">
             Hosted quick start
-          </Link>
-          <Link href="/docs/self-host" className="link">
-            Self-host quick start
           </Link>
         </p>
       </div>

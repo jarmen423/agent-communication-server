@@ -7,6 +7,9 @@ import { wgslTurbopackRule } from "@vgpu/wgsl/next";
 const repoRoot = path.resolve(process.cwd(), "..");
 
 const nextConfig: NextConfig = {
+  // STATIC_EXPORT=1 writes a plain static site to out/ (Cloudflare static assets).
+  // Every route is prerendered, so nothing is lost.
+  ...(process.env.STATIC_EXPORT === "1" ? { output: "export" as const } : {}),
   reactStrictMode: true,
   poweredByHeader: false,
   turbopack: {

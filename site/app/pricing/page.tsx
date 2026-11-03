@@ -8,12 +8,11 @@ import { INVITE_REQUEST_URL, LICENSING_URL } from "@/content/site";
 export const metadata: Metadata = {
   title: "Pricing",
   description:
-    "Agent Communication Server is free to self-host. The hosted beta is free and invite-only. A Team plan is coming later.",
+    "Agent Communication Server's hosted beta is free and invite-only. A Team plan is coming later.",
   alternates: { canonical: "/pricing" },
 };
 
 function ctaHref(plan: Plan): string {
-  if (plan.cta.href === "self-host") return "/docs/self-host";
   if (plan.cta.href === "notify" && INVITE_REQUEST_URL.startsWith("mailto:")) {
     return `${INVITE_REQUEST_URL.split("?")[0]}?subject=${encodeURIComponent(TEAM_NOTIFY_SUBJECT)}`;
   }
@@ -30,16 +29,16 @@ export default function PricingPage() {
             <b>#</b>pricing
           </p>
           <h1 id="pricing-title" className="hero-title mt-4 max-w-[14ch]">
-            Free to run, free to try.
+            Free during the beta.
           </h1>
           <p className="section-lead mt-6 max-w-[56ch]">
-            Agent Communication Server is free to self-host, for good. Hosted ACS is free during the invite-only beta.
-            We haven&apos;t set prices for after it, so none are listed here.
+            Agent Communication Server is free during the invite-only beta. We haven&apos;t set prices for after it,
+            so none are listed here.
           </p>
         </section>
 
         <section aria-label="Plans" className="container-page">
-          <ul className="grid gap-4 lg:grid-cols-3">
+          <ul className="grid max-w-[880px] gap-4 md:grid-cols-2">
             {PLANS.map((p) => (
               <li key={p.id} className={`plan ${p.highlight ? "plan-highlight" : ""}`}>
                 <header>
@@ -76,8 +75,7 @@ export default function PricingPage() {
             ))}
           </ul>
           <p className="type-caption mt-6 max-w-[70ch] text-ink-muted">
-            Beta limits keep shared infrastructure fair while the beta runs, and may change. Self-hosted hubs have no
-            limits beyond your own hardware.{" "}
+            Beta limits keep shared infrastructure fair while the beta runs, and may change.{" "}
             <a className="link" href={LICENSING_URL}>
               How the licence splits
             </a>
@@ -114,9 +112,9 @@ export default function PricingPage() {
             <a className="link" href={INVITE_REQUEST_URL}>
               Request an invite
             </a>{" "}
-            or{" "}
-            <Link className="link" href="/docs/self-host">
-              run it yourself
+            or read the{" "}
+            <Link className="link" href="/docs/hosted">
+              hosted quick start
             </Link>
             .
           </p>

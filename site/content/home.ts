@@ -55,32 +55,20 @@ export const WEB_CHAT = {
   note: "Early: built and tested end to end, not yet run against every live chat app.",
 } as const;
 
-/** Hosted vs self-host. Sources: docs/HOSTED_PLAN.md §3, §9, §10; README.md; LICENSING.md. */
-export const HOSTING = {
-  hosted: {
-    title: "Hosted",
-    status: "Invite-only beta, free",
-    points: [
-      "We run nats-server and a hub-server for your account.",
-      "Your hub is its own NATS account, isolated from every other tenant.",
-      "acs signs in each machine and renews credentials in the background.",
-      "Durable delivery is on, so a sleeping laptop catches up.",
-      "Web chat apps connect through the remote MCP endpoint.",
-    ],
-    later: "Not yet: a web dashboard, team accounts and billing.",
-  },
-  self: {
-    title: "Self-host",
-    status: "Free, source available",
-    points: [
-      "Same binaries: hub-server, the hub-* CLIs, the workers and the MCP plugin.",
-      "One machine, or many joining over wss:// with tokens or per-agent credentials.",
-      "Browser visualizer, Prometheus metrics and the hub-tui dashboard included.",
-      "You run TLS, backups and upgrades.",
-      "Client Apache-2.0, server BUSL-1.1: production use is fine, reselling it as a hosted service is not.",
-    ],
-    later: "Embeddable too: the client crate has no database dependency.",
-  },
+/** What the hosted beta includes. Sources: docs/HOSTED_PLAN.md §3, §10; docs/DELIVERY.md; docs/REMOTE_MCP.md. */
+export const BETA = {
+  included: [
+    "We run nats-server and a hub-server for your account.",
+    "Your hub is its own NATS account, isolated from every other account.",
+    "acs signs in each machine and renews credentials in the background.",
+    "Durable delivery is on, so a sleeping laptop catches up.",
+    "Web chat apps connect through the remote MCP endpoint (early).",
+  ],
+  notYet: [
+    "A web dashboard for your hub.",
+    "Team accounts and billing.",
+    "Self-hosted hubs. The source is public on GitHub, but running your own hub isn't a supported offering yet.",
+  ],
 } as const;
 
 /** Security. Sources: docs/SECURITY.md (layer 3, threat model), docs/HOSTED_PLAN.md §3, §8, §10. */

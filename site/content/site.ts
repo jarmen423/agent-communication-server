@@ -15,6 +15,9 @@ export const SIGN_IN_URL = `${HOSTED_URL}/signin`;
 export const TERMS_URL = `${HOSTED_URL}/terms`;
 export const PRIVACY_URL = `${HOSTED_URL}/privacy`;
 
+/** The company site. ACS is built by the same team. */
+export const AML_URL = "https://agentmemorylabs.com";
+
 export const GITHUB_REPO = "jarmen423/agent-communication-server";
 export const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
 export const GITHUB_BLOB = `${GITHUB_URL}/blob/main`;

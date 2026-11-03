@@ -1,0 +1,12 @@
+{
+  // Static site on Cloudflare Workers static assets. Build with `npm run build:static`
+  // (writes out/), deploy with `npm run deploy:cf`. No Worker script: assets only.
+  "name": "acs-site",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./out",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "routes": [{ "pattern": "agentmemorylabs.app", "custom_domain": true }]
+}

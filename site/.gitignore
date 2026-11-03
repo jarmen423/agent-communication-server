@@ -1,11 +1,12 @@
-node_modules/
-.next/
-out/
-next-env.d.ts
-*.tsbuildinfo
-.vercel
 # generated from ../brand/tokens.json by scripts/build-tokens.mjs
-app/tokens.css
 # local check artefacts
+*.tsbuildinfo
 .checks/
+.next/
+.vercel
+.wrangler/
 app/icon.svg
+app/tokens.css
+next-env.d.ts
+node_modules/
+out/

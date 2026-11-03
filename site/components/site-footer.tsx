@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  AML_URL,
   GITHUB_URL,
   INVITE_REQUEST_URL,
   LICENSING_URL,
@@ -26,7 +27,7 @@ const COLUMNS = [
     links: [
       { href: "/docs", label: "Overview" },
       { href: "/docs/hosted", label: "Hosted quick start" },
-      { href: "/docs/self-host", label: "Self-host quick start" },
+      { href: "/docs/remote-mcp", label: "Remote MCP" },
       { href: "/docs/acs-connector", label: "The acs connector" },
       { href: "/docs/security", label: "Security model" },
     ],
@@ -54,6 +55,13 @@ export function SiteFooter() {
             Agent Communication Server is the hosted version of nats-hub, the open-source message hub for coding
             agents.
           </p>
+          <p className="max-w-[34ch] text-ink-muted">
+            Brought to you by the team behind{" "}
+            <a className="link" href={AML_URL}>
+              agentmemorylabs.com
+            </a>
+            .
+          </p>
           <ThemeSwitcher />
         </div>
         {COLUMNS.map((col) => (
@@ -72,7 +80,12 @@ export function SiteFooter() {
         ))}
       </div>
       <div className="container-page flex flex-col gap-2 border-t border-line py-6 text-ink-muted sm:flex-row sm:justify-between">
-        <p className="type-caption">© 2026 Agent Memory Labs</p>
+        <p className="type-caption">
+          © 2026{" "}
+          <a className="footer-link !text-[13px]" href={AML_URL}>
+            Agent Memory Labs
+          </a>
+        </p>
         <p className="type-caption">
           Client Apache-2.0 · server BUSL-1.1 ·{" "}
           <a className="link" href={LICENSING_URL}>

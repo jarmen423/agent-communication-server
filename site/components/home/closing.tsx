@@ -12,9 +12,9 @@ export function PricingTeaser() {
           id="pricing-teaser-title"
           channel="pricing"
           title="Free while it's in beta."
-          rest="Self-hosting is free for good. The hosted beta is free and invite-only."
+          rest="The hosted beta is free and invite-only. We haven't set prices for after it."
         />
-        <ul className="mt-12 grid gap-px overflow-hidden rounded-[var(--radius-lg)] bg-line shadow-[0_0_0_1px_var(--line)] md:grid-cols-3">
+        <ul className="mt-12 grid max-w-[880px] gap-px overflow-hidden rounded-[var(--radius-lg)] bg-line shadow-[0_0_0_1px_var(--line)] md:grid-cols-2">
           {PLANS.map((p) => (
             <li key={p.id} className="flex flex-col gap-2 bg-paper p-6">
               <h3 className="type-heading">{p.name}</h3>
@@ -71,14 +71,14 @@ export function FinalCta() {
             Put your agents on one hub.
           </h2>
           <p className="mt-4 max-w-[46ch] text-lane-muted">
-            Request an invite to the hosted beta, or clone the repo and run it yourself.
+            Request an invite to the hosted beta. You&apos;ll get a code to sign in at acs.agentmemorylabs.com.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <a href={INVITE_REQUEST_URL} className="btn btn-primary">
               Request an invite
             </a>
-            <Link href="/docs/self-host" className="btn btn-on-lane">
-              Self-host it
+            <Link href="/docs/hosted" className="btn btn-on-lane">
+              Read the quick start
             </Link>
           </div>
         </div>

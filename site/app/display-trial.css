@@ -1,0 +1,35 @@
+/*
+ * TEMPORARY display-font trial: the owner asked to try Geist Serif for headlines.
+ * Default is Geist Serif; html[data-display="bricolage"] restores the brand face.
+ * Unlayered on purpose so it beats the utilities layer. Delete after the pick.
+ * Geist Serif ships one weight (400), so headlines use it as-is, never a faux bold.
+ */
+:root:not([data-display="bricolage"]) {
+  --font-display: var(--font-geist-serif), "Times New Roman", serif;
+  --text-display-xl--font-weight: 400;
+  --text-display--font-weight: 400;
+  --text-display-xl--letter-spacing: -0.025em;
+}
+:root:not([data-display="bricolage"]) :is(.section-title, .docs-title, .plan-price, .bento-cell[data-hero] .bento-title) {
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+:root:not([data-display="bricolage"]) .hero-title { line-height: 1; }
+/* The wordmark is part of the logo lockup: it stays Bricolage Grotesque 600 either way. */
+.type-wordmark { font-family: var(--font-bricolage), "Segoe UI", system-ui, sans-serif; }
+
+.font-trial {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: 0 0 0 1px var(--line), 0 12px 32px -12px rgb(0 0 0 / 0.25);
+  font-size: 13px;
+  color: var(--ink-muted);
+}

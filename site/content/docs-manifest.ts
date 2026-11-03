@@ -1,7 +1,9 @@
 // Which repo Markdown files become /docs pages, in what order, under which titles.
 // `source` is relative to the repository root. Every other repo link in these
 // pages points at GitHub. Internal planning docs (HOSTED_PLAN, OPEN_DECISIONS,
-// docs/archive, refocus*) are deliberately left out.
+// docs/archive, refocus*) are deliberately left out, and so are the self-hosting
+// guides (README quick start, JOIN_HUB, OPERATOR_HUB, VISUALIZER) until
+// self-hosting is a supported offering.
 
 export type DocEntry = {
   slug: string;
@@ -19,8 +21,6 @@ export const DOC_GROUPS: DocGroup[] = [
     title: "Getting started",
     pages: [
       { slug: "hosted", title: "Hosted quick start", source: "site/content/docs/hosted.md" },
-      { slug: "self-host", title: "Self-host quick start", source: "README.md" },
-      { slug: "join-a-hub", title: "Join a hub from another machine", nav: "Join a hub", source: "docs/JOIN_HUB.md" },
     ],
   },
   {
@@ -41,11 +41,9 @@ export const DOC_GROUPS: DocGroup[] = [
     ],
   },
   {
-    title: "Operate",
+    title: "Reference",
     pages: [
       { slug: "security", title: "Security model", source: "docs/SECURITY.md" },
-      { slug: "run-a-hub", title: "Run a hub", source: "docs/OPERATOR_HUB.md" },
-      { slug: "visualizer", title: "Visualizer", source: "docs/VISUALIZER.md" },
     ],
   },
   {

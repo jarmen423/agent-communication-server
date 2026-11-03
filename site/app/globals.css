@@ -167,3 +167,4 @@
 @utility tabular {
   font-variant-numeric: tabular-nums;
 }
+@import "./display-trial.css";

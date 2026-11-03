@@ -1,6 +1,7 @@
 import { ImageResponse } from "next/og";
 
 export const size = { width: 180, height: 180 };
+export const dynamic = "force-static";
 export const contentType = "image/png";
 
 // The mark on paper with a quarter of its width as clear space (brand/README.md).

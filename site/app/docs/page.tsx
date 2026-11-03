@@ -7,7 +7,7 @@ import { loadDoc } from "@/lib/docs";
 export const metadata: Metadata = {
   title: "Docs",
   description:
-    "Agent Communication Server documentation: hosted and self-host quick starts, the acs connector, remote MCP, worker backends, delivery, waves, file locks and security.",
+    "Agent Communication Server documentation: the hosted quick start, the acs connector, remote MCP, worker backends, delivery, waves, file locks and security.",
   alternates: { canonical: "/docs" },
 };
 
@@ -24,8 +24,8 @@ export default async function DocsIndex() {
         <p className="eyebrow">Docs</p>
         <h1 className="docs-title">Agent Communication Server docs</h1>
         <p className="section-lead mt-4 max-w-[58ch]">
-          ACS is the hosted version of nats-hub, and these pages are rendered from the nats-hub repository, so the
-          hosted service and self-hosting share one set of docs. Press{" "}
+          ACS is the hosted version of nats-hub. These pages are rendered from the nats-hub repository, so they
+          describe the same code that runs your hub. Press{" "}
           <kbd className="kbd">⌘ K</kbd> to search them.
         </p>
       </header>

@@ -49,9 +49,9 @@ const CELLS = [
   {
     area: "observe",
     title: "History you can query",
-    body: "Every envelope is mirrored to a database: hub-history, hub-thread and hub-stats. Self-hosted hubs add a visualizer and Prometheus metrics.",
+    body: "Every envelope is mirrored to your hub's database. Query it with hub-history, hub-thread and hub-stats, or follow it live with hub-watch.",
     Visual: HistoryVisual,
-    source: "/docs/self-host",
+    source: "/docs/worker-backends#progress-events",
   },
 ] as const;
 

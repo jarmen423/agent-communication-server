@@ -59,6 +59,10 @@
   transform: rotate(-45deg);
 }
 
+.dash-list { display: flex; flex-direction: column; gap: 12px; color: var(--ink-muted); }
+.dash-list li { position: relative; padding-left: 26px; }
+.dash-list li::before { content: ""; position: absolute; left: 2px; top: 11px; width: 12px; height: 1.6px; background: var(--line-strong); }
+
 .faq { border-top: 1px solid var(--line); }
 .faq-item { border-bottom: 1px solid var(--line); }
 .faq-item summary {

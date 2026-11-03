@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Bricolage_Grotesque, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { GeistSerif } from "geist/font/serif";
+import { FontTrial } from "@/components/font-trial";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/content/site";
 import "./globals.css";
 
@@ -45,13 +47,14 @@ export const viewport: Viewport = {
 
 // Runs before first paint. Only an explicit choice sets data-theme; "system"
 // leaves it unset so the prefers-color-scheme rules in tokens.css apply live.
-const THEME_SCRIPT = `try{var t=localStorage.getItem("acs-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`;
+// (acs-display: the temporary headline-font trial, see components/font-trial.tsx.)
+const THEME_SCRIPT = `try{var t=localStorage.getItem("acs-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;if(localStorage.getItem("acs-display")==="bricolage")document.documentElement.dataset.display="bricolage"}catch(e){}`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${display.variable} ${sans.variable} ${mono.variable}`}
+      className={`${display.variable} ${sans.variable} ${mono.variable} ${GeistSerif.variable}`}
       suppressHydrationWarning
     >
       <head>
@@ -65,6 +68,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           Skip to content
         </a>
         {children}
+        <FontTrial />
       </body>
     </html>
   );

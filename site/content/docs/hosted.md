@@ -24,8 +24,10 @@ check it against the release's `SHA256SUMS`, and put the binaries on your
 `PATH`.
 
 Workers that wrap Python backends (Claude Code, Codex, Hermes and the rest)
-also need the thin Python worker bundle. See
-[Join a hub](/docs/join-a-hub) for the bundle and the installer script.
+also need the thin Python worker bundle, installed with
+`packaging/remote/install.sh`. See
+[REMOTE_INSTALL.md](https://github.com/jarmen423/agent-communication-server/blob/main/docs/REMOTE_INSTALL.md)
+for the bundle.
 
 ## 3. Sign in this machine
 

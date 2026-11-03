@@ -3,7 +3,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Hero } from "@/components/hero/hero";
 import { HowItWorks } from "@/components/home/how-it-works";
 import { Features } from "@/components/home/features";
-import { Hosting, Security, WorksWith } from "@/components/home/sections";
+import { Beta, Security, WorksWith } from "@/components/home/sections";
 import { Faq, FinalCta, PricingTeaser } from "@/components/home/closing";
 
 export default function HomePage() {
@@ -15,7 +15,7 @@ export default function HomePage() {
         <HowItWorks />
         <Features />
         <WorksWith />
-        <Hosting />
+        <Beta />
         <Security />
         <PricingTeaser />
         <Faq />
