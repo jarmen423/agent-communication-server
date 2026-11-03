@@ -1,5 +1,5 @@
 //! `acs worker run`: start a worker as one identity.
-use crate::{agents, exec, local};
+use crate::{agents, exec, local, runtime};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
@@ -32,23 +32,30 @@ fn dir_python(dir: &Path) -> PathBuf {
 
 /// `(script, python)` for a Python backend. Like `mcp install`, this never
 /// runs code from the current directory: the worker gets the identity's
-/// credentials. It uses the trusted checkout named by `ACS_WORKER_DIR`, else
-/// the worker bundle.
-fn python_worker(backend: &str) -> Result<(PathBuf, PathBuf)> {
+/// credentials. In order: the trusted checkout named by `ACS_WORKER_DIR`, the
+/// runtime built into this binary, then the worker bundle.
+async fn python_worker(root: &Path, backend: &str) -> Result<(PathBuf, PathBuf)> {
     let python = std::env::var_os("ACS_PYTHON").map(PathBuf::from);
-    let dir = match std::env::var_os("ACS_WORKER_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => local::home()?.join(".local/share/nats-hub/remote"),
-    };
-    let script = dir.join(format!("{backend}_worker.py"));
-    if !script.is_file() {
-        bail!(
-            "worker runtime not found in {}; install the worker bundle \
-             (packaging/remote/install.sh) or set ACS_WORKER_DIR to a trusted checkout",
-            dir.display()
-        );
+    let file = format!("{backend}_worker.py");
+    if let Some(dir) = std::env::var_os("ACS_WORKER_DIR").map(PathBuf::from) {
+        let script = dir.join(&file);
+        if !script.is_file() {
+            bail!("{file} not found in ACS_WORKER_DIR ({})", dir.display());
+        }
+        return Ok((script, python.unwrap_or_else(|| dir_python(&dir))));
     }
-    Ok((script, python.unwrap_or_else(|| dir_python(&dir))))
+    if runtime::has_worker(backend) {
+        return runtime::worker(root, backend, python).await;
+    }
+    let bundle = local::home()?.join(".local/share/nats-hub/remote");
+    let script = bundle.join(&file);
+    if script.is_file() {
+        return Ok((script, python.unwrap_or_else(|| dir_python(&bundle))));
+    }
+    bail!(
+        "the {backend} worker is not built into acs: set ACS_WORKER_DIR to a trusted \
+         checkout, and ACS_PYTHON to an interpreter with its SDK"
+    )
 }
 
 pub async fn run(root: &Path, backend: &str, identity: &str, args: &[String]) -> Result<()> {
@@ -62,7 +69,7 @@ pub async fn run(root: &Path, backend: &str, identity: &str, args: &[String]) ->
             PathBuf::from("hub-worker")
         })
     } else if BACKENDS.contains(&backend) {
-        let (script, python) = python_worker(backend)?;
+        let (script, python) = python_worker(root, backend).await?;
         let mut cmd = tokio::process::Command::new(python);
         cmd.arg(script);
         cmd
