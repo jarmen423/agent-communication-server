@@ -37,7 +37,7 @@ const gpu = await init();
 for (const [name, layout] of [["wide", wideLayout()], ["tall", tallLayout()]]) {
   const size = [Math.round(layout.width * SCALE[name]), Math.round(layout.height * SCALE[name])];
   const still = target(gpu, { size, format: "rgba8unorm" });
-  const ex = createExposure(gpu, layout, palette, size);
+  const ex = createExposure(gpu, layout, palette, size, { lamp: false });
   await ex.compile(still);
   frame(gpu, (f) => ex.encode(f, still, 0));
   const px = await still.color.read({ mipLevel: 0, region: "all" });

@@ -226,6 +226,7 @@ export function hubLamp(msgs: readonly Msg[], t: number) {
   let glow = 0;
   let sent = 0;
   const events: [number, number, number, number][] = [];
+  const ripples: [number, number, number, number][] = [];
   for (const m of msgs) {
     const age = t - (m.t0 + m.a.length / m.speed);
     if (age < 0 || age > 12) continue;
@@ -234,9 +235,14 @@ export function hubLamp(msgs: readonly Msg[], t: number) {
     glow += g;
     if (m.channel === 0) sent += g;
     if (age < 1.5) events.push([m.a.pts[m.a.pts.length - 2], m.a.pts[m.a.pts.length - 1], age, m.channel === 0 ? w : -w]);
+    // A faint ring out from the hub for every envelope routed through it.
+    if (age < 3) ripples.push([age * 150, w * Math.exp(-age / 1.2), 8 + age * 6, 0]);
   }
   events.sort((x, y) => x[2] - y[2]);
   events.length = Math.min(events.length, LAMP_EVENTS);
   while (events.length < LAMP_EVENTS) events.push([0, 0, 99, 0]);
-  return { glow: 1 - Math.exp(-glow / 8), share: glow > 0 ? 1 - sent / glow : 0.5, events };
+  ripples.sort((x, y) => y[1] - x[1]);
+  ripples.length = Math.min(ripples.length, 6);
+  while (ripples.length < 6) ripples.push([0, 0, 1, 0]);
+  return { glow: 1 - Math.exp(-glow / 8), share: glow > 0 ? 1 - sent / glow : 0.5, events, ripples };
 }
