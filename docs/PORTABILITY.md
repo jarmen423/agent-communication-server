@@ -75,6 +75,12 @@ With `storage-surreal`, `SurrealStorage` implements the `Storage` trait
 reply threading, sessions and waves. Future backends (Postgres, libSQL)
 implement the same trait.
 
+Three identity-manifest methods have defaults, so third-party backends keep
+compiling: `load_identity_manifest` returns nothing, while
+`save_identity_manifest_row` and `replace_identity_manifest` return an error until
+a backend implements them. `replace_identity_manifest` must be atomic. See
+[`PROVENANCE.md`](PROVENANCE.md).
+
 ```rust
 use nats_hub::{HistoryQuery, Storage, SurrealStorage};
 

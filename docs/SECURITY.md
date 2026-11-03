@@ -303,6 +303,15 @@ privacy:
 `tests/delivery_permissions.rs` and `scripts/dogfood_durable.sh` prove this
 on a `hub-admin render-config --durable` config.
 
+### Provenance
+
+The router stamps `meta.origin` on every routed envelope: the tenant label, the
+bound identity and, from the identity manifest, who owns that identity. It
+discards any trusted values a client sends. The client's own `reported` block
+(session, model) passes through unverified. Manifest ops have their own gate,
+which also applies on permissive hubs: writers are `--manifest-writer` or
+`--api-admin` identities on a bound subject. See [`PROVENANCE.md`](PROVENANCE.md).
+
 ### Honest threat model — what is and isn't proved
 
 | Deployment mode | Who can claim `meta.from = "alice"`? | Can alice read bob's inbox or replies? | `hub.api` visibility |
@@ -339,6 +348,21 @@ wave cancel, with every process on its own credential). The prod config in
   everything), and so is any process holding it — keep it TCP-local.
 - **The WS bridge acts as one identity** (`--ws-identity`) for everyone who
   holds the bridge token; browser users are not individually authenticated.
+- **`origin` is trustworthy only with per-identity credentials and
+  `--require-bound-identity`**, the same condition as `meta.from`. On a permissive
+  hub anyone can publish on `hub.pub.alice.*` and get alice's trusted origin, call
+  `hub.api.<writer>.manifest.*` as a manifest writer, or publish straight onto
+  `channel.*` with a forged `origin`. Legacy sends get only the tenant and
+  `reported`.
+- **`origin` names the WS bridge's identity** for everything browser users send,
+  not the person using the browser.
+- **The manifest writer credential can rewrite who owns what**, which changes the
+  provenance on every later message. It can't read messages, and its NATS
+  permissions should be limited to `hub.api.<writer>.manifest.>`, but guard it like
+  an admin credential.
+- **`origin.reported` is self-reported.** Session and model are a trace aid, not
+  proof of what ran. Size and control characters are sanitized; truth is not
+  checked.
 - **A leaked credential is a full identity takeover** until it is revoked.
   With `--durable` it also gets the DMs that are still stored for that
   identity (up to the inbox retention, 7 d by default).

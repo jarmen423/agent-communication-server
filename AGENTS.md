@@ -142,6 +142,8 @@ docs/                      — living docs; docs/archive/ = finished plans and h
 ## Key Types
 
 - **`Envelope`**: the wire unit. `Meta` (id, from, to, channel, timestamp, kind, reply_to) plus a free-form JSON `payload`.
+- **`Origin`** (`meta.origin`): message provenance. The router stamps the trusted fields (tenant, bound identity, owning user, device, agent client, owner kind) and discards client values; only `reported` (session, model, unverified) passes through. Trustworthy only with per-identity credentials and `--require-bound-identity`. See `docs/PROVENANCE.md`.
+- **`IdentityManifest`** / **`ManifestRecord`**: who owns an identity, recorded by whoever provisions credentials. Cached in memory over `Storage`, ordered by `rev`, with tombstones. Written through the `manifest.*` API ops by a `--manifest-writer` or API admin. One hub-server owns it.
 - **`HubClient`**: wraps `async_nats::Client` and carries an `identity` that is stamped on every envelope. `connect()` reads auth from `NATS_*` env; `connect_with_opts()` takes `HubConnectOptions`. Methods: `send_message()`, `send_to()`, `send_reply()`, `subscribe_inbox()`, `subscribe_channel()`, `subscribe_subject()`, `subscribe_all()`, `start_session()`, `send_to_session()`, `close_session()`, `subscribe_session()`, `register()`, `heartbeat()`, `drain()`.
 - **`ControlPlane`**: the router. Routes by `meta.to`, keeps the `AgentRegistry` and loads it from the DB on startup, and optionally mirrors to `Storage`.
 - **`AgentRegistry`**: in-memory agent cache for hot-path queries (`find_by_capability()`, `find_alive()`, `touch()`, `deregister()`).
@@ -193,7 +195,8 @@ Manual commands (against a running stack):
 | `acs login/logout/status/up/down` | Device login (default server: hosted ACS, `https://acs.agentmemorylabs.com`; `--server`/`ACS_SERVER` for self-host and dev), status and per-identity credential renewal |
 | `acs agent add/rm`, `acs mcp install claude\|codex\|hermes`, `acs worker run <backend> --identity ID -- ARGS` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
 | `acs env ID`, `acs exec ID -- CMD [ARGS…]` | Print `export` lines for, or run `CMD` with, that identity's `NATS_URL`, `NATS_CREDENTIALS_FILE` and `NATS_HUB_IDENTITY` (other `NATS_*` auth vars stripped) |
-| `hub-server [--db-path PATH] [--metrics-addr ADDR] [--ws-addr ADDR --static-dir DIR]` | Router + query API; optional Prometheus `/metrics` and WS bridge/visualizer |
+| `hub-server [--db-path PATH] [--metrics-addr ADDR] [--ws-addr ADDR --static-dir DIR] [--tenant LABEL] [--manifest-writer ID]` | Router + query API; optional Prometheus `/metrics` and WS bridge/visualizer; `--tenant` is stamped as `origin.tenant`, `--manifest-writer` may write the identity manifest (needs `--db-path`) |
+| `hub-admin manifest put/remove/sync/get/list --as ID` | Drive the identity manifest as a writer or API admin (`--as` falls back to `NATS_HUB_IDENTITY`; `docs/PROVENANCE.md`) |
 | `hub-publish --channel CH [--to AGENT] [--kind KIND] [--from ID] --message MSG` | Send a message (broadcast or DM) |
 | `hub-observe [--channel CH]` | Watch messages (read-only, live) |
 | `hub-interact [--from ID] --channel CH` | Interactive REPL |
@@ -250,7 +253,7 @@ over `wss://` (or `tls://`/`nats://` on a trusted network).
 ## Conventions
 
 - **Identity**: set once at connect and stamped on every envelope. Never put it in payloads. The MCP server takes it from `NATS_HUB_IDENTITY`, never from tool arguments.
-- **Wire format**: JSON `Envelope`s. Payloads are free-form JSON.
+- **Wire format**: JSON `Envelope`s. Payloads are free-form JSON. `meta.origin` is optional and omits null fields, so read it with a default. Clients may send only `meta.origin.reported`.
 - **Subjects**: `hub.send.<channel>` (publish), `channel.<name>` (broadcast), `channel.inbox.<identity>` (DM), `channel.task.<uuid>`, `channel.session.<uuid>`, `channel.wave.<id>[.task.<task_id>]`, `hub.api.<op>` (query API), `hub.register`, `hub.presence`.
 - **Message kinds**: `message`, `control`, `human`, `status`, `event`.
 - **Persistence**: only `hub-server` opens the DB; everything else uses the query API.
@@ -289,11 +292,13 @@ runs the whole hosted flow locally.
 | `e2e_delegation.rs` | Real `hub-delegate` ↔ `hub-worker`/Python worker round trips (reply contract) |
 | `ws_bridge.rs` | Static-path traversal, Origin allowlist, WS token auth |
 | `analytics.rs`, `metrics_tests.rs`, `events.rs`, `hub_connect_opts.rs` | Analytics, live metrics, event formatting, connect options |
+| `manifest_ops.rs`, `provenance_live.rs` | Identity manifest API ops and their gate; `meta.origin` on broadcasts and DMs, history filters, the durable stored copy (live NATS) |
 
 Python (`tests/python/`): `test_runtime_contract.py` (reply contract),
 `test_worker_{claude,codex,headless,acp,supervisor}.py` (fake-CLI backend
 tests), `test_mcp_server.py` / `test_mcp_followups.py` (MCP server),
-`test_smoke.py` (live echo round trip), and `test_install_release.py` /
+`test_smoke.py` (live echo round trip), `test_origin_live.py` (`meta.origin` as a
+Python dict, live), and `test_install_release.py` /
 `test_licensing.py` (release installers, license map). Fake CLIs live
 in `tests/python/fixtures/`.
 
@@ -337,6 +342,7 @@ The client has no default features or storage feature. All its CLIs, including
 - `docs/PRODUCT_VISION.md`, `docs/DATABASE_PLAN.md`: vision and persistence design
 - `docs/HOSTED_PLAN.md`: hosted ACS (tenancy, auth, `acs` connector, phases)
 - `docs/OPEN_DECISIONS.md`: owner decisions blocking the hosted beta (H-2/H-3)
+- `docs/PROVENANCE.md`: message provenance (`meta.origin`) and the identity manifest
 - `docs/DELIVERY.md`: durable delivery (JetStream, `--durable`)
 - `docs/REMOTE_MCP.md`: remote MCP endpoint for web chat apps (claude.ai, ChatGPT, Grok) + dev stub control plane
 - `docs/archive/`: finished phase plans and handoffs (historical; see its README)

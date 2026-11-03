@@ -181,6 +181,7 @@ The stub auto-approves a single dev user. Real accounts need a real sign-in.
 - **Status:** ✅ decided. Next is a public-repo task: wire protocol, router
   stamping, storage and history filters, then the clients (MCP server,
   workers, `hub-delegate`).
+- Status: provenance and the identity manifest are built (see docs/PROVENANCE.md).
 
 ### 7. Domain and product name
 

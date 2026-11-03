@@ -185,6 +185,24 @@ hub-server --db-path /var/lib/nats-hub/nats_hub.db \
     --api-admin boss          # repeatable; or NATS_HUB_API_ADMINS=a,b
 ```
 
+**Provenance (optional).** To label messages with your hub and record who owns
+each identity, add a tenant label and a manifest writer (a normal per-agent user
+from `hub-admin add-agent`), then record each identity with `hub-admin manifest`:
+
+```bash
+hub-server --db-path /var/lib/nats-hub/nats_hub.db \
+    --require-bound-identity \
+    --tenant acme \
+    --manifest-writer manifest-admin   # repeatable; or NATS_HUB_MANIFEST_WRITERS=a,b
+
+hub-admin manifest put --as manifest-admin \
+    --identity alice-claude --user alice --device alice-laptop --agent claude-code
+```
+
+Every message from `alice-claude` then carries `meta.origin` with those fields. It
+is trustworthy only with per-agent credentials and `--require-bound-identity`, and
+one hub-server owns the manifest. See [`PROVENANCE.md`](PROVENANCE.md).
+
 **Generating strong secrets** (hub-admin generates passwords/nkeys for you;
 for anything by hand):
 

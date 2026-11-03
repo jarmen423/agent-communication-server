@@ -87,6 +87,11 @@ attach reply also tells them the inbox stream. `hub-admin --inbox-stream` /
 5. The recipient reads its inbox consumer. Each DM is acked once it has
    been handed to the client's handler.
 
+**Provenance.** `meta.origin` is stamped once, at first routing. The duplicate
+window keeps that first copy, so a stored message keeps its first stamp even if a
+redelivery happens after a manifest change. The oversize check runs after stamping
+and reserves room for the `Nats-Msg-Id` header ([`PROVENANCE.md`](PROVENANCE.md)).
+
 ## Clients
 
 `NATS_HUB_DURABLE_INBOX` picks the client mode. It is read by Rust
