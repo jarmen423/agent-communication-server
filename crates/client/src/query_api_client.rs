@@ -8,6 +8,22 @@ use anyhow::{bail, Result};
 use serde_json::Value;
 use std::time::Duration;
 
+/// Added to a timed-out request sent without a caller identity: a hub
+/// running `--require-bound-identity` (hosted ACS) never answers those.
+pub const NO_IDENTITY_HINT: &str =
+    "no identity set (NATS_HUB_IDENTITY / --from); a bound-identity hub drops unbound requests";
+
+/// The error for a query that got no reply in time. Without an identity it
+/// says so, instead of a bare "deadline has elapsed".
+pub fn timeout_error(op: &str, timeout: Duration, identity: Option<&str>) -> anyhow::Error {
+    match identity {
+        Some(_) => anyhow::anyhow!("query API timeout ({timeout:?}) for op '{op}'"),
+        None => {
+            anyhow::anyhow!("query API timeout ({timeout:?}) for op '{op}': {NO_IDENTITY_HINT}")
+        }
+    }
+}
+
 /// Client for the query API. Connects to NATS and sends requests to
 /// `hub.api.<op>` (legacy) or `hub.api.<identity>.<op>` (bound, when an
 /// identity is configured).
@@ -88,11 +104,16 @@ impl ApiClient {
             "params": params,
         }))?;
 
-        let reply = tokio::time::timeout(self.timeout, self.nats.request(subject, payload.into()))
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("query API timeout ({:?}) for op '{op}'", self.timeout)
-            })??;
+        let request = async_nats::Request::new()
+            .payload(payload.into())
+            .timeout(Some(self.timeout));
+        let reply = match self.nats.send_request(subject, request).await {
+            Ok(reply) => reply,
+            Err(e) if e.kind() == async_nats::RequestErrorKind::TimedOut => {
+                return Err(timeout_error(op, self.timeout, self.identity.as_deref()))
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         let resp: crate::query_api::ApiResponse = serde_json::from_slice(&reply.payload)?;
 
@@ -102,5 +123,19 @@ impl ApiClient {
         }
 
         Ok(resp.data.unwrap_or(Value::Null))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unbound_timeout_names_the_missing_identity() {
+        let unbound = timeout_error("agent.list", Duration::from_secs(10), None).to_string();
+        assert!(unbound.contains("'agent.list'") && unbound.contains(NO_IDENTITY_HINT));
+        assert!(!unbound.contains("deadline has elapsed"));
+        let bound = timeout_error("agent.list", Duration::from_secs(10), Some("me")).to_string();
+        assert!(!bound.contains("NATS_HUB_IDENTITY"), "{bound}");
     }
 }

@@ -5,22 +5,23 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::{default_nats_url, sender_identity};
 use nats_hub_client::HubClient;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "hub-register", about = "Register an agent on the nats-hub bus")]
 struct Args {
-    /// Agent identity / name
+    /// Agent identity / name (env: NATS_HUB_IDENTITY)
     #[arg(long)]
-    identity: String,
+    identity: Option<String>,
 
     /// Comma-separated capabilities (channels the agent is interested in)
     #[arg(long, value_delimiter = ',')]
     capabilities: Vec<String>,
 
-    /// NATS server URL
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 }
 
@@ -31,11 +32,12 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
-    let client = HubClient::connect(&args.nats_url, &args.identity).await?;
+    let identity = sender_identity(args.identity, "--identity")?;
+    let client = HubClient::connect(&args.nats_url, &identity).await?;
     client.register(args.capabilities.clone()).await?;
     println!(
-        "registered agent '{}' with capabilities: {:?}",
-        args.identity, args.capabilities
+        "registered agent '{identity}' with capabilities: {:?}",
+        args.capabilities
     );
     Ok(())
 }

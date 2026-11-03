@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use nats_hub_client::connect_opts::{default_nats_url, sender_identity};
 use nats_hub_client::{Envelope, MessageKind};
 use tracing_subscriber::EnvFilter;
 
@@ -18,9 +19,9 @@ struct Args {
     #[arg(long)]
     channel: String,
 
-    /// Sender identity
+    /// Sender identity (env: NATS_HUB_IDENTITY)
     #[arg(long)]
-    from: String,
+    from: Option<String>,
 
     /// Plain-text message content
     #[arg(long)]
@@ -38,8 +39,8 @@ struct Args {
     #[arg(long, default_value = "message")]
     kind: String,
 
-    /// NATS server URL
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 }
 
@@ -71,9 +72,10 @@ async fn main() -> Result<()> {
     };
 
     let kind = parse_kind(&args.kind)?;
+    let from = sender_identity(args.from, "--from")?;
 
-    let client = nats_hub_client::HubClient::connect(&args.nats_url, &args.from).await?;
-    let mut env = Envelope::new(args.from.clone(), args.channel.clone(), kind, payload);
+    let client = nats_hub_client::HubClient::connect(&args.nats_url, &from).await?;
+    let mut env = Envelope::new(from, args.channel.clone(), kind, payload);
     if let Some(recipient) = &args.to {
         env = env.to(recipient.clone());
     }

@@ -9,6 +9,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::default_nats_url;
 use nats_hub_client::ApiClient;
 use serde_json::Value;
 use tracing_subscriber::EnvFilter;
@@ -16,7 +17,8 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(name = "hub-stats", about = "Observability queries via query API")]
 struct Args {
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
     #[arg(long, default_value = "1h")]
     since: String,

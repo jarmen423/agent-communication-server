@@ -7,6 +7,7 @@
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
+use nats_hub_client::connect_opts::default_nats_url;
 use nats_hub_client::storage::EnvelopeRecord;
 use nats_hub_client::ApiClient;
 use tracing_subscriber::EnvFilter;
@@ -19,7 +20,8 @@ use tracing_subscriber::EnvFilter;
 struct Args {
     #[command(subcommand)]
     command: Command,
-    #[arg(long, default_value = "nats://127.0.0.1:4222", global = true)]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url(), global = true)]
     nats_url: String,
 }
 

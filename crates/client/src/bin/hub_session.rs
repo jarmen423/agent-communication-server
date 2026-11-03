@@ -12,6 +12,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use nats_hub_client::connect_opts::{default_nats_url, sender_identity};
 use nats_hub_client::storage::{SessionFilter, SessionRecord};
 use nats_hub_client::{ApiClient, HubClient, MessageKind};
 use std::time::Duration;
@@ -22,7 +23,8 @@ use tracing_subscriber::EnvFilter;
 struct Args {
     #[command(subcommand)]
     command: Command,
-    #[arg(long, default_value = "nats://127.0.0.1:4222", global = true)]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url(), global = true)]
     nats_url: String,
 }
 
@@ -31,8 +33,9 @@ enum Command {
     Create {
         #[arg(long)]
         worker: String,
+        /// Your identity, the orchestrator (env: NATS_HUB_IDENTITY)
         #[arg(long)]
-        from: String,
+        from: Option<String>,
         #[arg(long)]
         prompt: Option<String>,
         #[arg(long)]
@@ -46,15 +49,17 @@ enum Command {
     },
     Send {
         session_id: String,
+        /// Your identity (env: NATS_HUB_IDENTITY)
         #[arg(long)]
-        from: String,
+        from: Option<String>,
         #[arg(long)]
         message: String,
     },
     Close {
         session_id: String,
+        /// Your identity (env: NATS_HUB_IDENTITY)
         #[arg(long)]
-        from: String,
+        from: Option<String>,
     },
     List {
         #[arg(long)]
@@ -91,7 +96,7 @@ async fn main() -> Result<()> {
                 &api,
                 &args.nats_url,
                 &worker,
-                &from,
+                &sender_identity(from, "--from")?,
                 prompt,
                 model,
                 provider,
@@ -105,6 +110,7 @@ async fn main() -> Result<()> {
             from,
             message,
         } => {
+            let from = sender_identity(from, "--from")?;
             let client = HubClient::connect(&args.nats_url, &from).await?;
             client
                 .send_to_session(
@@ -117,6 +123,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Close { session_id, from } => {
+            let from = sender_identity(from, "--from")?;
             let client = HubClient::connect(&args.nats_url, &from).await?;
             client
                 .send_to_session(&session_id, serde_json::json!({"action": "session_close"}))

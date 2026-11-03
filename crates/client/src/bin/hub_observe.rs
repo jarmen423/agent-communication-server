@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use nats_hub_client::connect_opts::{default_nats_url, env_identity};
 use nats_hub_client::HubClient;
 use tracing_subscriber::EnvFilter;
 
@@ -21,13 +22,13 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    /// NATS server URL
-    #[arg(long, default_value = "nats://127.0.0.1:4222")]
+    /// NATS server URL (env: NATS_URL)
+    #[arg(long, default_value_t = default_nats_url())]
     nats_url: String,
 
-    /// Observer identity (for presence tracking)
-    #[arg(long, default_value = "observer")]
-    identity: String,
+    /// Observer identity (env: NATS_HUB_IDENTITY; else observer)
+    #[arg(long)]
+    identity: Option<String>,
 }
 
 #[tokio::main]
@@ -38,7 +39,9 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let client = HubClient::connect(&args.nats_url, &args.identity).await?;
+    let identity = args.identity.clone().or_else(env_identity);
+    let identity = identity.unwrap_or_else(|| "observer".to_string());
+    let client = HubClient::connect(&args.nats_url, &identity).await?;
     let mut rx = if let Some(ref ch) = args.channel {
         client.subscribe_channel(ch).await?
     } else {
