@@ -21,31 +21,43 @@ struct Cli {
     command: Command,
 }
 
+/// Hosted ACS. Self-host and dev pass `--server` or set `ACS_SERVER`.
+const HOSTED_SERVER: &str = "https://acs.agentmemorylabs.com";
+
 #[derive(Subcommand)]
 enum Command {
+    /// Sign this device in (opens the browser; --headless prints the URL)
     Login {
-        #[arg(long, env = "ACS_SERVER", default_value = "http://127.0.0.1:9300")]
+        /// Control plane; self-host/dev: e.g. http://127.0.0.1:9300
+        #[arg(long, env = "ACS_SERVER", default_value = HOSTED_SERVER)]
         server: String,
         #[arg(long)]
         headless: bool,
         #[arg(long, env = "ACS_SERVICE_KEY", hide_env_values = true)]
         key: Option<String>,
     },
+    /// Revoke this device and remove its local state
     Logout,
+    /// Show the device, its identities and their credential expiry
     Status,
+    /// Add or remove an identity on this device
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Install and start the credential daemon as a user service
     Up {
         #[arg(long)]
         foreground: bool,
     },
+    /// Stop the credential daemon
     Down,
+    /// Connect an MCP client (Claude Code, Codex, Hermes) as one identity
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Run a worker as one identity
     Worker {
         #[command(subcommand)]
         command: WorkerCommand,
@@ -149,7 +161,11 @@ async fn main() -> Result<()> {
                         }
                     );
                     for (id, a) in s.agents {
-                        println!("{id}: {} credential expires at {}", a.role, a.expires_at);
+                        println!(
+                            "{id}: {} credential {}",
+                            a.role,
+                            local::expiry(a.expires_at)
+                        );
                     }
                 }
                 Command::Agent {

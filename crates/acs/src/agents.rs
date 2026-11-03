@@ -86,7 +86,7 @@ pub async fn refresh(root: &Path, state: &mut State, id: &str) -> Result<()> {
     local::write_creds(root, id, &jwt, &seed)?;
     state.agents.get_mut(id).unwrap().expires_at = expiry;
     local::save(root, state)?;
-    eprintln!("Refreshed {id}; expires at {expiry}");
+    eprintln!("Refreshed {id}; {}", local::expiry(expiry));
     Ok(())
 }
 
