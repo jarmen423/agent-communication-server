@@ -1,9 +1,11 @@
 mod agents;
 mod api;
 mod daemon;
+mod exec;
 mod install;
 mod local;
 mod runtime;
+mod worker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -40,6 +42,14 @@ enum Command {
     Logout,
     /// Show the device, its identities and their credential expiry
     Status,
+    /// Print `export` lines for one identity: eval "$(acs env <id>)"
+    Env { identity: String },
+    /// Run a command as one identity: acs exec <id> -- hub-delegate …
+    Exec {
+        identity: String,
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        command: Vec<String>,
+    },
     /// Add or remove an identity on this device
     Agent {
         #[command(subcommand)]
@@ -92,7 +102,9 @@ enum McpCommand {
 }
 #[derive(Subcommand)]
 enum WorkerCommand {
+    /// acs worker run claude --identity <id> -- --repo <path>
     Run {
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(worker::BACKENDS))]
         backend: String,
         #[arg(long)]
         identity: String,
@@ -116,9 +128,9 @@ async fn main() -> Result<()> {
                     identity,
                     args,
                 },
-        } => {
-            install::worker(&root, &backend, &identity, &args).await?;
-        }
+        } => worker::run(&root, &backend, &identity, &args).await?,
+        Command::Env { identity } => exec::print(&root, &identity)?,
+        Command::Exec { identity, command } => exec::run(&root, &identity, &command).await?,
         command => {
             let _lock = local::lock(&root, "operation.lock")?;
             match command {

@@ -1,26 +1,8 @@
 //! Merge just the nats-hub MCP entry; preserve unrelated client settings.
-use crate::{
-    agents,
-    local::{self, State},
-};
+use crate::{agents, exec, local};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-
-fn select<'a>(state: &'a State, identity: Option<&'a str>) -> Result<&'a str> {
-    let id = match identity {
-        Some(id) => id,
-        None if state.agents.len() == 1 => state.agents.keys().next().unwrap(),
-        None => {
-            bail!("choose an identity with --identity (required unless exactly one is configured)")
-        }
-    };
-    agents::check_id(id)?;
-    if !state.agents.contains_key(id) {
-        bail!("identity is not configured on this device");
-    }
-    Ok(id)
-}
 
 async fn runtime(
     root: &Path,
@@ -82,14 +64,17 @@ pub async fn mcp(
     python: Option<PathBuf>,
 ) -> Result<()> {
     let state = local::load(root)?;
-    let id = select(&state, identity)?;
+    let id = agents::select(&state, identity)?;
     let (server, python) = runtime(root, server, python).await?;
     let home = match home {
         Some(path) => path,
         None => local::home()?,
     };
-    let env = json!({"NATS_URL": state.nats_url,
-        "NATS_CREDENTIALS_FILE": local::creds_path(root, id), "NATS_HUB_IDENTITY": id});
+    let vars = exec::vars(root, &state, id);
+    let env: serde_json::Map<String, Value> = vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), json!(v)))
+        .collect();
     let config = json!({"command": python, "args": [server], "env": env});
     let path = match client {
         "claude" => {
@@ -124,11 +109,11 @@ pub async fn mcp(
             let mut args = toml_edit::Array::new();
             args.push(server.to_string_lossy().as_ref());
             table["args"] = toml_edit::value(args);
-            let mut vars = toml_edit::Table::new();
-            for (key, value) in env.as_object().unwrap() {
-                vars[key] = toml_edit::value(value.as_str().unwrap());
+            let mut table_env = toml_edit::Table::new();
+            for (key, value) in &vars {
+                table_env[*key] = toml_edit::value(value.as_str());
             }
-            table["env"] = toml_edit::Item::Table(vars);
+            table["env"] = toml_edit::Item::Table(table_env);
             if doc.get("mcp_servers").is_none() {
                 doc["mcp_servers"] = toml_edit::Item::Table(toml_edit::Table::new());
             }
@@ -165,94 +150,4 @@ pub async fn mcp(
     };
     println!("Installed nats-hub MCP for {client}: {}", path.display());
     Ok(())
-}
-
-pub async fn worker(root: &Path, backend: &str, identity: &str, args: &[String]) -> Result<()> {
-    let state = local::load(root)?;
-    let id = select(&state, Some(identity))?;
-    let mut cmd = if backend == "hub-worker" {
-        let path = std::env::current_exe()?.with_file_name("hub-worker");
-        let mut cmd = tokio::process::Command::new(if path.is_file() {
-            path
-        } else {
-            PathBuf::from("hub-worker")
-        });
-        cmd.arg("--identity").arg(id);
-        cmd
-    } else {
-        if ![
-            "echo",
-            "claude",
-            "codex",
-            "cursor",
-            "hermes",
-            "hermes_acp",
-            "grok",
-            "grok_acp",
-            "kilo",
-            "kilo_acp",
-            "opencode",
-            "opencode_acp",
-            "agy",
-        ]
-        .contains(&backend)
-        {
-            bail!("unknown worker backend");
-        }
-        // Like `mcp install`, never run code from the current directory by
-        // default: the worker gets this identity's credentials.
-        let repo = match std::env::var_os("ACS_WORKER_DIR") {
-            Some(dir) => PathBuf::from(dir),
-            None => local::home()?.join(".local/share/nats-hub/remote"),
-        };
-        let script = repo.join(format!("{backend}_worker.py"));
-        if !script.is_file() {
-            bail!(
-                "worker runtime not found in {}; install the worker bundle \
-                 (packaging/remote/install.sh) or set ACS_WORKER_DIR to a trusted checkout",
-                repo.display()
-            );
-        }
-        let py = std::env::var_os("ACS_PYTHON")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let py = repo.join(".venv/bin/python");
-                if py.is_file() {
-                    py
-                } else {
-                    "python3".into()
-                }
-            });
-        let mut cmd = tokio::process::Command::new(py);
-        cmd.arg(script).arg("--identity").arg(id);
-        cmd
-    };
-    // hub-worker's CLI default does not read NATS_URL; pass the selected
-    // tenant URL explicitly for both Rust and Python backends.
-    cmd.arg("--nats-url")
-        .arg(&state.nats_url)
-        .args(args)
-        .env("NATS_URL", &state.nats_url)
-        .env("NATS_CREDENTIALS_FILE", local::creds_path(root, id))
-        .env("NATS_HUB_IDENTITY", id)
-        .env_remove("NATS_USER")
-        .env_remove("NATS_PASSWORD")
-        .env_remove("NATS_TOKEN")
-        .env_remove("NATS_NKEY")
-        .env_remove("NATS_NKEYS_SEED")
-        .env_remove("ACS_SERVICE_KEY");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // exec transfers signals and exit status directly to the worker.
-        Err(cmd.as_std_mut().exec().into())
-    }
-    #[cfg(not(unix))]
-    {
-        let status = cmd.status().await?;
-        if !status.success() {
-            bail!("worker exited: {status}");
-        }
-        Ok(())
-    }
 }

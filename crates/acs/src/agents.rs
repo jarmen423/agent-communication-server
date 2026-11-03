@@ -17,6 +17,22 @@ pub fn check_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// The named identity, or the only one when none is named.
+pub fn select<'a>(state: &'a State, identity: Option<&'a str>) -> Result<&'a str> {
+    let id = match identity {
+        Some(id) => id,
+        None if state.agents.len() == 1 => state.agents.keys().next().unwrap(),
+        None => {
+            bail!("choose an identity with --identity (required unless exactly one is configured)")
+        }
+    };
+    check_id(id)?;
+    if !state.agents.contains_key(id) {
+        bail!("identity is not configured on this device");
+    }
+    Ok(id)
+}
+
 pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
     check_id(id)?;
     if !["worker", "orchestrator"].contains(&role) {
