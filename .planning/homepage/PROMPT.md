@@ -321,11 +321,16 @@ without asking me.
   - WebGPU needs a secure context, so load pages from
     `http://localhost:<port>`, not `about:blank`.
   - Report the SwiftShader frame time as a rough guide only.
-  - The real-GPU check (60 fps, how it actually looks) is mine. Run the
-    dev server on port 3000 and tell me when it's ready; I'll view it
-    from my laptop through `ssh -L 3000:localhost:3000`. Follow vgpu's
-    `performance-measurement` guidance so the measurement is easy to
-    repeat there.
+  - The real-GPU check (60 fps, how it actually looks) is mine, in
+    Chrome or Edge on Windows. Serve on `127.0.0.1:3000` and tell me
+    when it's ready.
+    - `tailscale serve` already publishes that port to the tailnet over
+      HTTPS, at `https://acs-dev.tail7c213b.ts.net:3000`. HTTPS keeps it
+      a secure context, so WebGPU works.
+    - For the hero bake-off, serve each concept at its own route
+      (`/experiments/hero-<n>`) on that one server, not on extra ports.
+    - Follow vgpu's `performance-measurement` guidance, so I can repeat
+      the measurement from my browser.
 
 ## Phases and the optional multi-agent steps
 
@@ -346,7 +351,8 @@ reply with "ultracode" or "run the workflow" if I want it.
    `site/experiments/hero-<n>/` and sends back three things:
    - a poster frame;
    - a SwiftShader recording;
-   - a page I can open on port 3000 through my SSH tunnel.
+   - a route I can open at
+     `https://acs-dev.tail7c213b.ts.net:3000/experiments/hero-<n>`.
 
    The three concepts must differ in idea, not just in colour. Lay them
    out side by side for me with one recommendation. After I pick, delete
