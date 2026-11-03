@@ -30,7 +30,7 @@ const PROMPTS = [
 const RESULTS = ["1 file changed, tests pass", "2 files changed", "entry added", "no issues found", "PR ready for review"];
 
 /** One log record per message, payload first (payloads are free-form JSON; the reply contract's fields are real). */
-function record(m: Msg, i: number): string {
+export function record(m: Msg, i: number): string {
   const id = m.task.slice(5);
   switch (m.kind) {
     case "task":

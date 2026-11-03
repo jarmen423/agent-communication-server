@@ -235,3 +235,94 @@ test("the ASCII variant starts, recolours, resizes and disposes on the mock adap
     hero.dispose();
   }
 });
+
+// ---- the ASCII web (full bleed) and B's hub lamp ----
+
+const webModel = await import("./web-model.ts");
+const webLight = await import("./web-light.ts");
+const webMod = await import("./web.ts");
+
+for (const [name, l] of Object.entries(webModel.WEB)) {
+  test(`web ${name}: every line is one task through the hub, in reply-contract rhythm`, () => {
+    const web = webModel.createWeb(l);
+    web.advance(120);
+    const lines = web.lines();
+    assert.ok(lines.length > 20, `${lines.length} lines`);
+    const ids = new Set(l.agents.map((a) => a.id));
+    for (const x of lines) {
+      assert.ok(ids.has(x.from) && ids.has(x.to), "named agents at both ends");
+      const kinds = x.pulses.map((p) => p.kind);
+      assert.equal(kinds.filter((k) => k === "task").length, 1, "one teal task out");
+      assert.equal(kinds.filter((k) => k === "result").length, 1, "exactly one result");
+      assert.ok(kinds.filter((k) => k === "progress").length >= 2, "progress pulses back");
+      assert.equal(kinds[0], "task");
+      assert.equal(kinds.at(-1), "result", "the result comes last");
+      for (const p of x.pulses) assert.equal(p.dir, p.kind === "task" ? 1 : -1, "sent goes out, received comes back");
+      const atHub = webModel.pointAt(x, x.hubS);
+      assert.ok(Math.hypot(atHub[0] - l.hub.cx, atHub[1] - l.hub.cy) < 1, "the line passes through hub-server");
+      assert.equal(webModel.aliveAt(x, x.dies + 2), 0, "the line dies");
+    }
+  });
+
+  test(`web ${name}: a calm number of lines alive, always moving`, () => {
+    const web = webModel.createWeb(l);
+    const counts = [];
+    for (let t = 20; t < 120; t += 0.5) counts.push(web.live(t).filter((x) => webModel.aliveAt(x, t) > 0.5).length);
+    const max = Math.max(...counts);
+    const mean = counts.reduce((s, c) => s + c, 0) / counts.length;
+    assert.ok(max <= l.maxLines, `max ${max}`);
+    assert.ok(mean >= (name === "wide" ? 3 : 1.5) && mean <= 6, `mean ${mean.toFixed(2)}`);
+    assert.ok(Math.min(...counts) >= 1, "never empty");
+  });
+
+  test(`web ${name}: poster light puts each pulse in its own colour, and the uniform fits the shader`, () => {
+    const web = webModel.createWeb(l);
+    const t = 47.3;
+    const frame = webModel.frameAt(l, web.live(t), t);
+    assert.ok(frame.glow > 0 && frame.glow < 1);
+    assert.equal(frame.events.length, 12);
+    assert.equal(frame.ripples.length, webModel.RIPPLES);
+    const light = webLight.cellLight(l, frame);
+    const [cols, rows] = l.grid;
+    assert.equal(light.length, cols * rows * 3);
+    for (const line of frame.lines) {
+      for (const [s, amp] of line.pulses) {
+        const x = web.live(t).find((y) => y.pts === line.pts);
+        if (s < 0 || s > x.length) continue;
+        const [px, py] = webModel.pointAt(x, s);
+        const i = (Math.min(rows - 1, Math.floor(py / (l.height / rows))) * cols + Math.min(cols - 1, Math.floor(px / (l.width / cols)))) * 3;
+        if (amp > 0) assert.ok(light[i] > 0.1, "teal where a sent pulse is");
+        else assert.ok(light[i + 1] > 0.1, "orange where a received pulse is");
+      }
+    }
+    const u = webMod.webUniform(l, frame);
+    assert.equal(u.line_info.length, 6);
+    assert.equal(u.pts.length, 48);
+    assert.equal(u.pulses.length, 36);
+    assert.equal(u.ripples.length, 8);
+    const rows2 = webLight.webRows(cols, rows);
+    assert.equal(rows2.length, rows);
+    assert.ok(rows2.every((r) => r.length === cols));
+  });
+}
+
+test("B's hub lamp: rim flashes, neutral glow and ripples for every envelope", () => {
+  const layout = wideLayout(WIDE);
+  const traffic = createTraffic(layout, 7, { through: true });
+  const lamp = hubLamp(traffic.live(POSTER_T), POSTER_T);
+  assert.equal(lamp.ripples.length, 6);
+  assert.ok(lamp.ripples.some((r) => r[1] > 0), "something is rippling");
+  for (const [radius, amp] of lamp.ripples) assert.ok(radius >= 0 && amp >= 0 && amp <= 1);
+});
+
+test("the web starts, recolours and disposes on the mock adapter", async () => {
+  const palette = { lane: [0, 0, 0], laneRaised: [0, 0, 0], laneLine: [0, 0, 0], laneInk: [1, 1, 1], laneMuted: [0.6, 0.6, 0.6], teal: [0.24, 0.72, 0.67], orange: [0.96, 0.65, 0.26] };
+  for (const layout of Object.values(webModel.WEB)) {
+    const canvas = new MockCanvas();
+    const hero = await webMod.startWeb(canvas, { layout, palette });
+    await new Promise((r) => setTimeout(r, 40));
+    hero.setPalette({ ...palette, laneInk: [0.9, 0.9, 0.9] });
+    hero.setPaused(true);
+    hero.dispose();
+  }
+});

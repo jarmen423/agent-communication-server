@@ -11,20 +11,11 @@ import { fieldRows, FONT, glyphTable, GRID, LOOK, RAMP, TUNE } from "./field";
 import { layoutFor, type Layout } from "./layout";
 import { createLight } from "./light";
 import { run } from "./run";
+import { ATLAS_COLS, canvasAtlas, monoFamily, rgba, type AtlasMaker } from "./atlas";
 import { hubLamp } from "./schedule";
 
-/** Glyph coverage atlas: `cols` slots per row, each `slot` texels, one byte per texel. */
-export type Atlas = { data: Uint8Array<ArrayBuffer>; width: number; height: number; cols: number; slot: [number, number] };
-export type AtlasMaker = (chars: string[], cell: [number, number], fontPx: number) => Atlas;
 
-const ATLAS_COLS = 16;
 
-/** One byte per texel → RGBA texels with the value in R. */
-function rgba(src: Uint8Array): Uint8Array<ArrayBuffer> {
-  const out = new Uint8Array(src.length * 4);
-  for (let i = 0; i < src.length; i++) out[i * 4] = src[i];
-  return out;
-}
 
 /** The gather pass on its own (the poster bake reads it back). */
 export function createCells(gpu: Gpu, light: Target, grid: readonly [number, number], px: number) {
@@ -116,35 +107,9 @@ export function createField(gpu: Gpu, layout: Layout, palette: HeroPalette, size
   };
 }
 
-/** Browser atlas: IBM Plex Mono (the site's --font-mono) drawn into canvas 2D, coverage only. */
-function canvasAtlas(family: string): AtlasMaker {
-  return (chars, cell, fontPx) => {
-    const slot: [number, number] = [Math.ceil(cell[0]), Math.ceil(cell[1])];
-    const width = slot[0] * ATLAS_COLS;
-    const height = slot[1] * Math.ceil(chars.length / ATLAS_COLS);
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext("2d")!;
-    ctx.font = `400 ${fontPx}px ${family}`;
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "alphabetic";
-    chars.forEach((ch, i) => {
-      const x = (i % ATLAS_COLS) * slot[0] + cell[0] / 2;
-      const y = Math.floor(i / ATLAS_COLS) * slot[1] + cell[1] / 2 + fontPx * FONT.baseline;
-      ctx.fillText(ch, x, y);
-    });
-    const rgba = ctx.getImageData(0, 0, width, height).data;
-    const data = new Uint8Array(width * height);
-    for (let i = 0; i < data.length; i++) data[i] = rgba[i * 4 + 3];
-    return { data, width, height, cols: ATLAS_COLS, slot };
-  };
-}
 
 export const startHero: HeroModule["startHero"] = async (canvas, { scene, palette }) => {
-  const family = getComputedStyle(canvas).getPropertyValue("--font-mono").trim() || "monospace";
-  // Best effort: wait for Plex Mono itself (the first family); a fallback face failing to load must not cost the hero.
-  await document.fonts.load(`400 12px ${family.split(",")[0]}`).catch(() => undefined);
-  await document.fonts.ready;
+  const family = await monoFamily(canvas);
   const gpu = await init();
   try {
     const out = surface(gpu, canvas, { dpr: [1, 2] });

@@ -1,7 +1,7 @@
 {
   "url": "http://127.0.0.1:3002/experiments/hero-b",
-  "frames": 128,
-  "medianMs": "66.6",
-  "p95Ms": "66.8",
+  "frames": 103,
+  "medianMs": "83.3",
+  "p95Ms": "83.4",
   "note": "rAF interval under SwiftShader; rough guide only"
 }

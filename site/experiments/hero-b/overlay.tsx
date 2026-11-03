@@ -26,15 +26,15 @@ export function exposureLabel(layout: Layout, kind: "light" | "ascii" = "light")
 }
 
 /**
- * `kind="ascii"`: the hub plate is glass (partly translucent), so light that
- * crosses the junction shows behind the lens. The lens itself stays opaque ink.
+ * The hub plate is glass (partly translucent), so light that crosses the
+ * junction shows behind the lens. The lens itself stays opaque ink.
  */
 export function ExposureOverlay({ layout, className, kind = "light" }: { layout: Layout; className?: string; kind?: "light" | "ascii" }) {
   const { plate, hub, compact } = layout;
   const mono = compact ? 10.5 : 12.5;
   return (
     <svg viewBox={`0 0 ${layout.width} ${layout.height}`} className={className} role="img" aria-label={exposureLabel(layout, kind)} preserveAspectRatio="xMidYMid meet">
-      <rect x={plate.x} y={plate.y} width={plate.w} height={plate.h} rx={plate.r} fill="var(--lane-raised)" fillOpacity={kind === "ascii" ? 0.5 : 1} stroke="var(--lane-line)" />
+      <rect x={plate.x} y={plate.y} width={plate.w} height={plate.h} rx={plate.r} fill="var(--lane-raised)" fillOpacity={0.5} stroke="var(--lane-line)" />
       <path d={lensPath(hub.cx, hub.cy, hub.size)} fill="var(--lane-ink)" />
 
       {layout.machines.map((m) => (
