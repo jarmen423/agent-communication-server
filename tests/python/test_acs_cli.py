@@ -240,3 +240,46 @@ def test_native_worker_receives_url_and_excludes_login_secrets(device_stack):
     assert data['args'] == ['--identity', 'native', '--nats-url', data['url'], '--execute', 'cat']
     assert data['identity'] == 'native' and data['secret_present'] is False
     acs(env, 'logout')
+
+
+def test_embedded_worker_runtime_needs_no_checkout(tmp_path):
+    """B1: a release `acs` alone runs claude/codex/echo workers (no ACS_WORKER_DIR)."""
+    import shutil
+    bindir, home, cwd, root = (tmp_path / n for n in ('bin', 'home', 'cwd', 'acs'))
+    for d in (bindir, home, cwd, root):
+        d.mkdir()
+    connector = bindir / 'acs'
+    shutil.copy2(ACS, connector)
+    (root / 'state.json').write_text(json.dumps({
+        'server': 'https://acs.example', 'tenant': 'T', 'device': 'd', 'nats_url': 'nats://127.0.0.1:1',
+        'access_token': 'x', 'access_expires_at': 0,
+        'agents': {'w': {'role': 'worker', 'public_key': 'U', 'expires_at': int(time.time()) + 3600}}}))
+    # Code in the current directory must never run with the identity's credentials.
+    for planted in ('claude_worker.py', 'codex_worker.py', 'worker_runtime.py', 'nats_connect.py'):
+        (cwd / planted).write_text('raise SystemExit("planted code ran")\n')
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('ACS_', 'NATS_', 'PYTHON'))}
+    # An explicit interpreter skips the private venv's pip install (network).
+    env.update(HOME=str(home), ACS_HOME=str(root), ACS_NO_KEYRING='1', ACS_PYTHON=sys.executable)
+    for backend, banner in (('claude', 'Claude Code'), ('codex', 'Codex')):
+        p = subprocess.run([str(connector), 'worker', 'run', backend, '--identity', 'w', '--', '--help'],
+                           cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert banner in p.stdout and 'planted' not in p.stdout + p.stderr
+    [runtime] = (root / 'worker').glob('*-*/')
+    assert runtime.name.startswith('0.') and (root / 'worker').stat().st_mode & 0o777 == 0o700
+    assert (runtime / 'claude_worker.py').stat().st_mode & 0o777 == 0o600
+    assert (runtime / 'claude_worker.py').read_bytes() == (REPO / 'claude_worker.py').read_bytes()
+    # Every embedded entrypoint imports from the private copy alone (-I: no
+    # cwd, script dir or PYTHONPATH on sys.path).
+    workers = sorted(p.stem for p in runtime.glob('*_worker.py'))
+    assert {'claude_worker', 'codex_worker', 'echo_worker', 'hermes_worker'} <= set(workers)
+    probe = ('import importlib, json, sys; sys.path.insert(0, sys.argv[1]); '
+             'print(json.dumps({m: importlib.import_module(m).__file__ for m in sys.argv[2:]}))')
+    p = subprocess.run([sys.executable, '-I', '-c', probe, str(runtime), *workers,
+                        'worker_runtime', 'worker_backends.kilo_acp'],
+                       cwd=cwd, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    assert all(f.startswith(str(runtime)) for f in json.loads(p.stdout).values()), p.stdout
+    unknown = subprocess.run([str(connector), 'worker', 'run', 'cursor', '--identity', 'w'],
+                             cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+    assert unknown.returncode != 0 and 'ACS_WORKER_DIR' in unknown.stderr
