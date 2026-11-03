@@ -5,6 +5,8 @@
 @import "./sections.css" layer(components);
 @import "./docs.css" layer(components);
 @import "./prose.css" layer(components);
+/* Unlayered on purpose (TEMPORARY headline-font trial). */
+@import "./display-trial.css";
 
 /* Brand space-N equals Tailwind's 4px spacing step, so p-4 = space-4 (16px). */
 
@@ -167,4 +169,3 @@
 @utility tabular {
   font-variant-numeric: tabular-nums;
 }
-@import "./display-trial.css";
