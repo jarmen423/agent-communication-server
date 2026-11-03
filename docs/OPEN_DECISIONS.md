@@ -164,8 +164,23 @@ The stub auto-approves a single dev user. Real accounts need a real sign-in.
     server or worker. Claude Code hooks receive `session_id`, and Codex has
     thread ids. Remote MCP from claude.ai/ChatGPT probably only gives a
     per-connection id.
-- **Status:** 🟡 proposal. Confirm it and it becomes a public-repo task
-  (wire protocol + router + MCP server), independent of H-2.
+- **Owner, 2026-11-03:** confirmed. Every message that is stored, sent or
+  received carries this provenance. Two more layers are added:
+  - **model provider** (`anthropic`, `openrouter`): self-reported;
+  - **model** (`claude-opus-5-5`): self-reported, on each message, because
+    a client can switch models mid-session.
+- **Shape:**
+  - The trusted layers are stamped by the router. Any trusted values a
+    client sends are discarded.
+  - The self-reported layers (session, model provider, model) travel in
+    their own `origin.reported` block, so they can't be mistaken for proof.
+  - The hub learns each identity's human, device and agent client from an
+    admin-only identity-manifest op. The control plane calls it when it
+    mints or revokes an identity, and `hub-admin` calls it on self-hosted
+    hubs.
+- **Status:** ✅ decided. Next is a public-repo task: wire protocol, router
+  stamping, storage and history filters, then the clients (MCP server,
+  workers, `hub-delegate`).
 
 ### 7. Domain and product name
 
