@@ -1,6 +1,8 @@
 # Prompt: design and build the ACS homepage
 
-Paste everything below the line into the design agent.
+Paste everything below the line into a **Claude Code** agent on acs-dev
+(it has `frontend-design`; Codex doesn't), and add **ultrathink** to the
+message.
 
 ---
 
@@ -324,6 +326,50 @@ without asking me.
     from my laptop through `ssh -L 3000:localhost:3000`. Follow vgpu's
     `performance-measurement` guidance so the measurement is easy to
     repeat there.
+
+## Phases and the optional multi-agent steps
+
+Work as one agent. Two steps may be run as a multi-agent workflow, but
+only if I opt in. Propose each one at its point, with a rough agent
+count, and wait for my answer. Don't launch a workflow on your own; I'll
+reply with "ultracode" or "run the workflow" if I want it.
+
+1. **Intent and static build.** Use one agent (you). Read the brand, the
+   docs and the skills, then build the static pages: layout, type,
+   tokens wired in, the docs pipeline, pricing, and a poster frame for
+   the hero.
+2. **Check in with me.** Use design-mentor: explain the direction, show
+   screenshots, and give a recommendation. Then propose step 3.
+3. **Optional: hero bake-off** (about 3–4 agents). Three agents each
+   build a *different* vgpu hero concept against the same poster-frame
+   slot. Each works in its own scratch directory under
+   `site/experiments/hero-<n>/` and sends back three things:
+   - a poster frame;
+   - a SwiftShader recording;
+   - a page I can open on port 3000 through my SSH tunnel.
+
+   The three concepts must differ in idea, not just in colour. Lay them
+   out side by side for me with one recommendation. After I pick, delete
+   the losing experiments.
+4. **Motion and sanding.** Use one agent (you). Build the chosen hero
+   for real, then do the motion pass, sanding and perf/a11y, following
+   bespoke's workflow.
+5. **Optional: verification fan-out** (about 5 agents, all read-only).
+   Each one checks one thing and reports findings; it doesn't fix
+   anything:
+   - **a11y:** `scan.sh`, a keyboard-only walk, and contrast in both
+     themes;
+   - **links and commands:** every link resolves, and every command on
+     the site matches `docs/`;
+   - **performance:** Lighthouse plus the WebGPU fallback, with WebGPU
+     disabled;
+   - **brand:** the rules in `brand/README.md`, including the teal-sent /
+     orange-received pairing;
+   - **honesty:** no claim that the docs don't support.
+
+   You then fix what they find, or explain why not. If I decline this
+   step, do the same checks yourself in that order.
+6. **Definition of done** (below), then the PR.
 
 ## Definition of done
 
