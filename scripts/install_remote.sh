@@ -1,17 +1,18 @@
-#!/usr/bin/env bash
-# install_remote.sh — install the nats-hub client CLIs (hub-delegate & co.) on
-# a remote machine and write a `hub-delegate-remote` wrapper for one hub.
+#!/bin/sh
+# install_remote.sh — install the nats-hub client CLIs (`acs`, `hub-delegate`
+# and every other hub-* CLI) and link them into ~/.local/bin.
 #
-# From a clone:
-#   bash scripts/install_remote.sh <HUB>
-# One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh \
-#     | bash -s -- <HUB>
+# Hosted ACS (https://acs.agentmemorylabs.com), no arguments:
+#   curl -fsSL https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh | sh
+#   acs login
+# Self-hosted hub: pass its URL to also get a `hub-delegate-remote` wrapper:
+#   curl -fsSL …/install_remote.sh | sh -s -- wss://hub.example.com:8443
+#   bash scripts/install_remote.sh <HUB>             # from a clone
 #
 # <HUB> is a host (`hub.example.com`, `10.0.0.5:4222`) or a full NATS URL
 # (`wss://hub.example.com:8443`, `tls://hub:4222`, `nats://hub:4222`).
 #
-# How the binary is obtained (first that applies):
+# How the binaries are obtained (first that applies):
 #   1. --bin PATH                  copy an existing hub-delegate
 #   2. --from-source               cargo build from this checkout (or a clone)
 #   3. default / --from-release T  download the GitHub release asset for this
@@ -22,19 +23,42 @@
 #                                  --release-only. A checksum MISMATCH is fatal
 #                                  and never falls back.
 #
-# The remote machine needs no nats-server, hub-server or SurrealDB. Auth uses
-# NATS_* env vars at runtime (NATS_TOKEN, NATS_USER/NATS_PASSWORD, NATS_CREDENTIALS_FILE,
-# NATS_NKEY, NATS_REQUIRE_TLS); this script never bakes secrets.
+# Binaries go to ~/.local/share/nats-hub/bin and are symlinked into
+# ~/.local/bin (created if missing; a PATH line is printed if it isn't on
+# PATH). Re-running is safe: it refreshes the binaries and its own links and
+# leaves any other file in ~/.local/bin alone.
+#
+# The machine needs no nats-server, hub-server or SurrealDB. Auth comes at
+# runtime from `acs` (hosted) or NATS_* env vars (self-host: NATS_TOKEN,
+# NATS_USER/NATS_PASSWORD, NATS_CREDENTIALS_FILE, NATS_NKEY, NATS_REQUIRE_TLS);
+# this script never bakes secrets.
+#
+# `curl … | sh` runs this file with dash on Debian/Ubuntu, but the installer
+# needs bash. Only the lines up to the heredoc are POSIX sh: sh reads the
+# whole quoted heredoc before running anything, then hands it to bash.
 
+if ! command -v bash >/dev/null 2>&1; then
+  echo "ERROR: install_remote.sh needs bash. Install bash, then re-run." >&2
+  exit 1
+fi
+NATS_HUB_INSTALL_SCRIPT="$0"
+export NATS_HUB_INSTALL_SCRIPT
+exec bash -s -- "$@" <<'NATS_HUB_INSTALL_BODY'
 set -euo pipefail
+
+HOSTED_URL="https://acs.agentmemorylabs.com"
+INSTALL_URL="https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/scripts/install_remote.sh"
 
 usage() {
   cat <<'EOF'
-Usage: install_remote.sh <HUB> [options]
+Usage: install_remote.sh [HUB] [options]
 
-  HUB   hub host[:port], or a full URL: wss://host:port, tls://host:port,
-        nats://host:port, ws://host:port. A bare host becomes nats://HOST:PORT
-        (plaintext TCP; see "Transport" below).
+  No HUB: install acs + every hub-* CLI for hosted ACS, then run `acs login`.
+
+  HUB   a self-hosted hub: host[:port], or a full URL: wss://host:port,
+        tls://host:port, nats://host:port, ws://host:port. A bare host becomes
+        nats://HOST:PORT (plaintext TCP; see "Transport" below). Also writes
+        ~/bin/hub-delegate-remote with that URL baked in.
 
 Options:
   --port PORT               NATS port for a bare HUB host (default: 4222)
@@ -42,14 +66,17 @@ Options:
   --from-release TAG        Release tag to install (default: latest)
   --release-only            Fail instead of building from source if the release
                             download is unavailable
-  --from-source             Skip releases; cargo build hub-delegate from source
+  --from-source             Skip releases; cargo build from source
   --with-acs                Also build/install acs when building from source
+                            (always on without HUB)
   --release-base-url URL    Directory holding SHA256SUMS + tarballs (https:// or
                             file://). Default: the GitHub release for TAG.
   --repo URL                GitHub repo (release downloads + source clone)
                             (default: https://github.com/jarmen423/agent-communication-server)
   --bin PATH                Use an existing hub-delegate binary
   -h, --help                Show this help
+
+Binaries: ~/.local/share/nats-hub/bin, symlinked into ~/.local/bin.
 
 Env overrides: HUB_DELEGATE_BIN (= --bin), NATS_HUB_REPO (= --repo),
 NATS_HUB_RELEASE_BASE_URL (= --release-base-url), CARGO_TARGET_DIR.
@@ -93,13 +120,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$HUB_ARG" && -z "$NATS_URL_OVERRIDE" ]]; then
-  echo "ERROR: HUB (or --nats-url) is required." >&2
-  usage >&2
-  exit 2
-fi
+# Self-host when a hub was named; hosted ACS (acs login) otherwise.
+SELF_HOST=0
+[[ -n "$HUB_ARG" || -n "$NATS_URL_OVERRIDE" ]] && SELF_HOST=1
+(( SELF_HOST )) || WITH_ACS=1   # hosted needs acs, even from source
 
-# ── Resolve the hub URL baked into the wrapper ──────────────────────
+# ── Resolve the hub URL baked into the wrapper (self-host) ──────────
+NATS_URL=""
 if [[ -n "$NATS_URL_OVERRIDE" ]]; then
   NATS_URL="$NATS_URL_OVERRIDE"
 elif [[ "$HUB_ARG" == *://* ]]; then
@@ -108,7 +135,7 @@ elif [[ "$HUB_ARG" == *://* ]]; then
     echo "ERROR: --port conflicts with a full URL ($HUB_ARG); put the port in the URL." >&2
     exit 2
   fi
-else
+elif [[ -n "$HUB_ARG" ]]; then
   host="${HUB_ARG%%/*}"
   if [[ "$host" == *:* && "$host" != \[*\] && "${host##*:}" =~ ^[0-9]+$ ]]; then
     (( PORT_SET )) || NATS_PORT="${host##*:}"
@@ -116,21 +143,28 @@ else
   fi
   NATS_URL="nats://${host}:${NATS_PORT}"
 fi
-case "$NATS_URL" in
-  nats://*|tls://*|ws://*|wss://*) ;;
-  *) echo "ERROR: unsupported hub URL scheme: $NATS_URL (use nats://, tls://, ws:// or wss://)" >&2; exit 2 ;;
-esac
+if (( SELF_HOST )); then
+  case "$NATS_URL" in
+    nats://*|tls://*|ws://*|wss://*) ;;
+    *) echo "ERROR: unsupported hub URL scheme: $NATS_URL (use nats://, tls://, ws:// or wss://)" >&2; exit 2 ;;
+  esac
+fi
 
 INSTALL_ROOT="${HOME}/.local/share/nats-hub"
 BIN_DIR="${INSTALL_ROOT}/bin"
+LINK_DIR="${HOME}/.local/bin"
 WRAPPER_DIR="${HOME}/bin"
 BINARY_PATH="${BIN_DIR}/hub-delegate"
 WRAPPER_PATH="${WRAPPER_DIR}/hub-delegate-remote"
 REPO_URL="${REPO_URL%.git}"
 REPO_URL="${REPO_URL%/}"
-mkdir -p "$BIN_DIR" "$WRAPPER_DIR"
+mkdir -p "$BIN_DIR"
 
-echo "→ Hub target:  ${NATS_URL}"
+if (( SELF_HOST )); then
+  echo "→ Hub target:  ${NATS_URL}"
+else
+  echo "→ Hosted ACS:  ${HOSTED_URL} (self-host: pass your hub URL, see --help)"
+fi
 echo "→ Install dir: ${INSTALL_ROOT}"
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -235,8 +269,8 @@ install_from_release() {
 
 install_from_source() {
   local script_dir="" repo_root="" candidate src_dir i
-  if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "${NATS_HUB_INSTALL_SCRIPT:-}" ]]; then
+    script_dir="$(cd "$(dirname "$NATS_HUB_INSTALL_SCRIPT")" && pwd)"
   fi
   candidate="$script_dir"
   for i in 1 2 3 4 5; do
@@ -291,7 +325,42 @@ EOF
   fi
 }
 
-# ── Obtain the binary ───────────────────────────────────────────────
+# link_one <target> <name>: symlink LINK_DIR/<name> → <target>. Our own (or
+# dangling) links are refreshed; anything else is left alone with a note.
+LINKED=0
+LEFT_ALONE=""
+link_one() {
+  local target="$1" name="$2" link="$LINK_DIR/$2" current
+  if [[ -L "$link" ]]; then
+    current="$(readlink "$link")"
+    [[ "$current" == "$target" ]] && { LINKED=$((LINKED + 1)); return 0; }
+    if [[ -e "$link" && "$current" != "$BIN_DIR"/* && "$current" != "$WRAPPER_PATH" ]]; then
+      LEFT_ALONE="$LEFT_ALONE $name"
+      echo "  ! left alone: $link → $current (not from this installer)" >&2
+      return 0
+    fi
+    rm -f "$link"
+  elif [[ -e "$link" ]]; then
+    LEFT_ALONE="$LEFT_ALONE $name"
+    echo "  ! left alone: $link (an existing file, not from this installer)" >&2
+    return 0
+  fi
+  ln -s "$target" "$link"
+  LINKED=$((LINKED + 1))
+}
+
+link_bins() {
+  local f
+  mkdir -p "$LINK_DIR"
+  for f in "$BIN_DIR"/acs "$BIN_DIR"/hub-*; do
+    [[ -f "$f" && -x "$f" ]] || continue
+    link_one "$f" "$(basename "$f")"
+  done
+  (( SELF_HOST )) && link_one "$WRAPPER_PATH" "hub-delegate-remote"
+  return 0
+}
+
+# ── Obtain the binaries ─────────────────────────────────────────────
 if [[ -n "$EXISTING_BIN" ]]; then
   if [[ ! -f "$EXISTING_BIN" ]]; then
     echo "ERROR: --bin path not found: $EXISTING_BIN" >&2
@@ -315,10 +384,12 @@ else
   SOURCE_DESC="source build (release unavailable)"
 fi
 
-# ── Wrapper with baked-in NATS URL ──────────────────────────────────
+# ── Self-host: wrapper with the hub URL baked in ────────────────────
 # Pass-through of all CLI args; only injects --nats-url if the caller
 # did not already supply one.
-cat > "$WRAPPER_PATH" <<EOF
+if (( SELF_HOST )); then
+  mkdir -p "$WRAPPER_DIR"
+  cat > "$WRAPPER_PATH" <<EOF
 #!/usr/bin/env bash
 # Auto-generated by nats-hub scripts/install_remote.sh — do not edit by hand.
 # Re-run the installer to point at a different hub.
@@ -337,41 +408,76 @@ else
   exec "\$BINARY" "\$@"
 fi
 EOF
-chmod +x "$WRAPPER_PATH"
+  chmod +x "$WRAPPER_PATH"
+fi
 
-# ── PATH hint ───────────────────────────────────────────────────────
+link_bins
+
+# ── Summary ─────────────────────────────────────────────────────────
+echo
+echo "✓ nats-hub client installed"
+echo "  from:     ${SOURCE_DESC}"
+echo "  binaries: ${BIN_DIR}"
+echo "  linked:   ${LINKED} into ${LINK_DIR}"
+if (( SELF_HOST )); then
+  echo "  wrapper:  ${WRAPPER_PATH}"
+  echo "  hub:      ${NATS_URL}"
+fi
+
+ON_PATH=0
 case ":${PATH}:" in
-  *":${WRAPPER_DIR}:"*) path_note="(${WRAPPER_DIR} already on PATH)" ;;
-  *) path_note="(add to shell rc: export PATH=\"\$HOME/bin:\$PATH\")" ;;
+  *":${LINK_DIR}:"*|*":${LINK_DIR}/:"*) ON_PATH=1 ;;
 esac
+if (( ON_PATH )); then
+  # A different acs/hub-delegate earlier on PATH would shadow this install.
+  for name in acs hub-delegate; do
+    [[ -L "$LINK_DIR/$name" ]] || continue
+    found="$(command -v "$name" 2>/dev/null || true)"
+    if [[ -n "$found" && "$found" != "$LINK_DIR/$name" ]]; then
+      echo "  ! $found comes before ${LINK_DIR} on PATH and hides this $name"
+    fi
+  done
+else
+  case "${SHELL:-}" in
+    */zsh) rc="~/.zshrc"; path_line='export PATH="$HOME/.local/bin:$PATH"' ;;
+    */fish) rc="~/.config/fish/config.fish"; path_line='fish_add_path $HOME/.local/bin' ;;
+    */bash) rc="~/.bashrc"; [[ "$(uname -s)" == Darwin ]] && rc="~/.bash_profile"
+            path_line='export PATH="$HOME/.local/bin:$PATH"' ;;
+    *) rc="~/.profile"; path_line='export PATH="$HOME/.local/bin:$PATH"' ;;
+  esac
+  echo
+  echo "  ! ${LINK_DIR} is not on your PATH. Run this now and add it to ${rc}:"
+  echo "      ${path_line}"
+fi
 
-echo
-echo "✓ nats-hub remote client installed"
-echo "  from:    ${SOURCE_DESC}"
-echo "  binary:  ${BINARY_PATH}"
-echo "  wrapper: ${WRAPPER_PATH}  ${path_note}"
-echo "  hub:     ${NATS_URL}"
-
-hub_host="${NATS_URL#*://}"; hub_host="${hub_host%%[:/]*}"
-case "$NATS_URL" in
-  nats://*|ws://*)
-    case "$hub_host" in
-      127.*|localhost|::1|\[::1\]) ;;
-      *)
-        echo
-        echo "  ⚠ ${NATS_URL%%://*}:// is plaintext: tokens and messages cross the network unencrypted."
-        echo "    Fine on a trusted LAN/VPN. Otherwise re-run with wss://… or tls://… (docs/SECURITY.md)."
-        ;;
-    esac
-    ;;
-esac
-
-echo
-echo "Usage:"
-echo "  hub-delegate-remote --to <worker-identity> --from <you> --prompt \"...\" --verbose"
-echo
-echo "If the hub requires auth, export before calling (never baked into the wrapper):"
-echo "  export NATS_TOKEN='…'          # or NATS_USER + NATS_PASSWORD, or NATS_CREDENTIALS_FILE"
-echo
-echo "Override hub for one call:"
-echo "  hub-delegate-remote --nats-url wss://other-host:8443 --to worker-1 --prompt \"hi\""
+if (( SELF_HOST )); then
+  hub_host="${NATS_URL#*://}"; hub_host="${hub_host%%[:/]*}"
+  case "$NATS_URL" in
+    nats://*|ws://*)
+      case "$hub_host" in
+        127.*|localhost|::1|\[::1\]) ;;
+        *)
+          echo
+          echo "  ⚠ ${NATS_URL%%://*}:// is plaintext: tokens and messages cross the network unencrypted."
+          echo "    Fine on a trusted LAN/VPN. Otherwise re-run with wss://… or tls://… (docs/SECURITY.md)."
+          ;;
+      esac
+      ;;
+  esac
+  echo
+  echo "Next, on your hub (${NATS_URL}):"
+  echo "  export NATS_TOKEN='…'   # or NATS_USER + NATS_PASSWORD, or NATS_CREDENTIALS_FILE"
+  echo "  hub-delegate-remote --to <worker-identity> --from <you> --prompt \"…\" --verbose"
+  echo "  (or export NATS_URL=${NATS_URL} NATS_HUB_IDENTITY=<you> and use any hub-* CLI)"
+  echo "Hosted ACS instead: run \`acs login\` (no hub URL needed)."
+else
+  echo
+  echo "Next, sign in to hosted ACS (${HOSTED_URL}):"
+  echo "  acs login                     # approve this device in your browser"
+  echo "  acs agent add <id>            # an identity for this machine (--role worker for a worker)"
+  echo "  acs up                        # keeps its credentials fresh"
+  echo "  acs exec <id> -- hub-agents   # any hub-* CLI, as <id>, on your hub"
+  echo "Then connect an agent: https://github.com/jarmen423/agent-communication-server#hosted-quick-start"
+  echo "Self-hosting a hub? Re-run with its URL: curl -fsSL ${INSTALL_URL} | sh -s -- wss://hub.example.com:8443"
+fi
+NATS_HUB_INSTALL_BODY
