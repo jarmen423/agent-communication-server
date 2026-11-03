@@ -9,7 +9,8 @@ const repoRoot = path.resolve(process.cwd(), "..");
 const nextConfig: NextConfig = {
   // STATIC_EXPORT=1 writes a plain static site to out/ (Cloudflare static assets).
   // Every route is prerendered, so nothing is lost.
-  ...(process.env.STATIC_EXPORT === "1" ? { output: "export" as const } : {}),
+  // Own build dir, so an export never clobbers the .next a running `next start` uses.
+  ...(process.env.STATIC_EXPORT === "1" ? { output: "export" as const, distDir: ".next-export" } : {}),
   reactStrictMode: true,
   poweredByHeader: false,
   turbopack: {

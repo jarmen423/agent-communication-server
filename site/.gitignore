@@ -2,6 +2,7 @@
 # local check artefacts
 *.tsbuildinfo
 .checks/
+.next-export/
 .next/
 .vercel
 .wrangler/
