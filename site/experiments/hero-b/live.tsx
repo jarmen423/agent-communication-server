@@ -8,9 +8,20 @@ import { GpuStage } from "@/components/hero/gpu-stage";
 import { TALL, WIDE } from "@/components/hero/geometry";
 import css from "./hero-b.module.css";
 
-const load = () => import("./scene");
+// Stable module-level loaders (GpuStage restarts when `load` changes identity).
+const LOADERS = { light: () => import("./scene"), ascii: () => import("./ascii") };
 
-export function ExposureLive({ variant, poster, overlay }: { variant: "wide" | "tall"; poster: React.ReactNode; overlay: React.ReactNode }) {
+export function ExposureLive({
+  variant,
+  kind = "light",
+  poster,
+  overlay,
+}: {
+  variant: "wide" | "tall";
+  kind?: keyof typeof LOADERS;
+  poster: React.ReactNode;
+  overlay: React.ReactNode;
+}) {
   const frame = useRef<HTMLDivElement>(null);
   const [paused, setPaused] = useState(false);
   const toggle = () => {
@@ -20,7 +31,7 @@ export function ExposureLive({ variant, poster, overlay }: { variant: "wide" | "
   };
   return (
     <div ref={frame} className={css.frame}>
-      <GpuStage scene={variant === "wide" ? WIDE : TALL} poster={poster} load={load} />
+      <GpuStage scene={variant === "wide" ? WIDE : TALL} poster={poster} load={LOADERS[kind]} />
       {overlay}
       <button type="button" className={css.pause} onClick={toggle} aria-pressed={paused} aria-label={paused ? "Play the message animation" : "Pause the message animation"}>
         <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">

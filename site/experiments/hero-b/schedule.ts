@@ -3,7 +3,7 @@
 // worker), a run of short orange ticks comes back (status `working`, events
 // `started` and `progress`), then exactly one brighter, longer orange result.
 // Every streak on screen is one of these messages between two named agents.
-import type { Agent, Lane, Layout } from "./layout";
+import { crossing, type Agent, type Lane, type Layout } from "./layout";
 
 export type Kind = "task" | "status" | "event" | "result";
 export type Msg = {
@@ -18,7 +18,9 @@ export type Msg = {
   speed: number;
   a: Lane;
   b: Lane;
-  /** Arc length spent inside the hub plate (the router), hidden. */
+  /** The path across the hub plate, when light goes through the junction (else hidden). */
+  mid: Lane | null;
+  /** Arc length spent inside the hub plate (the router). */
   hold: number;
   /** Sideways offset inside the lane: many strokes side by side, like traffic. */
   drift: number;
@@ -62,7 +64,7 @@ const SCRIPTED = [
   { at: POSTER_T - 2.4, from: "me", to: "codex-1", id: "c91e04b7" },
 ];
 
-export function createTraffic(layout: Layout, seed = 7) {
+export function createTraffic(layout: Layout, seed = 7, opts: { through?: boolean } = {}) {
   const rand = rng(seed);
   const byId = new Map(layout.agents.map((a) => [a.id, a]));
   const orchestrators = layout.agents.filter((a) => a.role === "orchestrator");
@@ -77,9 +79,10 @@ export function createTraffic(layout: Layout, seed = 7) {
     const speed = st.speed * layout.speed * (0.92 + rand() * 0.16);
     const a = layout.lanes[from.id].toHub;
     const b = layout.lanes[to.id].fromHub;
-    const hold = HUB_DELAY * speed;
+    const mid = opts.through ? crossing(layout, from.id, to.id) : null;
+    const hold = mid ? mid.length : HUB_DELAY * speed;
     const drift = (rand() - 0.5) * 2 * layout.drift;
-    return { task, from: from.id, to: to.id, kind, detail, channel: kind === "task" ? 0 : 1, t0, speed, a, b, hold, drift, total: a.length + hold + b.length };
+    return { task, from: from.id, to: to.id, kind, detail, channel: kind === "task" ? 0 : 1, t0, speed, a, b, mid, hold, drift, total: a.length + hold + b.length };
   };
   const arrival = (m: Msg) => m.t0 + m.total / m.speed;
 
@@ -196,6 +199,7 @@ export function emit(m: Msg, ta: number, tb: number, out: Deposits, layout: Layo
   };
   if (sB > sA) {
     piece(m.a, 0);
+    if (m.mid) piece(m.mid, m.a.length);
     piece(m.b, m.a.length + m.hold);
   }
 }
@@ -205,4 +209,34 @@ export function exposure(traffic: ReturnType<typeof createTraffic>, layout: Layo
   out.reset();
   for (const m of traffic.live(t)) emit(m, t - HISTORY, t, out, layout);
   return out;
+}
+
+// ---- the hub lamp ----
+
+export const LAMP_EVENTS = 12;
+const LAMP_WEIGHT: Record<Kind, number> = { task: 0.8, status: 0.35, event: 0.35, result: 1 };
+
+/**
+ * What the hub shows at time `t`: each envelope registers where it enters the
+ * plate (a short rim flash in its own colour), and a slow glow follows recent
+ * throughput. Events: [x, y, age, weight], weight positive for sent (teal) and
+ * negative for received (orange); unused slots have a large age.
+ */
+export function hubLamp(msgs: readonly Msg[], t: number) {
+  let glow = 0;
+  let sent = 0;
+  const events: [number, number, number, number][] = [];
+  for (const m of msgs) {
+    const age = t - (m.t0 + m.a.length / m.speed);
+    if (age < 0 || age > 12) continue;
+    const w = LAMP_WEIGHT[m.kind];
+    const g = w * Math.exp(-age / 2.5);
+    glow += g;
+    if (m.channel === 0) sent += g;
+    if (age < 1.5) events.push([m.a.pts[m.a.pts.length - 2], m.a.pts[m.a.pts.length - 1], age, m.channel === 0 ? w : -w]);
+  }
+  events.sort((x, y) => x[2] - y[2]);
+  events.length = Math.min(events.length, LAMP_EVENTS);
+  while (events.length < LAMP_EVENTS) events.push([0, 0, 99, 0]);
+  return { glow: 1 - Math.exp(-glow / 8), share: glow > 0 ? 1 - sent / glow : 0.5, events };
 }

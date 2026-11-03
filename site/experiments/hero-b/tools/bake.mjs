@@ -9,7 +9,9 @@
 // The wide still is baked at 1x (soft light survives upscaling; 2x would be
 // ~135 KB); the tall one at 2x, since phones are dense and it is small.
 //
-// Writes site/experiments/hero-b/posters/{wide,tall}.png.
+// Writes site/experiments/hero-b/posters/{wide,tall}.png, and for the ASCII
+// variant posters/ascii-{wide,tall}.json: the gathered light per character
+// cell (cells.wgsl), which the server renders as an SVG text still.
 import { register } from "node:module";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
@@ -20,6 +22,9 @@ register("./hooks.mjs", import.meta.url);
 const { init, target, frame } = await import("vgpu/node");
 const { createExposure } = await import("../scene.ts");
 const { wideLayout, tallLayout } = await import("../layout.ts");
+const { createLight } = await import("../light.ts");
+const { createCells } = await import("../ascii.ts");
+const { GRID, TUNE } = await import("../field.ts");
 
 const SCALE = { wide: 1, tall: 2 };
 // Brand lane colours (identical in both themes): --lane-teal, --lane-orange.
@@ -50,6 +55,28 @@ for (const [name, layout] of [["wide", wideLayout()], ["tall", tallLayout()]]) {
   }
   console.log(`${name}: ${size.join("×")}, ${ex.count} deposits, ${(png.length / 1024).toFixed(1)} KB`);
   ex.dispose();
+}
+// ASCII variant: per-cell light at the poster moment, 4 bits per channel (sent, received).
+for (const [name, layout] of [["wide", wideLayout(undefined, TUNE.wide)], ["tall", tallLayout(undefined, TUNE.tall)]]) {
+  const size = [layout.width * 2, layout.height * 2];
+  const grid = GRID[name];
+  const ex = createLight(gpu, layout, size, { through: true });
+  const cells = createCells(gpu, ex.light, grid, 2);
+  await Promise.all([ex.compile(), cells.compile()]);
+  frame(gpu, (f) => {
+    ex.encode(f, 0);
+    cells.encode(f);
+  });
+  const v = await cells.cells.color.readFloats({ mipLevel: 0, region: "all" });
+  let hexes = "";
+  for (let i = 0; i < grid[0] * grid[1]; i++) {
+    const q = (x) => Math.max(0, Math.min(15, Math.round(x * 15)));
+    hexes += q(v[i * 4]).toString(16) + q(v[i * 4 + 1]).toString(16);
+  }
+  writeFileSync(new URL(`ascii-${name}.json`, out), JSON.stringify({ grid, cells: hexes }));
+  console.log(`ascii-${name}: ${grid.join("×")} cells, ${ex.count} deposits, ${(hexes.length / 1024).toFixed(1)} KB`);
+  ex.dispose();
+  cells.dispose();
 }
 gpu.dispose();
 
