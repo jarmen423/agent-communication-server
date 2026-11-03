@@ -2,38 +2,67 @@
 
 `acs` is the Apache-2.0 Rust connector in `crates/acs`, built on
 `nats-hub-client`. It manages a device's credentials; agents connect directly
-to the tenant's NATS account. The current control plane is **DEV ONLY**:
-verification auto-approves the fixed dev user. Do not expose it with real data.
+to the tenant's NATS account. By default it signs in to hosted ACS at
+`https://acs.agentmemorylabs.com`. The stub control plane in
+`stub_control_plane/` is **DEV ONLY**: its verification auto-approves the
+fixed dev user. Do not expose it with real data.
 
 ## Install and sign in
 
-Release tarballs ship `acs` beside `hub-*`. `scripts/install_remote.sh <HUB>`
-installs them into `~/.local/share/nats-hub/bin/`; add that directory to PATH.
-From source run `make setup && make build`, or use the remote installer
-with `--from-source --with-acs`. The connector itself links no
-server or database code.
+Release tarballs ship `acs` beside `hub-*`. The README's hosted quick start
+has the install line: `scripts/install_remote.sh` puts the binaries in
+`~/.local/share/nats-hub/bin/` and links them into `~/.local/bin`. From
+source run `make setup && make build`, or use the remote installer with
+`--from-source --with-acs`. The connector itself links no server or database
+code.
 
 ```bash
-acs login --server https://control-plane.example
-# Or print a URL to open on another device:
-acs login --server https://control-plane.example --headless
+acs login                                # hosted ACS; opens the browser
+acs login --headless                     # or print a URL to open on another device
 acs agent add me                         # orchestrator by default
 acs agent add laptop-worker --role worker
-acs up                                  # install/start a user service
-acs status
-acs worker run echo --identity laptop-worker
-acs mcp install claude --identity me
+acs up                                   # install/start a user service
+acs status                               # identities and credential expiry
+acs worker run claude --identity laptop-worker -- --repo ~/code/project
+acs mcp install claude --identity me     # an MCP orchestrator, or plain CLIs:
+acs exec me -- hub-delegate --to laptop-worker --prompt "What is 2+2?"
 ```
 
-Only HTTPS control-plane URLs are accepted, except HTTP on loopback for the
-stub. `ACS_SERVER` supplies the default server. The stub's `--nats-url` is the
-NATS URL returned at login; pass the operator stack's private `NATS_URL` when
-running a local demo. HTTP redirects aren't followed with bearer credentials.
+`--server` (or `ACS_SERVER`) picks another control plane: a self-hosted one,
+or the DEV ONLY stub with `--server http://127.0.0.1:9300`. Only HTTPS
+control-plane URLs are accepted, except HTTP on loopback for the stub. Login
+returns the tenant's NATS URL and keeps it in the device state, so nobody
+types it. The stub's `--nats-url` sets the URL it returns; pass the operator
+stack's private `NATS_URL` when running a local demo. HTTP redirects aren't
+followed with bearer credentials.
 
 `acs login --key KEY` exchanges a long-lived, revocable **per-device** secret.
 Prefer `ACS_SERVICE_KEY` to avoid shell-history exposure. The key is exchanged
 for the usual short-lived access token and rotating refresh token; the CLI
 does not retain the service key. No NATS user seed is sent to the issuer.
+
+## Run CLIs as an identity
+
+The `hub-*` CLIs and your own scripts need three variables: `NATS_URL`,
+`NATS_CREDENTIALS_FILE` and `NATS_HUB_IDENTITY`. `acs` supplies them from the
+device state:
+
+```bash
+acs exec me -- hub-agents                # one command
+eval "$(acs env me)"                     # or the current shell
+hub-history --tail
+```
+
+`acs exec <id> -- <cmd> [args…]` replaces itself with `cmd`, so signals and
+the exit status are the command's own. A bare command name is looked up on
+PATH, then next to `acs`. Like `acs worker run`, it removes the other NATS
+auth variables (`NATS_USER`, `NATS_PASSWORD`, `NATS_TOKEN`, `NATS_NKEY`,
+`NATS_NKEYS_SEED`) and `ACS_SERVICE_KEY` from the command's environment: a
+token left over from a self-hosted setup would otherwise be sent along with
+the identity's credentials. `acs env <id>` prints an `unset` line for the same
+NATS variables, then the three `export` lines, POSIX-quoted. Both warn on
+stderr when the credential has expired or hasn't been issued yet; `acs up`
+starts the daemon that renews it.
 
 ## Local state and renewal
 
@@ -54,6 +83,10 @@ exponential backoff and jitter, and logs identity/expiry without secrets.
 Rust and Python clients reread the credentials on reconnect, including the
 reconnect triggered by actual JWT expiry.
 
+`acs status` lists each identity with its role and credential expiry, as
+RFC 3339 UTC plus a relative time: `me: orchestrator credential expires
+2026-11-04T21:18:56Z (in 23h)`, or `expired … (10m ago)`.
+
 `acs up` writes `~/.config/systemd/user/acs.service` on Linux and
 `~/Library/LaunchAgents/com.agentmemorylabs.acs.plist` on macOS. The service
 uses the running executable's absolute path and explicit `ACS_HOME`.
@@ -70,7 +103,7 @@ or device immediately stops new issuance/renewal; already issued NATS JWTs
 remain valid until expiry. Production must push resolver revocations as in
 [OPERATOR_MODE.md](OPERATOR_MODE.md).
 
-## MCP and workers
+## MCP clients
 
 The installer merges only `nats-hub`; unrelated client settings/servers remain.
 It writes `command`, `args`, and the three environment variables `NATS_URL`,
@@ -96,13 +129,57 @@ writes them under `ACS_HOME/mcp/server`, and creates a private venv with pinned
 nats-py and the MCP dependencies. This first install needs Python 3.10+ with
 venv/pip and network access. It does not embed a Python interpreter.
 
-`acs worker run <backend> --identity <id> -- <extra args>` wraps an existing
-Python worker from `ACS_WORKER_DIR`, or by default from the worker bundle in
-`~/.local/share/nats-hub/remote` (never the current directory), and
-optionally `ACS_PYTHON`. `hub-worker` uses the sibling binary or PATH and
-accepts its usual extra flags, for example `-- --execute cat`. The wrapper
-sets the same NATS environment as MCP and transfers signals/exit status to
-the worker. Worker code and model CLIs still need to be installed separately.
+## Workers
+
+`acs worker run <backend> --identity <id> -- <worker args>` starts a worker as
+that identity:
+
+```bash
+acs worker run claude --identity laptop-worker -- --repo ~/code/project
+acs worker run codex --identity codex-worker -- --repo ~/code/project
+acs worker run echo --identity echo-1                # no LLM; for smoke tests
+acs worker run hub-worker --identity cat-1 -- --execute cat
+```
+
+The Python workers are built into `acs`. The build embeds every
+`*_worker.py` entrypoint except `cursor`, plus every repository module they
+import (`worker_runtime.py`, `worker_events.py`, `nats_connect.py`,
+`hub_delivery.py` and the whole `worker_backends` package); see
+`crates/acs/build.rs`. That covers `echo`, `claude`, `codex`, `hermes`,
+`hermes_acp`, `grok`, `grok_acp`, `kilo`, `kilo_acp`, `opencode`,
+`opencode_acp` and `agy`. The first `acs worker run` writes the modules to
+`ACS_HOME/worker/<version>-<hash>/` and creates a private venv in
+`ACS_HOME/worker/.venv` with pinned nats-py, nkeys, aiohttp and httpx. That
+first run needs Python 3.10+ with venv/pip and network access; later runs
+start at once. The directory name follows the embedded code, so an upgraded
+`acs` never mixes old and new modules. Once no worker from an old version is
+running, its directory can be deleted. Files that differ from the binary's
+copy are rewritten on every run. The agent CLI itself (`claude`, `codex`, …)
+still has to be installed and signed in.
+
+The code comes from, in order:
+
+1. `ACS_WORKER_DIR`: a trusted checkout you name explicitly (with its `.venv`
+   when present);
+2. the runtime built into `acs`;
+3. the worker bundle in `~/.local/share/nats-hub/remote`, for a backend `acs`
+   doesn't embed.
+
+`ACS_PYTHON` overrides the interpreter in every case. `cursor` needs
+`cursor-sdk`, so it runs only from a checkout, with an `ACS_PYTHON` that has
+the SDK. The current directory is never searched: the worker gets the
+identity's credentials, so running `acs worker run` inside an untrusted
+checkout must not run its code.
+
+`hub-worker` uses the sibling binary or PATH and accepts its usual extra
+flags. Every backend gets `--identity` and `--nats-url` (the tenant URL) ahead
+of your extra args, the same three environment variables as MCP, and the same
+auth stripping as `acs exec`. `acs` then execs the worker, so signals and the
+exit status pass straight through.
+
+**Hosted users don't need the worker bundle.** `packaging/remote/install.sh`
+is for self-hosted hubs, where an operator issues the credential. It installs
+into `~/.local/share/nats-hub/remote`, the directory `acs` checks.
 
 ## DEV ONLY endpoints and test
 
@@ -134,7 +211,10 @@ scripts/dev/operator_stack.sh .venv/bin/python -m pytest -q -s tests/python/test
 
 This CI test starts the stub, uses real RFC 8628 verification, registers `me`,
 installs Claude config, launches exactly that stdio MCP configuration, and gets
-an echo result. It runs `acs up --foreground` with 60-second NATS credentials,
+results from an echo worker and a claude worker (on the fake CLI). Both run
+from the runtime built into `acs`, as from a release install: no
+`ACS_WORKER_DIR`, no `ACS_PYTHON` (so `acs` builds its private venv) and a
+working directory outside the checkout. It runs `acs up --foreground` with 60-second NATS credentials,
 proves the same Rust HubClient and Python MCP/worker survive expiry, rejects
 an unrefreshed copy, and confirms identity removal prevents renewal. The
 unit/CLI tests also cover service keys, device/tenant boundaries, refresh

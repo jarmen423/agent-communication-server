@@ -253,6 +253,7 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
     };
     accept(root, &mut state, &value)?;
     println!("Logged in: tenant {} device {}", state.tenant, state.device);
+    println!("Next: acs agent add <id> [--role worker], then acs up");
     Ok(())
 }
 

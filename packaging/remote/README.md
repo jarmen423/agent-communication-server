@@ -5,6 +5,11 @@ files and a one-shot installer that lets a teammate join a nats-hub from
 their laptop **without cloning the whole monorepo** (no Rust toolchain,
 no SurrealDB, no full Hermes venv).
 
+**Hosted ACS users don't need it.** After `acs login`, `acs worker run
+<backend> --identity <id>` runs the claude, codex, echo and other workers from
+the runtime built into `acs` (see [`docs/ACS_CONNECTOR.md`](../../docs/ACS_CONNECTOR.md)).
+This bundle is for self-hosted hubs, where an operator hands you a credential.
+
 ## What's here
 
 | File | Purpose |
@@ -25,7 +30,7 @@ the release's `SHA256SUMS`, and installs from it. A mismatch aborts the install.
 ```bash
 curl -fsSL -o install.sh \
   https://raw.githubusercontent.com/jarmen423/agent-communication-server/main/packaging/remote/install.sh
-bash install.sh --from-release latest            # or a tag; → ~/nats-hub-remote
+bash install.sh --from-release latest   # or a tag; → ~/.local/share/nats-hub/remote
 ```
 
 When `install.sh` runs outside a checkout and without `--from-release`, it uses
@@ -38,7 +43,7 @@ skips the `pip install`.
 ```bash
 git clone <nats-hub-repo-url> nats-hub
 cd nats-hub
-bash packaging/remote/install.sh            # → ~/nats-hub-remote
+bash packaging/remote/install.sh            # → ~/.local/share/nats-hub/remote
 # or: bash packaging/remote/install.sh /custom/target/dir
 ```
 
@@ -77,11 +82,13 @@ it's been copied flat (next to the adapter) and works the same way.
 1. Picks the source: the verified release bundle (`--from-release`), else the
    checkout or flat bundle it sits in, else the latest release.
 2. Verifies Python 3.10+.
-3. Creates `<target>/.venv` (default target: `~/nats-hub-remote`).
+3. Creates `<target>/.venv` (default target: `~/.local/share/nats-hub/remote`,
+   the directory `acs` checks for a worker bundle).
 4. Copies the files listed in `FILES.txt` into `<target>/`.
 5. Runs `pip install -r requirements-remote.txt` inside the venv (skip with `--no-pip`).
-6. Prints the next-step command line (with `--nats-url wss://…` and a
-   placeholder for your token / creds file).
+6. Prints the next step: `acs worker run` for hosted users, or the adapter
+   command line (with `--nats-url wss://…` and a placeholder for your token /
+   creds file) for a self-hosted hub.
 
 Re-running it is safe: it refreshes the copied files and re-runs pip.
 
@@ -99,8 +106,8 @@ worked examples (shell backend, kilo backend, opencode backend) and the
 security checklist. The short version:
 
 ```bash
-source ~/nats-hub-remote/.venv/bin/activate
-cd ~/nats-hub-remote
+source ~/.local/share/nats-hub/remote/.venv/bin/activate
+cd ~/.local/share/nats-hub/remote
 export NATS_TOKEN='<from-operator>'
 python3 remote_agent_adapter.py \
     --identity my-worker-1 \

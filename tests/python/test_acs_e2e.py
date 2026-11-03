@@ -31,16 +31,21 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
         root = tmp_path / 'acs'
         home = tmp_path / 'client-home'
         op = Path(os.environ['OPERATOR_DIR'])
-        env = {**{k: v for k, v in os.environ.items() if not k.startswith('NATS_')},
+        # Workers use the runtime built into acs, as from a release install:
+        # no ACS_WORKER_DIR, no ACS_PYTHON (acs builds its private venv) and
+        # a working directory outside the checkout.
+        env = {**{k: v for k, v in os.environ.items() if not k.startswith(('NATS_', 'ACS_', 'PYTHONPATH'))},
                'NATS_URL': os.environ['NATS_URL'], 'ACS_HOME': str(root),
                'ACS_NO_KEYRING': '1', 'ACS_SERVER': server, 'PYTHONUNBUFFERED': '1',
-               'ACS_MCP_SERVER': str(REPO / 'mcp_server/nats_hub_mcp.py'), 'ACS_WORKER_DIR': str(REPO)}
+               'ACS_MCP_SERVER': str(REPO / 'mcp_server/nats_hub_mcp.py')}
         procs, logs = [], []
+        away = tmp_path / 'elsewhere'
+        away.mkdir()
 
-        def spawn(name, args, extra=None, pipe=False):
+        def spawn(name, args, extra=None, pipe=False, cwd=REPO):
             logfile = (tmp_path / f'{name}.log').open('w')
             logs.append(logfile)
-            p = subprocess.Popen(args, env={**env, **(extra or {})}, cwd=REPO,
+            p = subprocess.Popen(args, env={**env, **(extra or {})}, cwd=cwd,
                                  stdout=subprocess.PIPE if pipe else logfile,
                                  stderr=subprocess.PIPE if pipe else subprocess.STDOUT, text=True)
             procs.append(p)
@@ -67,8 +72,22 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
             print('$ acs login --headless\n' + login, end='', flush=True)
             print('$ acs agent add me\n' + (await asyncio.to_thread(acs, env, 'agent', 'add', 'me')).stdout, end='', flush=True)
             await asyncio.to_thread(acs, env, 'agent', 'add', 'device-echo', '--role', 'worker')
-            spawn('echo', [str(ACS), 'worker', 'run', 'echo', '--identity', 'device-echo'])
-            await asyncio.sleep(2)
+            await asyncio.to_thread(acs, env, 'agent', 'add', 'device-claude', '--role', 'worker')
+            workers = [spawn('echo', [str(ACS), 'worker', 'run', 'echo', '--identity', 'device-echo'], cwd=away),
+                       spawn('claude', [str(ACS), 'worker', 'run', 'claude', '--identity', 'device-claude', '--',
+                                        '--claude-bin', str(REPO / 'tests/python/fixtures/bin/claude'),
+                                        '--repo', str(away)], cwd=away)]
+            # The first run materializes the runtime and pip-installs its venv.
+            for name, proc in (('echo', workers[0]), ('claude', workers[1])):
+                for _ in range(1800):
+                    assert proc.poll() is None, (tmp_path / f'{name}.log').read_text()
+                    if '] ready' in (tmp_path / f'{name}.log').read_text():
+                        break
+                    await asyncio.sleep(.1)
+                else:
+                    raise TimeoutError(f'{name} worker startup: ' + (tmp_path / f'{name}.log').read_text())
+            runtime = next((root / 'worker').glob('*-*/'))
+            print(f'$ acs worker run echo|claude (no ACS_WORKER_DIR, no checkout): runtime {runtime.name}', flush=True)
             install = await asyncio.to_thread(acs, env, 'mcp', 'install', 'claude', '--identity', 'me', '--home', str(home))
             print('$ acs mcp install claude --identity me --home <tmp>\n' + install.stdout, end='', flush=True)
             config = json.loads((home / '.claude.json').read_text())['mcpServers']['nats-hub']
@@ -83,6 +102,12 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
                     data = json.loads(result.content[0].text)
                     assert data['ok'] and data['data']['reply']['result'] == 'echo: sca olleh', data
                     print('MCP delegate_task → device-echo: echo: sca olleh', flush=True)
+                    claude = await session.call_tool('delegate_task', {'to': 'device-claude',
+                        'prompt': 'hello claude', 'timeout': 20})
+                    assert not claude.isError, claude
+                    reply = json.loads(claude.content[0].text)['data']['reply']
+                    assert reply['result'] == 'pong: hello claude', reply
+                    print('PASS embedded claude worker (fake CLI) → pong: hello claude', flush=True)
                     await asyncio.to_thread(acs, env, 'agent', 'add', 'device-native', '--role', 'worker')
                     spawn('native', [str(ACS), 'worker', 'run', 'hub-worker', '--identity',
                                      'device-native', '--', '--execute', 'cat'])

@@ -12,7 +12,9 @@ What it does, printing PASS/FAIL per step with real output:
     --backup-dir (operator-mode creds)
  2. DEV-ONLY stub control plane; `acs login --headless` (scripted approve)
  3. `acs agent add` me / echo-dev / lock-dev (+ the real worker, if asked)
- 4. workers via `acs worker run` (echo; optionally a real CLI agent)
+ 4. workers via `acs worker run` (echo; optionally a real CLI agent), from
+    the runtime built into acs, as a release install runs them: no
+    ACS_WORKER_DIR and a working directory outside the checkout
  5. `acs mcp install claude` into a temp HOME; start the stdio MCP server
     exactly as the generated config says
  6. through MCP: whoami, delegate to echo, delegate to the real worker,
@@ -79,16 +81,17 @@ class Stack:
         self.backups = tmp / "backups"
         self.backups.mkdir()
         self.db = tmp / "db-T_A"
-        self.env = {**{k: v for k, v in os.environ.items() if not k.startswith("NATS_")},
+        self.env = {**{k: v for k, v in os.environ.items()
+                       if not k.startswith(("NATS_", "ACS_", "PYTHONPATH"))},
                     "NATS_URL": self.nats_url, "ACS_HOME": str(self.acs_home),
-                    "ACS_NO_KEYRING": "1", "ACS_SERVER": self.server,
-                    "ACS_WORKER_DIR": str(REPO), "PYTHONUNBUFFERED": "1",
+                    "ACS_NO_KEYRING": "1", "ACS_SERVER": self.server, "PYTHONUNBUFFERED": "1",
                     "ACS_MCP_SERVER": str(REPO / "mcp_server" / "nats_hub_mcp.py")}
         self.hub: subprocess.Popen | None = None
 
-    def spawn(self, name: str, args: list[str], extra: dict | None = None) -> subprocess.Popen:
+    def spawn(self, name: str, args: list[str], extra: dict | None = None,
+              cwd: Path = REPO) -> subprocess.Popen:
         log = (self.tmp / f"{name}.log").open("w")
-        p = subprocess.Popen(args, env={**self.env, **(extra or {})}, cwd=REPO,
+        p = subprocess.Popen(args, env={**self.env, **(extra or {})}, cwd=cwd,
                              stdout=log, stderr=subprocess.STDOUT, text=True)
         self.procs.append(p)
         return p
@@ -259,7 +262,8 @@ def main() -> int:
                 time.sleep(0.1)
         ok(cp.poll() is None, "stub control plane up", st.server)
         login = headless_login(st)
-        ok("Logged in" in login, "acs login --headless", login.splitlines()[-1])
+        ok("Logged in" in login, "acs login --headless",
+           next((line for line in login.splitlines() if line.startswith("Logged in")), login[-100:]))
 
         step("acs agent add")
         roles = {"me": "orchestrator", "echo-dev": "worker", "lock-dev": "worker"}
@@ -271,14 +275,22 @@ def main() -> int:
         mode = oct(Path(st.creds("me")).stat().st_mode & 0o777)
         ok(mode == "0o600", "creds file is 0600", mode)
 
-        step("workers via acs worker run")
-        st.spawn("echo-dev", [str(ACS), "worker", "run", "--identity", "echo-dev", "echo"])
+        step("workers via acs worker run (runtime built into acs, no checkout)")
+        workers = {"echo-dev": st.spawn("echo-dev", [str(ACS), "worker", "run", "--identity", "echo-dev",
+                                                     "echo"], cwd=tmp)}
         if args.real_worker:
             extra = {"claude": ["--repo", str(tmp), "--model", "haiku", "--permission-mode", "plan"]}
-            st.spawn(f"{args.real_worker}-dev", [str(ACS), "worker", "run", "--identity",
-                                                 f"{args.real_worker}-dev", args.real_worker,
-                                                 "--", *extra.get(args.real_worker, [])])
-        time.sleep(3)
+            name = f"{args.real_worker}-dev"
+            workers[name] = st.spawn(name, [str(ACS), "worker", "run", "--identity", name, args.real_worker,
+                                            "--", *extra.get(args.real_worker, [])], cwd=tmp)
+        # The first run writes the embedded modules and pip-installs a private venv.
+        for name, proc in workers.items():
+            log = tmp / f"{name}.log"
+            deadline = time.time() + 180
+            while proc.poll() is None and "] ready" not in log.read_text() and time.time() < deadline:
+                time.sleep(0.2)
+            runtime = ", ".join(p.name for p in (st.acs_home / "worker").glob("*-*/"))
+            ok("] ready" in log.read_text(), f"acs worker run {name} ready", f"runtime {runtime}")
 
         step("acs mcp install claude (temp HOME)")
         r = st.acs("mcp", "install", "claude", "--identity", "me", "--home", str(st.home))

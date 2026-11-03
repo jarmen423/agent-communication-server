@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
-# install.sh — bootstrap a remote machine to join a nats-hub.
+# install.sh — bootstrap a remote machine to join a SELF-HOSTED nats-hub.
+#
+# Hosted ACS users don't need this: `acs worker run <backend> --identity <id>`
+# ships its own worker runtime (docs/ACS_CONNECTOR.md).
 #
 # Creates a Python venv, installs the minimal pip requirements, and copies
 # the thin file set (see FILES.txt) into a target directory. Idempotent:
@@ -9,7 +12,9 @@
 # adapter yourself with the credential your operator gave you.
 #
 # USAGE
-#   ./install.sh [target-dir] [options]      # default target: ~/nats-hub-remote
+#   ./install.sh [target-dir] [options]
+#                           default target: ~/.local/share/nats-hub/remote
+#                           (where `acs` looks for the worker bundle)
 #
 #   --from-release TAG      Install the file set from the GitHub release TAG
 #                           (or "latest"): downloads nats-hub-remote-*.tar.gz
@@ -59,7 +64,7 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-TARGET_DIR="${TARGET_DIR:-$HOME/nats-hub-remote}"
+TARGET_DIR="${TARGET_DIR:-$HOME/.local/share/nats-hub/remote}"
 REPO_URL="${REPO_URL%.git}"
 REPO_URL="${REPO_URL%/}"
 
@@ -256,11 +261,17 @@ cat <<EOF
   Files:     $copied copied, $missing skipped
 ─────────────────────────────────────────────────────────────────────
 
-NEXT STEP — launch the adapter. Fill in IDENTITY and your credential.
+HOSTED ACS: if you signed in with \`acs login\`, you don't need this bundle;
+acs ships its own worker runtime:
 
-Activate the venv:
+    acs worker run claude --identity <IDENTITY> -- --repo /path/to/repo
+
+SELF-HOSTED HUB — launch the adapter. Fill in IDENTITY and your credential.
+
+Activate the venv and enter the bundle:
 
     source "$VENV_DIR/bin/activate"
+    cd "$TARGET_DIR"
 
 Example A — token auth over wss:// (self-signed / private-CA cert):
 
