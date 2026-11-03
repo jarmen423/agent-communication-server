@@ -16,6 +16,7 @@ fn sample_event(event_type_str: &str, data: serde_json::Value) -> Envelope {
             timestamp: Utc::now(),
             kind: MessageKind::Event,
             reply_to: None,
+            origin: None,
         },
         payload: serde_json::json!({
             "event_type": event_type_str,

@@ -7,6 +7,8 @@ pub mod connect_opts;
 pub mod delivery;
 pub mod events;
 pub mod locks;
+pub mod manifest;
+pub mod origin;
 pub mod protocol;
 pub mod query_api;
 pub mod query_api_client;
@@ -26,6 +28,8 @@ pub use locks::{
     lock_channel, scope_hash, wait_for_locks, AcquireOptions, AcquireOutcome, LockList,
     WaitOutcome, DEFAULT_TTL_SECS, LOCKS_IDENTITY, MAX_TTL_SECS, MIN_TTL_SECS,
 };
+pub use manifest::{AcceptPolicy, IdentityKind, ManifestRecord, OwnerKind, Role};
+pub use origin::{OnBehalfOf, Origin, Reported};
 pub use protocol::{subjects, Envelope, MessageKind, Meta};
 pub use query_api::{ApiRequest, ApiResponse};
 pub use query_api_client::ApiClient;

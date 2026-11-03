@@ -10,6 +10,7 @@ pub const API_PREFIX: &str = "hub.api";
 /// the first token of a legacy operation.
 pub const OP_NAMESPACES: &[&str] = &[
     "wave", "session", "agent", "history", "thread", "envelope", "stats", "ping", "backup", "lock",
+    "manifest",
 ];
 
 /// Build a legacy query API subject: `hub.api.<operation>`.

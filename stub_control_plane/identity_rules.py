@@ -13,7 +13,8 @@ _VALID = re.compile(r"^[A-Za-z0-9_-]+$")
 # crates/client/src/protocol.rs RESERVED_IDENTITIES; tests/python/
 # test_stub_identity_rules_sync.py fails if they drift.
 OP_NAMESPACES = frozenset({"wave", "session", "agent", "history", "thread",
-                           "envelope", "stats", "ping", "backup", "lock"})
+                           "envelope", "stats", "ping", "backup", "lock",
+                           "manifest"})
 RESERVED = frozenset({"hub-server", "hub-orchestrator", "hub-locks", "visualizer"})
 
 

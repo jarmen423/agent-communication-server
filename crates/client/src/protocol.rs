@@ -8,6 +8,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use crate::origin::{OnBehalfOf, Origin, Reported};
+
 /// What kind of payload is inside the envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +44,11 @@ pub struct Meta {
     pub kind: MessageKind,
     /// Optional correlation ID for request/reply patterns.
     pub reply_to: Option<String>,
+    /// Provenance (see [`Origin`]). The router replaces every trusted field;
+    /// only `reported` survives from the client. Absent on envelopes from
+    /// older hubs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
 }
 
 /// The unit of communication on the bus.
@@ -70,6 +77,7 @@ impl Envelope {
                 timestamp: Utc::now(),
                 kind,
                 reply_to: None,
+                origin: None,
             },
             payload,
         }

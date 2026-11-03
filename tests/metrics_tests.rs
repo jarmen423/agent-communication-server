@@ -19,6 +19,7 @@ fn env(channel: &str, kind: MessageKind, payload: serde_json::Value) -> Envelope
             timestamp: Utc::now(),
             kind,
             reply_to: None,
+            origin: None,
         },
         payload,
     }
