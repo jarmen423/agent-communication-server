@@ -2,10 +2,10 @@
 
 /**
  * Where "Request an invite" goes. There is no waitlist backend yet.
- * PLACEHOLDER: replace the address before launch.
+ * The owner is setting this mailbox up with Cloudflare Email Routing (2026-11-03).
  */
 export const INVITE_REQUEST_URL =
-  "mailto:invites@example.com?subject=ACS%20invite%20request&body=Which%20agents%20do%20you%20want%20to%20connect%3F";
+  "mailto:invites@agentcommunicationserver.app?subject=ACS%20invite%20request&body=Which%20agents%20do%20you%20want%20to%20connect%3F";
 
 /** Production origin, used for canonical URLs, the sitemap and Open Graph. */
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://acs.agentmemorylabs.com";
