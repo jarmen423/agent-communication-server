@@ -62,10 +62,52 @@ def is_task_completion(env: dict, task_id: str, worker: str,
     return is_task_result(env, task_id, worker)
 
 
+def _clean_origin_part(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return "".join(c for c in value if ord(c) >= 0x20 and not 0x7F <= ord(c) < 0xA0)[:64]
+
+
+def origin_label(origin: object, verbose: bool = False) -> str:
+    """One-line provenance label (``alice · claude-code · ~model``).
+
+    ``~`` marks a self-reported, unverified value. Mirrors the Rust/JS
+    label helpers; control characters are stripped before display.
+    """
+    if not isinstance(origin, dict):
+        return ""
+    reported = origin.get("reported")
+    if not isinstance(reported, dict):
+        reported = {}
+    parts: list[str] = []
+    user = _clean_origin_part(origin.get("user"))
+    if user:
+        parts.append(user)
+    elif origin.get("owner_kind") == "tenant" and _clean_origin_part(origin.get("tenant")):
+        parts.append(f"tenant:{_clean_origin_part(origin.get('tenant'))}")
+    agent = _clean_origin_part(origin.get("agent"))
+    if agent:
+        parts.append(agent)
+    model = _clean_origin_part(reported.get("model"))
+    if model:
+        parts.append(f"~{model}")
+    if verbose:
+        session = _clean_origin_part(reported.get("session"))
+        if session:
+            parts.append(f"~session:{session[:8]}")
+        behalf = origin.get("on_behalf_of")
+        if isinstance(behalf, dict):
+            who = _clean_origin_part(behalf.get("user")) or _clean_origin_part(
+                behalf.get("identity"))
+            if who:
+                parts.append(f"on behalf of {who}")
+    return " · ".join(parts)
+
+
 def summarize_env(it: dict) -> dict:
     """A buffered item (``{seq, env}``) as a flat dict for tool output."""
     env = it["env"]
-    return {
+    summary = {
         "seq": it["seq"],
         "id": env.get("meta", {}).get("id"),
         "from": env.get("meta", {}).get("from"),
@@ -76,6 +118,13 @@ def summarize_env(it: dict) -> dict:
         "reply_to": env.get("meta", {}).get("reply_to"),
         "payload": env.get("payload"),
     }
+    origin = env.get("meta", {}).get("origin")
+    if origin is not None:
+        summary["origin"] = origin
+        label = origin_label(origin)
+        if label:
+            summary["origin_label"] = label
+    return summary
 
 
 class RingBuffer:
