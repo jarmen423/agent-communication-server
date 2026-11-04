@@ -73,7 +73,7 @@ prune: ## Remove merged git worktrees (+ their target dirs) and GC the shared bu
 
 
 .PHONY: test-manifest
-test-manifest:
+test-manifest: ## Test manifest writer and accept policy with bound and durable delivery
 	NATS_HUB_MANIFEST=1 NATS_HUB_REQUIRE_BOUND=1 scripts/dev/with_stack.sh cargo test --test manifest_ops --test provenance_live --test identity_hub_admin --test accept_policy
 	NATS_HUB_MANIFEST=1 NATS_HUB_REQUIRE_BOUND=1 scripts/dev/with_stack.sh .venv/bin/python -m pytest -q tests/python/test_accept_policy.py
 	NATS_HUB_MANIFEST=1 NATS_HUB_REQUIRE_BOUND=1 NATS_HUB_DURABLE=1 scripts/dev/with_stack.sh cargo test --test manifest_ops --test provenance_live --test identity_hub_admin --test accept_policy

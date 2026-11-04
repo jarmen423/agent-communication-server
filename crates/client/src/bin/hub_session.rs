@@ -196,6 +196,27 @@ async fn create_session(
     let mut rejection_rx = client.subscribe_inbox().await?;
     client.send(&env).await?;
 
+    let ready = tokio::select! {
+        received = session_rx.recv() => received.is_some_and(|env| env.meta.kind == MessageKind::Status && env.payload["status"] == "ready"),
+        _ = async {
+            while let Some(notice) = rejection_rx.recv().await {
+                if let Some(error) = nats_hub_client::accept::is_rejection(&notice, &env.meta.id, client.identity()) {
+                    eprintln!("refused by {worker}'s accept policy: {error}");
+                    std::process::exit(nats_hub_client::accept::EXIT_REFUSED);
+                }
+            }
+            std::future::pending::<()>().await;
+        } => false,
+        _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
+            eprintln!("[hub-session] TIMEOUT: no ready signal from {worker} after {timeout}s");
+            std::process::exit(2);
+        }
+    };
+    if ready {
+        eprintln!("[hub-session] worker {worker} is ready");
+    } else {
+        eprintln!("[hub-session] warning: no ready signal received (session still created)");
+    }
     // Persist session via query API
     let now = chrono::Utc::now();
     let record = SessionRecord {
@@ -216,27 +237,6 @@ async fn create_session(
         .request("session.create", serde_json::to_value(&record)?)
         .await;
 
-    let ready = tokio::select! {
-        received = session_rx.recv() => received.is_some_and(|env| env.meta.kind == MessageKind::Status && env.payload["status"] == "ready"),
-        _ = async {
-            while let Some(notice) = rejection_rx.recv().await {
-                if let Some(error) = nats_hub_client::accept::is_rejection(&notice, &env.meta.id) {
-                    eprintln!("refused by {worker}'s accept policy: {error}");
-                    std::process::exit(nats_hub_client::accept::EXIT_REFUSED);
-                }
-            }
-            std::future::pending::<()>().await;
-        } => false,
-        _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
-            eprintln!("[hub-session] TIMEOUT: no ready signal from {worker} after {timeout}s");
-            std::process::exit(2);
-        }
-    };
-    if ready {
-        eprintln!("[hub-session] worker {worker} is ready");
-    } else {
-        eprintln!("[hub-session] warning: no ready signal received (session still created)");
-    }
     println!("{session_id}");
     client.drain().await?;
     Ok(())

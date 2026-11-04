@@ -286,11 +286,17 @@ async fn main() -> Result<()> {
         };
 
         for env in incoming {
-            if let Some(error) = nats_hub_client::accept::is_rejected_terminal(&env, &task_id) {
+            if let Some(error) =
+                nats_hub_client::accept::is_rejected_terminal(&env, &task_id, client.identity())
+            {
                 eprintln!("refused by {}'s accept policy: {error}", args.to);
                 std::process::exit(nats_hub_client::accept::EXIT_REFUSED);
             }
-            if env.payload["rejected"] == true && env.meta.from != "hub-server" {
+            if env.payload["rejected"] == true && is_task_result(&env, &task_id, &args.to) {
+                eprintln!("refused by {}'s accept policy", args.to);
+                std::process::exit(nats_hub_client::accept::EXIT_REFUSED);
+            }
+            if env.payload["rejected"] == true {
                 continue;
             }
 

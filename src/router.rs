@@ -26,6 +26,8 @@ mod mirror;
 mod policy;
 #[cfg(all(test, feature = "storage-surreal"))]
 mod provenance_tests;
+#[cfg(all(test, feature = "storage-surreal"))]
+mod review_tests;
 mod routing;
 mod state;
 #[cfg(all(test, feature = "storage-surreal"))]

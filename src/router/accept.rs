@@ -25,19 +25,29 @@ pub(super) const UNKNOWN: &str = "unknown_target";
 pub(super) struct ReplyIndex {
     entries: HashMap<String, (String, String, DateTime<Utc>)>,
     order: VecDeque<String>,
+    bytes: usize,
 }
 impl ReplyIndex {
     pub(super) fn record(&mut self, env: &Envelope) {
         let Some(to) = &env.meta.to else {
             return;
         };
+        if to == "hub-orchestrator" {
+            return;
+        }
         if env.meta.origin.as_ref().and_then(|o| o.identity.as_deref()) != Some(&env.meta.from) {
             return;
         }
         if self.entries.contains_key(&env.meta.id) {
             return;
         }
-        while self.entries.len() >= CAPACITY
+        let cost = 2 * env.meta.id.len() + env.meta.from.len() + to.len();
+        const MAX_BYTES: usize = 32 * 1024 * 1024;
+        if cost > MAX_BYTES {
+            return;
+        }
+        while self.bytes + cost > MAX_BYTES
+            || self.entries.len() >= CAPACITY
             || self.order.front().is_some_and(|id| {
                 self.entries
                     .get(id)
@@ -47,8 +57,11 @@ impl ReplyIndex {
             let Some(id) = self.order.pop_front() else {
                 break;
             };
-            self.entries.remove(&id);
+            if let Some((from, to, _)) = self.entries.remove(&id) {
+                self.bytes -= 2 * id.len() + from.len() + to.len();
+            }
         }
+        self.bytes += cost;
         self.order.push_back(env.meta.id.clone());
         self.entries.insert(
             env.meta.id.clone(),
@@ -59,6 +72,62 @@ impl ReplyIndex {
         self.entries.get(id).is_some_and(|(from, to, ts)| {
             from == target && to == sender && (Utc::now() - *ts).num_seconds() <= TTL
         })
+    }
+}
+#[derive(Default)]
+pub(super) struct NegativeReplies {
+    entries: HashMap<(String, String, String), std::time::Instant>,
+    order: VecDeque<(String, String, String)>,
+}
+impl NegativeReplies {
+    pub(super) fn contains(&self, key: &(String, String, String)) -> bool {
+        self.entries
+            .get(key)
+            .is_some_and(|at| at.elapsed().as_secs() < 60)
+    }
+    pub(super) fn insert(&mut self, key: (String, String, String)) {
+        if key.0.len() + key.1.len() + key.2.len() > 512 {
+            return;
+        }
+        if let Some(at) = self.entries.get_mut(&key) {
+            *at = std::time::Instant::now();
+            return;
+        }
+        while self.entries.len() >= 10_000 {
+            if let Some(old) = self.order.pop_front() {
+                self.entries.remove(&old);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.entries.insert(key, std::time::Instant::now());
+    }
+}
+#[derive(Default)]
+pub(super) struct PublishedNotices {
+    entries: HashMap<String, std::time::Instant>,
+    order: VecDeque<String>,
+}
+impl PublishedNotices {
+    pub(super) fn contains(&self, id: &str, window: u64) -> bool {
+        self.entries
+            .get(id)
+            .is_some_and(|at| at.elapsed().as_secs() < window)
+    }
+    pub(super) fn record(&mut self, id: String) {
+        if id.len() > 1024 {
+            return;
+        }
+        if let Some(at) = self.entries.get_mut(&id) {
+            *at = std::time::Instant::now();
+            return;
+        }
+        while self.entries.len() >= 10_000 {
+            if let Some(old) = self.order.pop_front() {
+                self.entries.remove(&old);
+            }
+        }
+        self.order.push_back(id.clone());
+        self.entries.insert(id, std::time::Instant::now());
     }
 }
 pub(super) type SharedReplies = Mutex<ReplyIndex>;
@@ -95,7 +164,7 @@ pub(super) fn decide(
     let allowed = match target_record.effective_accept() {
         AcceptPolicy::Owner => {
             if target_record.user.is_none() {
-                tracing::warn!("tenant-owned identity has owner accept policy");
+                tracing::debug!("tenant-owned identity has owner accept policy");
             }
             user.is_some() && user == target_record.user.as_deref()
         }
@@ -138,6 +207,32 @@ mod tests {
         }
         m
     }
+    #[test]
+    fn reply_index_bounds_bytes_and_excludes_service_inbox() {
+        let mut index = ReplyIndex::default();
+        let mut env = Envelope::new(
+            "alice",
+            "chat",
+            crate::protocol::MessageKind::Message,
+            json!({}),
+        )
+        .to("hub-orchestrator");
+        env.meta.origin = Some(Origin {
+            identity: Some("alice".into()),
+            ..Default::default()
+        });
+        index.record(&env);
+        assert!(index.entries.is_empty());
+        env.meta.to = Some("w".repeat(1024 * 1024));
+        for n in 0..40 {
+            env.meta.id = format!("id-{n}");
+            index.record(&env);
+        }
+        assert!(index.bytes <= 32 * 1024 * 1024);
+        assert!(index.entries.len() < 40);
+        assert!(!index.entries.contains_key("id-0"));
+    }
+
     #[tokio::test]
     async fn owner_bound_legacy_unknown_and_no_writer() {
         let m = manifest(true).await;

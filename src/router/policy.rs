@@ -43,16 +43,38 @@ impl ControlPlane {
                 env.meta.reply_to.as_deref(),
                 &self.core.replies.lock().unwrap(),
             );
+            let cleanup = bound == Some("hub-orchestrator")
+                && matches!(
+                    env.payload["action"].as_str(),
+                    Some("cancel" | "session_close")
+                );
+            let decision = if cleanup { Decision::Allow } else { decision };
             let reason = match decision {
                 Decision::Allow => None,
                 Decision::Refuse(reason) => Some(reason),
                 Decision::NeedsReplyLookup(id) => {
                     let effective = accept::effective_sender(sender(), env.meta.origin.as_ref());
-                    let allowed = if let Some(storage) = &self.storage {
-                        stored_reply_allows(storage.as_ref(), &id, target, effective).await
+                    let key = (
+                        id.clone(),
+                        target.to_owned(),
+                        effective.unwrap_or_default().to_owned(),
+                    );
+                    let cached = self.core.negative_replies.lock().unwrap().contains(&key);
+                    let allowed = if cached {
+                        false
+                    } else if let Some(storage) = &self.storage {
+                        tokio::time::timeout(
+                            std::time::Duration::from_millis(250),
+                            stored_reply_allows(storage.as_ref(), &id, target, effective),
+                        )
+                        .await
+                        .unwrap_or(false)
                     } else {
                         false
                     };
+                    if !allowed {
+                        self.core.negative_replies.lock().unwrap().insert(key);
+                    }
                     (!allowed).then_some(accept::POLICY)
                 }
             };
@@ -83,11 +105,27 @@ impl ControlPlane {
         for mut notice in notices {
             notice.meta.reply_to = Some(refused.meta.id.clone());
             let dest = format!("channel.{}", notice.meta.channel);
-            let bytes = notice.to_json_bytes()?;
+            let Some(bytes) = self.core.encode_within_limit("rejection", &mut notice) else {
+                continue;
+            };
             let duplicate = if let Some(ingress) = durable {
+                // Stream deduplication does not suppress live core subscribers.
+                // Avoid republishing notices already acknowledged in this process.
+                if self
+                    .core
+                    .published_notices
+                    .lock()
+                    .unwrap()
+                    .contains(&notice.meta.id, ingress.cfg.duplicate_window_secs)
+                {
+                    continue;
+                }
                 let mut headers = async_nats::HeaderMap::new();
                 let id = crate::delivery::router_msg_id("hub-server", &notice.meta.id);
-                headers.insert(crate::delivery::MSG_ID_HEADER, id.as_str());
+                headers.insert(
+                    crate::delivery::MSG_ID_HEADER,
+                    id.parse::<async_nats::HeaderValue>()?,
+                );
                 ingress
                     .js
                     .publish_with_headers(dest, headers, bytes.into())
@@ -98,6 +136,13 @@ impl ControlPlane {
                 self.nats.publish(dest, bytes.into()).await?;
                 false
             };
+            if durable.is_some() {
+                self.core
+                    .published_notices
+                    .lock()
+                    .unwrap()
+                    .record(notice.meta.id.clone());
+            }
             if !duplicate {
                 self.core.emit_ws(&notice);
                 self.core.mirror_envelope(notice);
@@ -126,11 +171,11 @@ fn rejection_notices(refused: &Envelope, bound: Option<&str>, reason: &str) -> V
             MessageKind::Control,
             json!({
                 "action":"rejected", "reason":"accept_policy", "message_id":refused.meta.id,
-                "target": target, "error":error,
+                "target": target, "error":error, "refused_sender":sender,
             }),
         )
         .to(sender);
-        notice.meta.id = format!("rej-{}", refused.meta.id);
+        notice.meta.id = format!("rej-{sender}-{}", refused.meta.id);
         notices.push(notice);
     }
     let channel = refused
@@ -138,22 +183,24 @@ fn rejection_notices(refused: &Envelope, bound: Option<&str>, reason: &str) -> V
         .get("task_channel")
         .and_then(|v| v.as_str())
         .unwrap_or(&refused.meta.channel);
-    if nats_hub_client::accept::task_channel(channel) {
+    if let Some(sender) = bound.filter(|_| nats_hub_client::accept::task_channel(channel)) {
         let task_id = refused
             .payload
             .get("task_id")
             .and_then(|v| v.as_str())
             .or_else(|| refused.payload.get("session_id").and_then(|v| v.as_str()))
+            .filter(|id| nats_hub_client::accept::valid_message_id(id))
             .unwrap_or(&refused.meta.id);
         let mut terminal = Envelope::new(
             "hub-server",
             channel,
             MessageKind::Message,
             json!({
+                "message_id":refused.meta.id, "refused_sender":sender,
                 "status":"error", "task_id":task_id, "result":null, "error":error, "rejected":true,
             }),
         );
-        terminal.meta.id = format!("rej-term-{}", refused.meta.id);
+        terminal.meta.id = format!("rej-term-{sender}-{}", refused.meta.id);
         notices.push(terminal);
     }
     notices
@@ -202,6 +249,25 @@ mod tests {
         assert_eq!(notices[0].meta.to.as_deref(), Some("bound"));
         assert_eq!(notices[0].meta.channel, "inbox.bound");
     }
+    #[test]
+    fn notices_are_sender_scoped_and_echo_only_bounded_task_ids() {
+        let env = Envelope::new(
+            "untrusted",
+            "task.safe",
+            MessageKind::Message,
+            json!({"task_id":"bad\r\nid"}),
+        )
+        .to("worker");
+        assert!(rejection_notices(&env, None, accept::POLICY).is_empty());
+        let a = rejection_notices(&env, Some("alice"), accept::POLICY);
+        let b = rejection_notices(&env, Some("bob"), accept::POLICY);
+        assert_ne!(a[0].meta.id, b[0].meta.id);
+        assert_ne!(a[1].meta.id, b[1].meta.id);
+        assert_eq!(a[1].payload["task_id"], env.meta.id);
+        assert_eq!(a[1].payload["refused_sender"], "alice");
+        assert_eq!(a[1].payload["message_id"], env.meta.id);
+    }
+
     #[tokio::test]
     async fn storage_fallback_checks_pair_provenance_and_age() {
         let storage = SurrealStorage::connect_memory().await.unwrap();

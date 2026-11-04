@@ -40,12 +40,14 @@ async fn gate_delivery_notice_terminal_and_history() {
         .await
         .unwrap()
         .unwrap();
-    assert!(nats_hub_client::accept::is_rejection(&notice, &refused.meta.id).is_some());
+    assert!(nats_hub_client::accept::is_rejection(&notice, &refused.meta.id, &bob).is_some());
     let terminal = tokio::time::timeout(Duration::from_secs(2), terminals.recv())
         .await
         .unwrap()
         .unwrap();
-    assert!(nats_hub_client::accept::is_rejected_terminal(&terminal, &refused.meta.id).is_some());
+    assert!(
+        nats_hub_client::accept::is_rejected_terminal(&terminal, &refused.meta.id, &bob).is_some()
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(150), inbox.recv())
             .await
@@ -65,12 +67,11 @@ async fn gate_delivery_notice_terminal_and_history() {
                 .await
                 .is_err()
         );
-        // JetStream dedupes storage; core subscribers may see the same id again.
-        if let Ok(Some(again)) =
-            tokio::time::timeout(Duration::from_millis(300), terminals.recv()).await
-        {
-            assert_eq!(again.meta.id, terminal.meta.id);
-        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), terminals.recv())
+                .await
+                .is_err()
+        );
         use futures_util::StreamExt;
         let stream = async_nats::jetstream::new(raw)
             .get_stream("HUB_TASKS")
@@ -221,7 +222,8 @@ async fn policies_replies_cli_and_waves() {
             .await
             .unwrap()
             .unwrap(),
-        &env.meta.id
+        &env.meta.id,
+        &unknown
     )
     .is_some());
 
@@ -286,6 +288,22 @@ async fn policies_replies_cli_and_waves() {
                         *owner
                     );
                     let channel = format!("wave.{wave}.task.t");
+                    let attack = Envelope::new(
+                        &bob,
+                        &channel,
+                        MessageKind::Message,
+                        json!({"prompt":"attack", "task_channel":channel, "task_id":"t"}),
+                    )
+                    .to(&worker);
+                    let mut attack = attack;
+                    attack.meta.id = dm.meta.id.clone();
+                    b.send(&attack).await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    let state = api
+                        .request("wave.status", json!({"wave_id":wave}))
+                        .await
+                        .unwrap();
+                    assert_eq!(state["wave"]["status"], "running");
                     w.send(&Envelope::new(
                         &worker,
                         channel,
@@ -327,7 +345,8 @@ async fn policies_replies_cli_and_waves() {
             .await
             .unwrap()
             .unwrap(),
-        &env.meta.id
+        &env.meta.id,
+        &alice
     )
     .is_some());
 }
@@ -351,3 +370,6 @@ async fn delivered(
         env.meta.id
     );
 }
+
+#[path = "accept_policy/review.rs"]
+mod review;

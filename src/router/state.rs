@@ -29,7 +29,9 @@ pub(super) const ROUTER_HEADER_OVERHEAD: usize = 64;
 /// (so it can be exercised without a server).
 pub(crate) struct RouterCore {
     pub(super) routing: RoutingTable,
+    pub(super) published_notices: std::sync::Mutex<super::accept::PublishedNotices>,
     pub(super) replies: super::accept::SharedReplies,
+    pub(super) negative_replies: std::sync::Mutex<super::accept::NegativeReplies>,
     pub(super) registry: AgentRegistry,
     pub(super) metrics: Option<Arc<MetricsCollector>>,
     /// When true, legacy self-asserted subjects (`hub.send.*`, `hub.register`,
@@ -57,7 +59,9 @@ impl RouterCore {
     pub(crate) fn new() -> Self {
         Self {
             routing: RoutingTable::new(),
+            published_notices: Default::default(),
             replies: Default::default(),
+            negative_replies: Default::default(),
             registry: AgentRegistry::new(),
             metrics: None,
             require_bound: false,
@@ -133,6 +137,16 @@ impl RouterCore {
             }
         };
 
+        if !nats_hub_client::accept::valid_message_id(&env.meta.id)
+            || env
+                .meta
+                .reply_to
+                .as_deref()
+                .is_some_and(|id| !nats_hub_client::accept::valid_message_id(id))
+        {
+            self.count_dropped();
+            return None;
+        }
         let tenant = self.tenant.as_deref();
         let channel: &str = match bound_send_subject(subject) {
             Some((ident, channel)) if valid_identity(ident) => {
@@ -151,7 +165,9 @@ impl RouterCore {
                 return None;
             }
             None => {
-                if !self.legacy_subject(subject) {
+                if !self.legacy_subject(subject)
+                    || crate::protocol::reserved_identity(&env.meta.from)
+                {
                     return None;
                 }
                 stamp(&mut env, Sender::Legacy, tenant, &self.manifest);
@@ -221,7 +237,7 @@ impl RouterCore {
     /// `origin.reported` and try once more; if it still doesn't fit, count it
     /// and return `None`. The durable router terminates a `None`, so an
     /// oversize message is never retried in a loop.
-    fn encode_within_limit(&self, subject: &str, env: &mut Envelope) -> Option<Vec<u8>> {
+    pub(super) fn encode_within_limit(&self, subject: &str, env: &mut Envelope) -> Option<Vec<u8>> {
         let limit = self.publish_limit(env);
         let bytes = encode(subject, env)?;
         if bytes.len() <= limit {
@@ -247,6 +263,14 @@ impl RouterCore {
             self.max_payload.saturating_sub(header)
         } else {
             self.max_payload
+        }
+    }
+
+    pub(super) fn count_dropped(&self) {
+        if let Some(metrics) = &self.metrics {
+            metrics
+                .invalid_message_id_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

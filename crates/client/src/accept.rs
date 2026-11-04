@@ -7,15 +7,27 @@ use crate::{
 pub const REJECTED_ACTION: &str = "rejected";
 pub const EXIT_REFUSED: i32 = 5;
 
-pub fn is_rejection<'a>(env: &'a Envelope, sent_id: &str) -> Option<&'a str> {
+pub fn valid_message_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| (0x21..=0x7e).contains(&b))
+}
+
+pub fn is_rejection<'a>(env: &'a Envelope, sent_id: &str, identity: &str) -> Option<&'a str> {
     (env.meta.from == "hub-server"
+        && env.payload["refused_sender"] == identity
+        && env.payload["message_id"] == sent_id
         && env.payload["action"] == REJECTED_ACTION
         && env.meta.reply_to.as_deref() == Some(sent_id))
     .then(|| env.payload["error"].as_str())
     .flatten()
 }
-pub fn is_rejected_terminal<'a>(env: &'a Envelope, task_id: &str) -> Option<&'a str> {
+pub fn is_rejected_terminal<'a>(
+    env: &'a Envelope,
+    task_id: &str,
+    identity: &str,
+) -> Option<&'a str> {
     (env.meta.from == "hub-server"
+        && env.payload["refused_sender"] == identity
+        && env.payload["message_id"] == task_id
         && env.payload["rejected"] == true
         && env.payload["task_id"] == task_id)
         .then(|| env.payload["error"].as_str())
@@ -44,7 +56,14 @@ pub fn worker_allows(record: &ManifestRecord, origin: Option<&Origin>) -> bool {
     match record.effective_accept() {
         AcceptPolicy::Owner => user.is_some() && user == record.user.as_deref(),
         AcceptPolicy::Users { users } => user.is_some_and(|u| users.iter().any(|s| s == u)),
-        AcceptPolicy::Tenant => origin.owner_kind.is_some(),
+        AcceptPolicy::Tenant => {
+            origin.owner_kind.is_some()
+                || (origin.identity.as_deref() == Some("hub-orchestrator")
+                    && origin
+                        .on_behalf_of
+                        .as_ref()
+                        .is_some_and(|o| !o.identity.is_empty()))
+        }
     }
 }
 
@@ -89,6 +108,7 @@ impl WorkerPolicy {
                 .get("task_id")
                 .and_then(|v| v.as_str())
                 .or_else(|| env.payload.get("session_id").and_then(|v| v.as_str()))
+                .filter(|id| valid_message_id(id))
                 .unwrap_or(&env.meta.id);
             let mut result = Envelope::new(
                 client.identity(),

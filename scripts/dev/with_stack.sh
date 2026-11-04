@@ -32,7 +32,7 @@ port="$(free_port)"
 echo "==> nats-server on :$port"
 nats-server -a 127.0.0.1 -p "$port" -js -sd "$tmp/js" >"$tmp/nats.log" 2>&1 &
 pids+=("$!")
-wait_port 127.0.0.1 "$port" 2>&2 || { echo "nats-server failed to start"; cat "$tmp/nats.log"; exit 1; }
+wait_port 127.0.0.1 "$port" || { echo "nats-server failed to start"; cat "$tmp/nats.log"; exit 1; }
 
 export NATS_URL="nats://127.0.0.1:$port"
 export TEST_NATS_URL="$NATS_URL"

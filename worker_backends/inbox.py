@@ -74,7 +74,7 @@ class InboxDispatcher:
         if not self._seen.first_sight(meta.get("id")):
             logger.debug("duplicate envelope %s dropped", meta.get("id"))
             return
-        if (msg.subject == self.inbox_subject and self.accept_check is not None
+        if (self.accept_check is not None
                 and not await self.accept_check.allows(envelope)):
             return
         cancel_id = cancel_request(envelope)
@@ -94,6 +94,8 @@ class InboxDispatcher:
         if not isinstance(payload, dict) or payload.get("action") not in SESSION_CHANNEL_ACTIONS:
             return
         if (envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS:
+            return
+        if self.accept_check is not None and not await self.accept_check.allows(envelope):
             return
         self._enqueue(msg, envelope)
 
@@ -156,7 +158,7 @@ class InboxDispatcher:
                 if task_id in self._reported:
                     self._reported.discard(task_id)
                     continue
-                if (msg.subject == self.inbox_subject and self.accept_check is not None
+                if (self.accept_check is not None
                         and not await self.accept_check.allows(envelope)):
                     continue
                 await self.handle(msg, envelope)
@@ -187,7 +189,9 @@ def policy_allows(record: dict, origin: Any) -> bool:
         policy = {"from": "tenant" if human or record.get("identity") == "owner"
                   or record.get("owner_kind") == "tenant" else "owner"}
     if policy.get("from") == "tenant":
-        return origin.get("owner_kind") is not None
+        return (origin.get("owner_kind") is not None or
+                (origin.get("identity") == "hub-orchestrator" and
+                 bool((origin.get("on_behalf_of") or {}).get("identity"))))
     if policy.get("from") == "users":
         return user is not None and user in policy.get("users", [])
     return user is not None and user == record.get("user")
@@ -210,6 +214,12 @@ class AcceptCheck:
             logger.debug("manifest.self unavailable", exc_info=True)
 
     async def allows(self, envelope):
+        payload = envelope.get("payload") or {}
+        action = payload.get("action")
+        if (action in ("cancel", "session_close") or
+                (action not in ("session_start", "session_send") and
+                 (envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS)):
+            return True
         if self.record is None or policy_allows(self.record, envelope.get("meta", {}).get("origin")):
             return True
         meta = envelope.get("meta") or {}
@@ -219,7 +229,9 @@ class AcceptCheck:
             channel = meta.get("channel")
         if task_channel(channel):
             task_id = next((payload[k] for k in ("task_id", "session_id")
-                            if isinstance(payload.get(k), str)), meta.get("id"))
+                            if isinstance(payload.get(k), str)
+                            and 0 < len(payload[k]) <= 128
+                            and all("!" <= c <= "~" for c in payload[k])), meta.get("id"))
             await self.publish(channel, "message", {
                 "status": "error", "task_id": task_id, "result": None,
                 "error": "refused by worker accept policy", "rejected": True,

@@ -123,6 +123,10 @@ class TaskTracker:
         self.task_id = task_id
         self.task_channel = task_channel
         self.worker = worker
+        try:
+            self.sender = conn.identity()
+        except RuntimeError:
+            self.sender = None
         self.events = RingBuffer(EVENTS_PER_TASK)
         self.other_messages = RingBuffer(100)
         self.last_status: str | None = None
@@ -173,8 +177,10 @@ class TaskTracker:
         elif kind == "event":
             await self.events.put(env)
         elif (is_task_result(env, self.task_id, self.worker) or (
-                meta.get("from") == "hub-server" and env.get("payload", {}).get("rejected") is True
-                and env.get("payload", {}).get("task_id") == self.task_id)) and self.result is None:
+                self.sender is not None and meta.get("from") == "hub-server" and env.get("payload", {}).get("rejected") is True
+                and env.get("payload", {}).get("task_id") == self.task_id
+                and env.get("payload", {}).get("message_id") == self.task_id
+                and env.get("payload", {}).get("refused_sender") == self.sender)) and self.result is None:
             self.result = env
             payload = env.get("payload", {})
             if payload.get("rejected") is True:

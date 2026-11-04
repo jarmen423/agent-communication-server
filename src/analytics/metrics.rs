@@ -106,6 +106,7 @@ pub struct MetricsCollector {
     /// Grand total of envelopes routed.
     pub messages_total: AtomicU64,
     pub accept_refused_total: AtomicU64,
+    pub invalid_message_id_total: AtomicU64,
     /// Per-kind counts, indexed by `kind_index`.
     pub by_kind: [AtomicU64; KIND_COUNT],
     /// Per-channel-class counts, indexed by `ChannelClass::index`.
@@ -228,7 +229,9 @@ impl MetricsCollector {
     pub fn render_prometheus(&self) -> String {
         let mut out = String::new();
 
-        out.push_str(&format!("# TYPE nats_hub_router_accept_refused_total counter\nnats_hub_router_accept_refused_total {}\n", self.accept_refused_total.load(Ordering::Relaxed)));
+        out.push_str(&format!("# HELP nats_hub_router_accept_refused_total DMs refused by the accept policy.\n# TYPE nats_hub_router_accept_refused_total counter\nnats_hub_router_accept_refused_total {}\n", self.accept_refused_total.load(Ordering::Relaxed)));
+
+        out.push_str(&format!("# HELP nats_hub_router_invalid_message_id_total Envelopes dropped for invalid message identifiers.\n# TYPE nats_hub_router_invalid_message_id_total counter\nnats_hub_router_invalid_message_id_total {}\n", self.invalid_message_id_total.load(Ordering::Relaxed)));
 
         // Total messages
         out.push_str("# HELP natshub_messages_total Total envelopes routed by the control plane\n");

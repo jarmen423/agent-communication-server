@@ -100,10 +100,14 @@ impl ControlPlane {
         let stored = match ingress.cfg.stream_for(&dest) {
             Some(_) => {
                 let mut headers = async_nats::HeaderMap::new();
-                headers.insert(
-                    delivery::MSG_ID_HEADER,
-                    delivery::router_msg_id(&env.meta.from, &env.meta.id).as_str(),
-                );
+                let Ok(value) = delivery::router_msg_id(&env.meta.from, &env.meta.id)
+                    .parse::<async_nats::HeaderValue>()
+                else {
+                    self.core.count_dropped();
+                    ack(&msg, AckKind::Term).await;
+                    return;
+                };
+                headers.insert(delivery::MSG_ID_HEADER, value);
                 match ingress
                     .js
                     .publish_with_headers(dest.clone(), headers, bytes.into())

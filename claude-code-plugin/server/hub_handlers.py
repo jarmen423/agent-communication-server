@@ -291,7 +291,9 @@ async def _start_session_checked(args: dict) -> dict:
         return await h.inbox.buf.wait_for(
             lambda env: env.get("meta", {}).get("from") == "hub-server"
             and env.get("meta", {}).get("reply_to") == sent_id
-            and env.get("payload", {}).get("action") == "rejected",
+            and env.get("payload", {}).get("action") == "rejected"
+            and env.get("payload", {}).get("message_id") == sent_id
+            and env.get("payload", {}).get("refused_sender") == conn.identity(),
             since=since, timeout=min(float(args.get("timeout", 30)), 5))
     async def ready():
         buffer = await h.session_buffer(result["data"]["session_id"])

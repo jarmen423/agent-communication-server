@@ -46,6 +46,9 @@ async fn run_server(
 ) -> Result<()> {
     let tenant = args.tenant_label()?;
     let writers = args.manifest_writers()?;
+    if !writers.is_empty() && !args.require_bound_identity {
+        anyhow::bail!("--manifest-writer requires --require-bound-identity");
+    }
     let manifest = Arc::new(IdentityManifest::new(writers));
 
     // Set up the live metrics collector (always available, storage-independent).

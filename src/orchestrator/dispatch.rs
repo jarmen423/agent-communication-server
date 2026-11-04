@@ -67,13 +67,11 @@ impl WaveOrchestrator {
         wave_id: &str,
         task: &WaveTaskRecord,
     ) -> Result<()> {
+        let Some(owner) = self.waves.get(wave_id).map(|rt| rt.owner.clone()) else {
+            return Ok(());
+        };
         self.ensure_task_session(wave_id, task).await;
-        let env = messages::session_start(
-            self.client.identity(),
-            &self.waves[wave_id].owner,
-            wave_id,
-            task,
-        );
+        let env = messages::session_start(self.client.identity(), &owner, wave_id, task);
         self.client
             .send(&env)
             .await
@@ -149,6 +147,9 @@ impl WaveOrchestrator {
     /// cancel (the worker may still be running it), then `session_close`,
     /// and close the session record.
     pub(super) async fn release_task(&self, wave_id: &str, task: &WaveTaskRecord, cancel: bool) {
+        let Some(owner) = self.waves.get(wave_id).map(|rt| rt.owner.clone()) else {
+            return;
+        };
         let identity = self.client.identity();
         if cancel {
             let dispatch_id = self
@@ -157,18 +158,12 @@ impl WaveOrchestrator {
                 .and_then(|rt| rt.dispatch_ids.get(&task.task_id))
                 .cloned()
                 .unwrap_or_else(|| task.task_id.clone());
-            let env = messages::cancel(
-                identity,
-                &self.waves[wave_id].owner,
-                wave_id,
-                task,
-                &dispatch_id,
-            );
+            let env = messages::cancel(identity, &owner, wave_id, task, &dispatch_id);
             if let Err(e) = self.client.send(&env).await {
                 warn!(error = %e, %wave_id, task_id = %task.task_id, "cancel DM failed");
             }
         }
-        let env = messages::session_close(identity, &self.waves[wave_id].owner, wave_id, task);
+        let env = messages::session_close(identity, &owner, wave_id, task);
         if let Err(e) = self.client.send(&env).await {
             warn!(error = %e, %wave_id, task_id = %task.task_id, "session_close DM failed");
         }

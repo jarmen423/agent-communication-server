@@ -207,7 +207,9 @@ impl Stop {
 async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
     loop {
         if let Some((task, prompt)) = inbox.pop_queued() {
-            handle_task(client, args, task, prompt, inbox).await;
+            if POLICY.check(client, &task).await {
+                handle_task(client, args, task, prompt, inbox).await;
+            }
             continue;
         }
         let Some((mut env, direct)) = inbox.recv().await else {
@@ -215,13 +217,13 @@ async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
         };
         if direct {
             env.meta.to = Some(client.identity().into());
-            if !POLICY.check(client, &env).await {
-                continue;
-            }
         }
         if let Some(id) = cancel_target(&env, direct) {
             // Nothing runs between tasks; only a queued task can match.
             on_cancel(client, inbox, id, &env.meta.from, None).await;
+            continue;
+        }
+        if task_prompt(&env, direct).is_ok() && !POLICY.check(client, &env).await {
             continue;
         }
         if !admit_session(inbox, &env) {
@@ -291,6 +293,9 @@ async fn queue_or_reject(
             return;
         }
     };
+    if !POLICY.check(client, &env).await {
+        return;
+    }
     if inbox.alias_redispatch(&env, running) {
         info!(id = %env.meta.id, "session_start for a session already in flight: aliased, not re-run");
         return;
@@ -317,7 +322,7 @@ async fn handle_task(
     prompt: String,
     inbox: &mut Inbox,
 ) {
-    if env.meta.to.is_some() && !POLICY.check(client, &env).await {
+    if !POLICY.check(client, &env).await {
         return;
     }
     info!(id = %env.meta.id, from = %env.meta.from, kind = ?env.meta.kind, "running task");
@@ -349,7 +354,6 @@ async fn handle_task(
                 Some((mut other, other_direct)) => {
                     if other_direct {
                         other.meta.to = Some(client.identity().into());
-                        if !POLICY.check(client, &other).await { continue; }
                     }
                     match cancel_target(&other, other_direct) {
                     Some(id) => {
