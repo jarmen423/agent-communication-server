@@ -46,9 +46,9 @@ class Devices:
         self.cfg, self.store, self.issuer = cfg, store, issuer
         self.codes = {}  # ephemeral, never persisted
 
-    def create(self):
+    def create(self, name=None):
         device = {"id": "device-" + opaque_token(12), "tenant": self.cfg.tenant,
-                  "owner": self.cfg.dev_user, "revoked": False,
+                  "owner": self.cfg.dev_user, "name": name, "revoked": False,
                   "refresh": {}, "keys": {}}
         self.store.devices[device["id"]] = device
         self.store.save()
@@ -78,7 +78,7 @@ class Devices:
         self.store.save()
         return JSONResponse({"access_token": token.token, "token_type": "Bearer",
                              "expires_in": self.cfg.access_ttl, "refresh_token": refresh,
-                             "tenant": device["tenant"], "device": device["id"],
+                             "tenant": device["tenant"], "tenants": [t["tenant"] for t in self.memberships()], "device": device["id"],
                              "nats_url": self.cfg.nats_url}, headers=HEADERS)
 
     async def code(self, request):
@@ -88,10 +88,14 @@ class Devices:
             return error(400, "invalid_request", "device request required")
         if data.get("client_id") != "acs":
             return error(400, "invalid_client", "public client_id acs required")
+        name = data.get("device_name", data.get("client_name"))
+        name = name.strip() if isinstance(name, str) else None
+        if name and (len(name) > 64 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name)):
+            name = None
         device_code, user_code = opaque_token(), secrets.token_hex(4).upper()
         self.codes[token_hash(device_code)] = {
             "user_code": user_code, "expires": time.time() + self.cfg.code_ttl,
-            "approved": False, "next_poll": 0, "interval": 1}
+            "approved": False, "next_poll": 0, "interval": 1, "name": name or None}
         verify = f"{self.cfg.issuer}/device/verify"
         return JSONResponse({"device_code": device_code, "user_code": user_code,
                              "verification_uri": verify,
@@ -132,7 +136,7 @@ class Devices:
             if not code["approved"]:
                 return error(400, "authorization_pending", "open the verification URL")
             del self.codes[hashed]
-            return self.issue(self.create())
+            return self.issue(self.create(code.get("name")))
         field = "refresh_token" if grant == "refresh_token" else "key"
         if grant not in ("refresh_token", "service_key"):
             return error(400, "unsupported_grant_type", "unsupported device grant")
@@ -182,6 +186,28 @@ class Devices:
         self.store.save()
         return JSONResponse({"revoked": True}, headers=HEADERS)
 
+    def selected(self, request, data=None):
+        tenant = (data if data is not None else request.query_params).get("tenant", self.cfg.tenant)
+        return tenant if isinstance(tenant, str) and tenant in self.cfg.tenants else None
+
+    def memberships(self):
+        return [{"tenant": t, "kind": "personal" if t == self.cfg.tenant else "org",
+                 "role": self.cfg.membership_roles.get(t, "owner" if t == self.cfg.tenant else "member"),
+                 "handle": self.cfg.dev_user, "personal": t == self.cfg.tenant, "state": "ready"}
+                for t in [self.cfg.tenant, *[t for t in self.cfg.tenants if t != self.cfg.tenant]]]
+
+    async def tenants(self, request):
+        if not self.authenticate(request):
+            return error(401, "invalid_token", "device token required")
+        tenant = request.path_params.get("tenant")
+        if tenant is not None:
+            if tenant not in self.cfg.tenants:
+                return error(403, "access_denied", "foreign tenant")
+            return JSONResponse({"members": [{"handle": self.cfg.dev_user,
+                "role": next(t["role"] for t in self.memberships() if t["tenant"] == tenant),
+                "joined_at": "2026-01-01T00:00:00Z"}]}, headers=HEADERS)
+        return JSONResponse({"tenants": self.memberships()}, headers=HEADERS)
+
     async def manage(self, request):
         device = self.authenticate(request)
         if device is None:
@@ -190,18 +216,31 @@ class Devices:
             device["revoked"] = True
             self.store.save()
             return JSONResponse({"revoked": True}, headers=HEADERS)
-        identities = [vars(i) for i in self.store.identities.values()
-                      if i.kind == "device" and i.client_id == device["id"]
-                      and i.tenant == device["tenant"] and not i.revoked]
-        return JSONResponse({"tenant": device["tenant"], "device": device["id"],
-                             "identities": identities}, headers=HEADERS)
+        tenant = self.selected(request)
+        if request.query_params.get("tenant") == "*":
+            names = list(self.cfg.tenants)
+        elif tenant is None:
+            return error(403, "access_denied", "foreign tenant")
+        else:
+            names = [tenant]
+        records = [{"tenant": t, "identities": [dict(vars(i), device=device.get("name"))
+                    for i in self.store.identities.values() if i.kind == "device"
+                    and i.client_id == device["id"] and i.tenant == t and not i.revoked]}
+                   for t in names]
+        result = {"tenants": records}
+        if "tenant" not in request.query_params:
+            result.update(tenant=device["tenant"], device=device["id"], identities=records[0]["identities"])
+        return JSONResponse(result, headers=HEADERS)
 
     async def identity(self, request):
         device = self.authenticate(request)
         if device is None:
             return error(401, "invalid_token", "device token required")
         if request.method == "DELETE":
-            ident = self.store.identity(device["tenant"], request.path_params["identity"])
+            tenant = self.selected(request)
+            if tenant is None:
+                return error(403, "access_denied", "foreign tenant")
+            ident = self.store.identity(tenant, request.path_params["identity"])
             if not ident or ident.client_id != device["id"] or ident.kind != "device":
                 return error(403, "access_denied", "identity not owned by device")
             ident.revoked = True
@@ -214,20 +253,23 @@ class Devices:
             if role not in ("worker", "orchestrator"):
                 raise ValueError("role must be worker or orchestrator")
             public = check_public_key(data.get("public_key"))
-            if data.get("tenant", device["tenant"]) != device["tenant"]:
+            tenant = self.selected(request, data)
+            if tenant is None:
                 return error(403, "access_denied", "foreign tenant")
         except (ValueError, TypeError):
             return error(400, "invalid_request", "valid identity, role and public user key required")
-        if self.store.identity(device["tenant"], name):
+        if self.store.identity(tenant, name):
             return error(409, "identity_exists", "identity name already registered")
-        ident = Identity(device["tenant"], name, device["owner"], "device", role,
+        ident = Identity(tenant, name, device["owner"], "device", role,
                          client_id=device["id"], nats_public_keys=[public])
-        self.store.identities[f"{device['tenant']}/{name}"] = ident
+        self.store.identities[f"{tenant}/{name}"] = ident
         self.store.save()
-        return JSONResponse({"identity": name, "role": role}, status_code=201, headers=HEADERS)
+        return JSONResponse({"identity": name, "role": role, "tenant": tenant}, status_code=201, headers=HEADERS)
 
     def routes(self):
-        return [Route("/device/code", self.code, methods=["POST"]),
+        return [Route("/v1/tenants", self.tenants, methods=["GET"]),
+                Route("/v1/tenants/{tenant}/members", self.tenants, methods=["GET"]),
+                Route("/device/code", self.code, methods=["POST"]),
                 Route("/device/verify", self.verify, methods=["GET", "POST"]),
                 Route("/device/token", self.token, methods=["POST"]),
                 Route("/device/service-key", self.service_key, methods=["POST", "DELETE"]),

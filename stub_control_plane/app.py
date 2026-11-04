@@ -98,11 +98,12 @@ def create_app(cfg: StubConfig, store: Store, issuer: TokenIssuer) -> Starlette:
             return _error(400, "invalid_request", "JSON object required")
         device = devices.authenticate(request)
         if device:
-            tenant, name = device["tenant"], data.get("identity")
+            tenant, name = devices.selected(request, data), data.get("identity")
+            if tenant is None:
+                return _error(403, "access_denied", "foreign tenant")
             ident = store.identity(tenant, str(name))
             if (not ident or ident.revoked or ident.kind != "device"
                     or ident.client_id != device["id"]
-                    or data.get("tenant", tenant) != tenant
                     or public_key not in ident.nats_public_keys):
                 return _error(403, "access_denied", "identity/key not owned by this device")
         else:

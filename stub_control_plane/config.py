@@ -33,6 +33,7 @@ class StubConfig:
     resources: list[str]  # allowed RFC 8707 resources (MCP endpoint URLs)
     tenant: str  # the fixed dev user's tenant
     tenants: dict[str, TenantKeys]
+    membership_roles: dict[str, str] = field(default_factory=dict)
     dev_user: str = "dev-user"
     role: str = "orchestrator"  # NATS role of connector identities
     extra_redirect_uris: list[str] = field(default_factory=list)

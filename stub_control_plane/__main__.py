@@ -40,6 +40,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--tenant", default="T_A", help="the dev user's tenant (NATS account)")
     p.add_argument("--tenant-key-file", action="append", default=[],
                    help="tenant key JSON (account public key + role signing seeds)")
+    p.add_argument("--member-tenant", action="append", default=[], help="additional NATS accounts to import from nsc")
+    p.add_argument("--tenant-role", action="append", default=[], help="membership role as tenant=role")
     p.add_argument("--nsc-home", help="import --tenant's keys from this nsc home instead")
     p.add_argument("--state-file", help="persist clients/identities/refresh tokens (0600)")
     p.add_argument("--service-key-file", required=True,
@@ -83,11 +85,13 @@ def build(args: argparse.Namespace) -> tuple[StubConfig, Store, TokenIssuer]:
         tenants[keys.tenant] = keys
     if args.nsc_home:
         with tempfile.TemporaryDirectory() as tmp:
-            out = import_nsc_tenant(args.nsc_home, args.tenant, Path(tmp) / "tenant.json")
-            tenants[args.tenant] = TenantKeys.load(out)
+            for tenant in [args.tenant, *args.member_tenant]:
+                out = import_nsc_tenant(args.nsc_home, tenant, Path(tmp) / "tenant.json")
+                tenants[tenant] = TenantKeys.load(out)
     issuer_url = args.issuer or f"http://{args.host}:{args.port}"
     cfg = StubConfig(
         issuer=issuer_url, resources=args.resource, tenant=args.tenant, tenants=tenants,
+        membership_roles=dict(r.split("=", 1) for r in args.tenant_role),
         extra_redirect_uris=args.allow_redirect_uri,
         allow_loopback_redirects=args.allow_loopback_redirects,
         allow_http_cimd=args.allow_http_cimd, access_ttl=args.access_ttl,
