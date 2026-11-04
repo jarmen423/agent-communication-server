@@ -189,7 +189,7 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
             install = await asyncio.to_thread(acs, env, 'mcp', 'install', 'claude', '--identity', 'me', '--home', str(home))
             print('$ acs mcp install claude --identity me --home <tmp>\n' + install.stdout, end='', flush=True)
             config = json.loads((home / '.claude.json').read_text())['mcpServers']['nats-hub']
-            assert set(config['env']) == {'NATS_URL', 'NATS_CREDENTIALS_FILE', 'NATS_HUB_IDENTITY'}
+            assert set(config['env']) == {'NATS_URL', 'NATS_CREDENTIALS_FILE', 'NATS_HUB_IDENTITY', 'ACS_TENANT'}
             # Start exactly the executable/arguments/environment written by acs.
             params = StdioServerParameters(command=config['command'], args=config['args'], env={**env, **config['env']})
             async with stdio_client(params) as (read, write):

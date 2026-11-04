@@ -20,6 +20,14 @@ pub fn sweep(root: &Path) -> Result<()> {
 }
 
 pub async fn run(root: &Path) -> Result<()> {
+    if root.join("device.json").exists()
+        && !root.join("state.json").exists()
+        && !fs::read_dir(root)?.any(|entry| {
+            entry.is_ok_and(|e| e.file_name().to_string_lossy().starts_with(".migrate-"))
+        })
+    {
+        return Ok(());
+    }
     let _lock = local::lock(root, "operation.lock")?;
     if root.join("device.json").exists() || !root.join("state.json").exists() {
         let restart = root.join("state.json").exists() && crate::daemon::running(root);

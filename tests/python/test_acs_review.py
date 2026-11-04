@@ -297,3 +297,14 @@ def test_plain_text_old_server_falls_back_to_single_tenant(tmp_path, response_se
     assert '*A' in acs(env, 'tenant', 'list').stdout
     acs(env, 'tenant', 'use', 'A')
     assert (root / 'current').read_text() == 'A'
+
+
+def test_migrated_device_can_start_child_during_renewal(device_stack):
+    env, _, _ = device_stack
+    headless_login(env)
+    acs(env, 'agent', 'add', 'me')
+    root = Path(env['ACS_HOME'])
+    with (root / 'operation.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert 'ACS_TENANT' in acs(env, 'env', 'me').stdout
+    acs(env, 'logout')
