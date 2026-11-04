@@ -91,6 +91,7 @@ Python and JS (repo root):
 ```
 worker_runtime.py          — shared worker runtime: one-shot tasks (reply contract) + stateful sessions
 worker_events.py           — progress-event publishing helpers
+worker_backends/origin_report.py — what workers report in meta.origin.reported (per channel, cleared after the terminal result)
 worker_backends/           — backend types (see docs/WORKER_BACKENDS.md):
     headless_cli.py, presets.py   HeadlessCli (+ agy/hermes/grok/kilo/opencode presets)
     claude_code.py, codex_cli.py  Claude Code (`claude -p --output-format stream-json`), Codex (`codex exec --json`)
@@ -117,6 +118,7 @@ mcp_server/                — CANONICAL orchestrator MCP server (edit here)
     hub_tools.py, hub_query_tools.py   tool schemas
     hub_handlers.py, hub_queries.py    tool handlers
     hub_buffers.py, hub_primitives.py  subscriptions, buffers, reply-contract matcher
+    hub_origin.py              what the MCP server reports (env, clientInfo, host session file)
     hooks/session_start.py, skills/nats-hub/SKILL.md
 mcp_remote/                — hosted remote MCP endpoint (streamable HTTP + OAuth, stateless over JetStream; docs/REMOTE_MCP.md)
 stub_control_plane/        — DEV-ONLY OAuth authorization server + NATS credential minting for mcp_remote (and later `acs`)
@@ -144,7 +146,7 @@ docs/                      — living docs; docs/archive/ = finished plans and h
 - **`Envelope`**: the wire unit. `Meta` (id, from, to, channel, timestamp, kind, reply_to) plus a free-form JSON `payload`.
 - **`Origin`** (`meta.origin`): message provenance. The router stamps the trusted fields (tenant, bound identity, owning user, device, agent client, owner kind) and discards client values; only `reported` (session, model, unverified) passes through. Trustworthy only with per-identity credentials and `--require-bound-identity`. See `docs/PROVENANCE.md`.
 - **`IdentityManifest`** / **`ManifestRecord`**: who owns an identity, recorded by whoever provisions credentials. Cached in memory over `Storage`, ordered by `rev`, with tombstones. Written through the `manifest.*` API ops by a `--manifest-writer` or API admin. One hub-server owns it.
-- **`HubClient`**: wraps `async_nats::Client` and carries an `identity` that is stamped on every envelope. `connect()` reads auth from `NATS_*` env; `connect_with_opts()` takes `HubConnectOptions`. Methods: `send_message()`, `send_to()`, `send_reply()`, `subscribe_inbox()`, `subscribe_channel()`, `subscribe_subject()`, `subscribe_all()`, `start_session()`, `send_to_session()`, `close_session()`, `subscribe_session()`, `register()`, `heartbeat()`, `drain()`.
+- **`HubClient`**: wraps `async_nats::Client` and carries an `identity` that is stamped on every envelope. `connect()` reads auth from `NATS_*` env; `connect_with_opts()` takes `HubConnectOptions`. Methods: `send_message()`, `send_to()`, `send_reply()`, `subscribe_inbox()`, `subscribe_channel()`, `subscribe_subject()`, `subscribe_all()`, `start_session()`, `send_to_session()`, `close_session()`, `subscribe_session()`, `set_reported()`, `register()`, `heartbeat()`, `drain()`.
 - **`ControlPlane`**: the router. Routes by `meta.to`, keeps the `AgentRegistry` and loads it from the DB on startup, and optionally mirrors to `Storage`.
 - **`AgentRegistry`**: in-memory agent cache for hot-path queries (`find_by_capability()`, `find_alive()`, `touch()`, `deregister()`).
 - **`Storage`**: persistence trait: agents, envelopes, threads (`get_thread[_bounded]`, `list_pending`), sessions, waves, `migrate()`, `ping()`. The default implementation is **`SurrealStorage`** (SurrealDB v2 embedded on RocksDB). It always sits behind the trait (the BSL safeguard for **SurrealDB's** license).
@@ -157,8 +159,8 @@ docs/                      — living docs; docs/archive/ = finished plans and h
 make setup     # nats-server → .tools/bin, Python venv → .venv (idempotent)
 make doctor    # toolchain check with fix hints
 make build     # all bins incl. hub-tui (auto-applies the BINDGEN fix; see CONTRIBUTING.md)
-make test-manifest # manifest writer + accept policy, bound and durable
 make test      # Rust + Python tests against an isolated nats-server + hub-server
+make test-manifest # manifest writer + accept policy, bound and durable
 make lint      # fmt --check + clippy
 make up        # local stack: nats-server :4222, hub-server + visualizer :9191, echo-1/echo-2
 ```
@@ -256,6 +258,7 @@ over `wss://` (or `tls://`/`nats://` on a trusted network).
 - **Accept policy**: a hub with a manifest writer gates every DM; unknown or removed targets fail closed. See `docs/ACCEPT_POLICY.md`.
 - **Identity**: set once at connect and stamped on every envelope. Never put it in payloads. The MCP server takes it from `NATS_HUB_IDENTITY`, never from tool arguments.
 - **Wire format**: JSON `Envelope`s. Payloads are free-form JSON. `meta.origin` is optional and omits null fields, so read it with a default. Clients may send only `meta.origin.reported`.
+- **Self-reported provenance**: clients fill `meta.origin.reported` only with values they actually know; leave a key out when unknown, and never fail a send or a hook over it. `NATS_HUB_REPORTED_SESSION`, `NATS_HUB_REPORTED_MODEL` and `NATS_HUB_REPORTED_MODEL_PROVIDER` work for every local client. Clients only trim values; the hub applies the caps. See `docs/PROVENANCE.md`.
 - **Subjects**: `hub.send.<channel>` (publish), `channel.<name>` (broadcast), `channel.inbox.<identity>` (DM), `channel.task.<uuid>`, `channel.session.<uuid>`, `channel.wave.<id>[.task.<task_id>]`, `hub.api.<op>` (query API), `hub.register`, `hub.presence`.
 - **Message kinds**: `message`, `control`, `human`, `status`, `event`.
 - **Persistence**: only `hub-server` opens the DB; everything else uses the query API.
