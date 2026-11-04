@@ -360,13 +360,19 @@ async fn live_lock_wait_release_and_events() {
         nats_hub_client::locks::WaitOutcome::Free => {}
         other => panic!("waiter did not unblock: {other:?}"),
     }
-    // The release event was broadcast on the lock channel.
-    let env = tokio::time::timeout(Duration::from_secs(5), events.recv())
-        .await
-        .expect("no lock event")
-        .expect("event stream closed");
-    let (ty, _) = nats_hub_client::locks::lock_event(&env).expect("not a lock event");
-    assert_eq!(ty, "lock.released");
+    // The release event was broadcast on the lock channel. The acquire event
+    // is routed asynchronously and can still arrive after the subscription.
+    let env = loop {
+        let env = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("no lock event")
+            .expect("event stream closed");
+        let (ty, _) = nats_hub_client::locks::lock_event(&env).expect("not a lock event");
+        if ty != "lock.acquired" {
+            assert_eq!(ty, "lock.released");
+            break env;
+        }
+    };
     assert_eq!(env.meta.from, "hub-locks");
 }
 
