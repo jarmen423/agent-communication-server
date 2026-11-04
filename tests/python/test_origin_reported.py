@@ -318,11 +318,23 @@ def test_client_info_bind_never_raises():
 
 
 def test_session_file_is_private(tmp_path):
-    assert hub_origin.record_session("s1", pid=4242)
+    pid = os.getpid()
+    assert hub_origin.record_session("s1", pid=pid)
     directory = tmp_path / "run" / "nats-hub"
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
-    assert stat.S_IMODE((directory / "session-4242.json").stat().st_mode) == 0o600
-    assert hub_origin.read_session(pid=4242) == "s1"
+    assert stat.S_IMODE((directory / f"session-{pid}.json").stat().st_mode) == 0o600
+    assert hub_origin.read_session(pid=pid) == "s1"
+
+
+def test_session_file_of_a_reused_pid_is_ignored(tmp_path):
+    pid = os.getpid()
+    hub_origin.record_session("old-host", pid=pid)
+    path = tmp_path / "run" / "nats-hub" / f"session-{pid}.json"
+    data = json.loads(path.read_text())
+    data["host_start"] = "1"  # as if an earlier process with this pid wrote it
+    path.write_text(json.dumps(data))
+    assert hub_origin.read_session(pid=pid) is None
+    assert not path.exists()
 
 
 def test_session_dir_that_is_not_private_is_refused(tmp_path):
@@ -361,7 +373,7 @@ _PRINT_HOST = textwrap.dedent("""\
     import sys
     sys.path.insert(0, sys.argv[1])
     import hub_origin
-    print(hub_origin.host_pid())
+    print(hub_origin.host_pid(hook=sys.argv[2] == "hook"))
 """)
 
 
@@ -370,11 +382,11 @@ def test_hook_and_server_name_the_same_host(tmp_path):
     script = tmp_path / "print_host.py"
     script.write_text(_PRINT_HOST)
     server_dir = str(REPO_ROOT / "mcp_server")
-    direct = subprocess.run([sys.executable, str(script), server_dir],
+    direct = subprocess.run([sys.executable, str(script), server_dir, "server"],
                             capture_output=True, text=True, check=True).stdout.strip()
     # The trailing `:` keeps sh alive instead of letting it exec the command.
     via_shell = subprocess.run(
-        ["/bin/sh", "-c", f'"{sys.executable}" "{script}" "{server_dir}"; :'],
+        ["/bin/sh", "-c", f'"{sys.executable}" "{script}" "{server_dir}" hook; :'],
         capture_output=True, text=True, check=True).stdout.strip()
     assert direct == via_shell == str(os.getpid())
 

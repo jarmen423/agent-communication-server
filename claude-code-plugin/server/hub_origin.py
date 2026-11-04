@@ -136,17 +136,33 @@ def _parent_of(pid: int) -> tuple[int, str] | None:
         return None
 
 
-def host_pid(start: int | None = None) -> int:
-    """The agent host above this process: its parent, or the parent's parent
-    when the parent is a shell. A host runs a hook through ``sh -c``, and spawns
-    an MCP server directly, so this names one process from either side."""
+def host_pid(start: int | None = None, *, hook: bool = False) -> int:
+    """The agent host of this process. A host spawns its MCP server directly
+    (the host is the parent) and runs a hook through ``sh -c`` (the host is the
+    shell's parent), so ``hook=True`` skips exactly one shell parent. A host that
+    is itself a shell stays the key on the server side."""
     pid = os.getppid() if start is None else start
-    for _ in range(3):  # wrappers nest shells rarely, and never deeply
+    if hook:
         info = _parent_of(pid)
-        if info is None or info[1] not in _SHELLS or info[0] <= 1:
-            break
-        pid = info[0]
+        if info is not None and info[1] in _SHELLS and info[0] > 1:
+            pid = info[0]
     return pid
+
+
+def _start_time(pid: int) -> str | None:
+    """When ``pid`` started (clock ticks since boot, or ``ps`` lstart), so a
+    reused pid is not mistaken for the host that wrote a session file."""
+    try:
+        tail = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
+        return tail[19]
+    except (OSError, IndexError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                             text=True, timeout=1.0, check=False).stdout.strip()
+        return out or None
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def _session_dir(create: bool = False) -> Path | None:
@@ -162,6 +178,16 @@ def _session_dir(create: bool = False) -> Path | None:
     private = stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() \
         and not info.st_mode & 0o077
     return path if private else None
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        pass
+    return True
 
 
 def _prune(directory: Path) -> None:
@@ -184,11 +210,12 @@ def record_session(session_id: Any, *, pid: int | None = None) -> bool:
         if directory is None:
             return False
         _prune(directory)
-        target = directory / f"session-{host_pid() if pid is None else pid}.json"
+        host = host_pid(hook=True) if pid is None else pid
+        target = directory / f"session-{host}.json"
         tmp = target.with_name(f".{target.name}.{os.getpid()}")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as out:
-            json.dump({"session_id": session_id.strip()}, out)
+            json.dump({"session_id": session_id.strip(), "host_start": _start_time(host)}, out)
         os.replace(tmp, target)
         return True
     except Exception:  # noqa: BLE001 - a hook must never fail over this
@@ -206,11 +233,16 @@ def read_session(*, pid: int | None = None) -> str | None:
             if _host_pid_cache is None:
                 _host_pid_cache = host_pid()
             pid = _host_pid_cache
-        fd = os.open(directory / f"session-{pid}.json", os.O_RDONLY | os.O_NOFOLLOW)
+        path = directory / f"session-{pid}.json"
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd) as src:
             if os.fstat(src.fileno()).st_uid != os.getuid():
                 return None
-            session = json.loads(src.read(_MAX_SESSION_FILE_BYTES)).get("session_id")
+            data = json.loads(src.read(_MAX_SESSION_FILE_BYTES))
+        if not _alive(pid) or data.get("host_start") != _start_time(pid):
+            path.unlink(missing_ok=True)  # written by an earlier process with this pid
+            return None
+        session = data.get("session_id")
         return session.strip() or None if isinstance(session, str) else None
     except Exception:  # noqa: BLE001 - absent or unreadable: leave the key out
         return None

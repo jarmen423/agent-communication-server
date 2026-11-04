@@ -104,8 +104,10 @@ class CodexTurn(CliTurn):
         etype = event.get("type")
         if etype == "thread.started" and event.get("thread_id"):
             self.thread_id = str(event["thread_id"])
-            await emit("status", {"message": "codex thread started", "thread_id": self.thread_id,
-                                  "model": self.model})
+            status = {"message": "codex thread started", "thread_id": self.thread_id}
+            if self.model:
+                status["model"] = self.model
+            await emit("status", status)
         elif etype in ("item.started", "item.updated", "item.completed"):
             item = event.get("item") or {}
             if not isinstance(item, dict):
