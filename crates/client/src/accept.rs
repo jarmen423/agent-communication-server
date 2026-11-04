@@ -124,7 +124,7 @@ impl WorkerPolicy {
                 } else {
                     crate::MessageKind::Message
                 },
-                serde_json::json!({"status":"error", "task_id":task_id, "result":null, "error":"refused by worker accept policy", "rejected":true, "message_id":env.meta.id, "refused_sender":env.meta.origin.as_ref().and_then(|o| if o.identity.as_deref() == Some("hub-orchestrator") { o.on_behalf_of.as_ref().map(|b| b.identity.as_str()) } else { o.identity.as_deref() })}),
+                serde_json::json!({"status":"error", "task_id":task_id, "result":null, "error":"refused by worker accept policy", "rejected":true, "message_id":env.meta.id, "refused_sender":env.meta.origin.as_ref().and_then(|o| o.identity.as_deref())}),
             );
             result.meta.reply_to = Some(env.meta.id.clone());
             let _ = client.send(&result).await;

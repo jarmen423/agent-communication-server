@@ -244,8 +244,7 @@ class AcceptCheck:
                             and all("!" <= c <= "~" for c in payload[k])), meta.get("id"))
             origin = meta.get("origin")
             origin = origin if isinstance(origin, dict) else {}
-            sender = ((origin.get("on_behalf_of") or {}).get("identity")
-                      if origin.get("identity") == "hub-orchestrator" else origin.get("identity"))
+            sender = origin.get("identity")  # the bound sender, as on router refusals
             await self.publish(channel, "status" if session_refusal else "message", {
                 "refused_sender": sender, "message_id": meta.get("id"),
                 "status": "error", "task_id": task_id, "result": None,

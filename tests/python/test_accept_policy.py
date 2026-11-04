@@ -382,3 +382,24 @@ async def test_session_start_refusal_is_correlated_status():
     channel, kind, terminal = sent[0]
     assert (channel, kind) == ("session.sid", "status")
     assert terminal["message_id"] == "start-id" and terminal["refused_sender"] == "bob"
+
+
+@pytest.mark.asyncio
+async def test_wave_task_refusal_names_the_orchestrator_as_refused_sender():
+    """The orchestrator only acts on refusals naming itself, so a worker refusal
+    of a wave task must name the bound sender, not the wave's creator."""
+    sent = []
+    async def unused(*args):
+        pass
+    async def publish(*args, **kwargs):
+        sent.append(args)
+    check = AcceptCheck(unused, publish)
+    check.record = {"user": "alice", "accept": {"from": "owner"}}
+    assert not await check.allows({"meta": {"id": "dispatch-id", "kind": "message",
+        "origin": {"identity": "hub-orchestrator",
+                   "on_behalf_of": {"identity": "bob", "user": "bob"}}},
+        "payload": {"prompt": "x", "task_channel": "wave.w1.task.t1", "task_id": "t1"}})
+    channel, _, terminal = sent[0]
+    assert channel == "wave.w1.task.t1"
+    assert terminal["refused_sender"] == "hub-orchestrator"
+    assert terminal["message_id"] == "dispatch-id"
