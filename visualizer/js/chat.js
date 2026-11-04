@@ -11,7 +11,7 @@ export function closeModal() {
 
 import { S, agents, envelopes, optimisticChatHtml, STATUS_LABELS } from './state.js';
 import { classifyChatRole } from './model.js';
-import { formatChatBubble, formatOptimisticYouBubble } from './model.js';
+import { formatChatBubble, formatOptimisticYouBubble, originLabel, originHasReported } from './model.js';
 import { extractEnvelopeBody, prettySnippet } from './state.js';
 import { showToast, agentPalette } from './state.js';
 import * as Dock from './dock.js';
@@ -45,13 +45,17 @@ export function renderSessionDetail(agent) {
   title.textContent = agent.identity;
   const statusLabel = agent.stopped ? 'STOPPED' : (STATUS_LABELS[agent.status] || agent.status || 'ready');
   if (sub) {
+    // Full provenance of the agent's latest envelope, as text only.
+    const fullOrigin = originLabel(agent.origin, true);
     sub.textContent =
       `${statusLabel}` +
       (agent.providerId ? ` · ${agent.providerId}` : '') +
       (agent.model ? ` · ${agent.model}` : '') +
       (agent.sessionId ? ` · ses ${agent.sessionId.substring(0, 8)}` : '') +
       ` · ${agent.messageCount || 0} bus msgs` +
-      (agent.petSlug ? ` · variant ${agent.petSlug}` : '');
+      (agent.petSlug ? ` · variant ${agent.petSlug}` : '') +
+      (fullOrigin ? ` · ${fullOrigin}` : '') +
+      (originHasReported(agent.origin) ? ' (~ = self-reported, unverified)' : '');
   }
   if (input) input.placeholder = `Message ${agent.identity}…`;
   const modelSel = document.getElementById('chat-model-select');
@@ -77,6 +81,18 @@ export function renderSessionDetail(agent) {
 
   const history = agentEnvelopes.map(e => formatChatBubble(e, agent.identity)).join('');
   box.innerHTML = history + optimisticChatHtml.join('');
+  // Provenance values are untrusted: attach them as text nodes only, never
+  // through the innerHTML above.
+  const rows = box.querySelectorAll('.chat-row');
+  agentEnvelopes.forEach((e, i) => {
+    const label = originLabel(e.meta && e.meta.origin);
+    const meta = rows[i] && rows[i].querySelector('.chat-meta');
+    if (!label || !meta) return;
+    const span = document.createElement('span');
+    span.className = 'chat-origin';
+    span.textContent = label;
+    meta.appendChild(span);
+  });
   box.scrollTop = box.scrollHeight;
 }
 

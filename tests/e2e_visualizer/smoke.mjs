@@ -110,6 +110,35 @@ if (await page.locator('#event-ticker img').count()) {
 }
 console.log('ok: broadcast markup renders as text (no XSS)');
 
+// Provenance: a client-reported model renders as an unverified (`~`) label
+// in the ticker and in chat bubbles, as text only.
+const MODEL = 'smoke-model-7x';
+await run(
+  path.join(path.dirname(DELEGATE), 'hub-publish'),
+  ['--nats-url', NATS_URL, '--channel', 'general', '--from', 'echo-1',
+   '--json', JSON.stringify({ message: 'provenance smoke' })],
+  { env: { ...process.env, NATS_URL, NATS_HUB_REPORTED_MODEL: MODEL }, timeout: 20000 },
+);
+await waitFor(
+  (m) => [...document.querySelectorAll('#event-ticker .ticker-origin')]
+    .some((el) => el.textContent.includes(`~${m}`)),
+  MODEL, { timeout: 15000 },
+);
+console.log('ok: provenance label in ticker');
+await waitFor(
+  (m) => [...document.querySelectorAll('#chat-messages .chat-origin')]
+    .some((el) => el.textContent.includes(`~${m}`)),
+  MODEL, { timeout: 15000 },
+);
+console.log('ok: provenance label in chat bubble');
+// Session detail names the self-reported note for the same agent.
+await waitFor(
+  () => (document.getElementById('detail-sub')?.textContent || '')
+    .includes('self-reported, unverified'),
+  null, { timeout: 15000 },
+);
+console.log('ok: session detail marks self-reported provenance');
+
 if (cspViolations.length) throw new Error(`CSP violations: ${cspViolations.join(' | ')}`);
 console.log('ok: no CSP violations');
 

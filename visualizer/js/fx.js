@@ -1,4 +1,4 @@
-import { S, agents, particleEffects, COLORS } from './state.js';
+import { S, agents, particleEffects, COLORS, MAX_PARTICLES } from './state.js';
 export class Particle {
   constructor(x, y, color) {
     this.x = x; this.y = y;

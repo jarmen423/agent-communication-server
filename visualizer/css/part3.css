@@ -75,6 +75,7 @@
     .chat-meta .who { color: #9fb0c8; }
     .chat-row.you .chat-meta .who { color: #d8b4fe; }
     .chat-row.agent .chat-meta .who { color: var(--color-cyan); }
+    .chat-meta .chat-origin { color: #6b7a90; opacity: 0.8; }
 
     .chat-bubble {
       padding: 10px 12px;

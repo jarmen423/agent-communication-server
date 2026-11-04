@@ -2,6 +2,7 @@ import { S, agents } from './state.js';
 import { showToast } from './state.js';
 import { showSessionDetail } from './chat.js';
 import { agentPalette, extractEnvelopeBody, prettySnippet, formatUptime, STATUS_LABELS } from './state.js';
+import { originLabel } from './model.js';
 export function setWsBadge(state) {
   const badge = document.getElementById('ws-badge');
   const text = document.getElementById('ws-text');
@@ -58,6 +59,8 @@ export function addTickerEvent(env) {
     senderEl,
     span('ticker-body', snippet),
   );
+  const provenance = originLabel(env.meta && env.meta.origin);
+  if (provenance) entry.append(span('ticker-origin', provenance));
 
   ticker.insertBefore(entry, ticker.firstChild);
 
@@ -80,7 +83,8 @@ export function showActionPopup(agent) {
     (agent.model ? ` · ${agent.model}` : '') +
     ` · ${agent.messageCount} msgs` +
     (agent.petSlug ? ` · variant ${agent.petSlug}` : '') +
-    (agent.sessionId ? ` · ses ${agent.sessionId.substring(0, 8)}` : '');
+    (agent.sessionId ? ` · ses ${agent.sessionId.substring(0, 8)}` : '') +
+    (originLabel(agent.origin) ? ` · ${originLabel(agent.origin)}` : '');
 
   popup.style.display = 'block';
   popup.style.left = Math.min(mouseX + 12, window.innerWidth - 250) + 'px';

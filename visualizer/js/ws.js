@@ -98,6 +98,7 @@ export function handleEnvelope(env) {
     }
   }
   if (evt.sessionId) agent.sessionId = evt.sessionId;
+  if (evt.origin) agent.origin = evt.origin;
   if (evt.snippet) agent.setSnippet(evt.snippet);
 
   // Real communication edges (see EDGE STRATEGY header)

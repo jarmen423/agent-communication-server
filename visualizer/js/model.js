@@ -12,6 +12,47 @@ export function isOperatorSender(from) {
   return f.startsWith('operator') || f.startsWith('human');
 }
 
+// Provenance values are untrusted: strip control characters and cap each
+// part, mirroring the Rust `origin_label` helper. Callers must insert the
+// result with textContent / text nodes, never innerHTML.
+function cleanOriginPart(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '').slice(0, 64);
+}
+
+/** One-line provenance label: `alice · claude-code · ~model`.
+ * `~` marks a self-reported, unverified value. Verbose adds the shortened
+ * self-reported session and who the sender acts for. */
+export function originLabel(origin, verbose = false) {
+  if (!origin || typeof origin !== 'object') return '';
+  const reported = origin.reported && typeof origin.reported === 'object' ? origin.reported : {};
+  const parts = [];
+  const user = cleanOriginPart(origin.user);
+  if (user) parts.push(user);
+  else if (origin.owner_kind === 'tenant' && cleanOriginPart(origin.tenant)) {
+    parts.push(`tenant:${cleanOriginPart(origin.tenant)}`);
+  }
+  const agent = cleanOriginPart(origin.agent);
+  if (agent) parts.push(agent);
+  const model = cleanOriginPart(reported.model);
+  if (model) parts.push(`~${model}`);
+  if (verbose) {
+    const session = cleanOriginPart(reported.session);
+    if (session) parts.push(`~session:${session.slice(0, 8)}`);
+    const behalf = origin.on_behalf_of && typeof origin.on_behalf_of === 'object'
+      ? cleanOriginPart(origin.on_behalf_of.user) || cleanOriginPart(origin.on_behalf_of.identity)
+      : '';
+    if (behalf) parts.push(`on behalf of ${behalf}`);
+  }
+  return parts.join(' · ');
+}
+
+/** True when the origin carries any self-reported (unverified) value. */
+export function originHasReported(origin) {
+  const reported = origin && typeof origin === 'object' ? origin.reported : null;
+  return !!reported && typeof reported === 'object' && Object.keys(reported).length > 0;
+}
+
 /** Classify a bus envelope into chat roles: you | agent | system */
 export function classifyChatRole(env, agentId) {
   const kind = (env.meta && env.meta.kind) || '';
@@ -138,6 +179,8 @@ export function envelopeToAgentEvent(env) {
     kind,
     payload,
     meta,
+    origin: meta.origin || null,
+    originLabel: originLabel(meta.origin),
   };
 }
 
