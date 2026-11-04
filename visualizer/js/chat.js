@@ -11,7 +11,7 @@ export function closeModal() {
 
 import { S, agents, envelopes, optimisticChatHtml, STATUS_LABELS } from './state.js';
 import { classifyChatRole } from './model.js';
-import { formatChatBubble, formatOptimisticYouBubble, originLabel, originHasReported } from './model.js';
+import { formatChatBubble, formatOptimisticYouBubble, originLabel } from './model.js';
 import { extractEnvelopeBody, prettySnippet } from './state.js';
 import { showToast, agentPalette } from './state.js';
 import * as Dock from './dock.js';
@@ -55,7 +55,9 @@ export function renderSessionDetail(agent) {
       ` · ${agent.messageCount || 0} bus msgs` +
       (agent.petSlug ? ` · variant ${agent.petSlug}` : '') +
       (fullOrigin ? ` · ${fullOrigin}` : '') +
-      (originHasReported(agent.origin) ? ' (~ = self-reported, unverified)' : '');
+      // The note explains a rendered `~`; a reported block with no
+      // rendered self-reported part (e.g. only a provider) gets none.
+      (fullOrigin.includes('~') ? ' (~ = self-reported, unverified)' : '');
   }
   if (input) input.placeholder = `Message ${agent.identity}…`;
   const modelSel = document.getElementById('chat-model-select');

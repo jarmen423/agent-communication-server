@@ -203,6 +203,31 @@ fn short_payload(payload: &serde_json::Value) -> String {
     truncate_str(&s, 120)
 }
 
+/// Fit a provenance label into `max` chars without cutting a part in
+/// half: drop whole parts instead, agent-client parts first and the
+/// leading user part next, so a self-reported `~model` part survives.
+/// A single part longer than `max` is truncated (nothing left to drop).
+pub fn fit_origin_label(label: &str, max: usize) -> String {
+    if label.chars().count() <= max {
+        return label.to_string();
+    }
+    let mut parts: Vec<&str> = label.split(" · ").collect();
+    while parts.len() > 1 && parts.join(" · ").chars().count() > max {
+        // Drop the first non-leading trusted part (the agent client);
+        // when only the leader and self-reported parts remain, drop the
+        // leader rather than a `~` part.
+        match parts.iter().skip(1).position(|part| !part.starts_with('~')) {
+            Some(offset) => {
+                parts.remove(offset + 1);
+            }
+            None => {
+                parts.remove(0);
+            }
+        }
+    }
+    truncate_str(&parts.join(" · "), max)
+}
+
 /// Truncate a string to `max` chars, appending `…` if truncated.
 pub fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -387,6 +412,29 @@ mod tests {
         );
         env.meta.origin = None;
         assert_eq!(FeedLine::from_envelope(&env).origin, "");
+    }
+
+    #[test]
+    fn test_fit_origin_label_keeps_model_without_cutting_parts() {
+        let label = "alice · claude-code · ~claude-opus-5-5";
+        // Unchanged when it fits.
+        assert_eq!(fit_origin_label(label, 40), label);
+        // At the feed width the agent part drops, keeping the user and
+        // the whole `~model` part rather than a cut-off label.
+        let fitted = fit_origin_label(label, 24);
+        assert_eq!(fitted, "alice · ~claude-opus-5-5");
+        assert!(fitted.chars().count() <= 24);
+        // Narrower still, the user drops before the `~model` part.
+        assert_eq!(fit_origin_label(label, 20), "~claude-opus-5-5");
+        // Never a mid-part cut: every fitted part is a whole input part
+        // (the single-part case below is the only truncation).
+        for part in fitted.split(" · ") {
+            assert!(label.split(" · ").any(|p| p == part), "{part}");
+        }
+        // One over-long part has nothing to drop and is truncated.
+        let fitted = fit_origin_label("~a-very-long-model-name-here", 10);
+        assert!(fitted.chars().count() <= 10);
+        assert!(fitted.ends_with('…'));
     }
 
     #[test]

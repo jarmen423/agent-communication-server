@@ -60,7 +60,10 @@ pub fn render_feed(frame: &mut ratatui::Frame, area: Rect, app: &App) {
                     if line.origin.is_empty() {
                         String::new()
                     } else {
-                        format!("{:<24}", crate::tui::model::truncate_str(&line.origin, 24))
+                        format!(
+                            "{:<24}",
+                            crate::tui::model::fit_origin_label(&line.origin, 24)
+                        )
                     },
                     Style::default()
                         .fg(Color::DarkGray)

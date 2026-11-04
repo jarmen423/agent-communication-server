@@ -139,6 +139,48 @@ await waitFor(
 );
 console.log('ok: session detail marks self-reported provenance');
 
+// Latest envelope wins: a plain message from the same agent (no reported
+// provenance) clears the origin in the session detail; a message whose
+// reported block renders no `~` part (provider only) gets no
+// self-reported note either.
+const PUBLISH = path.join(path.dirname(DELEGATE), 'hub-publish');
+async function publishAndWaitRow(envExtra, message) {
+  const before = await page.locator('#chat-messages .chat-row').count();
+  await run(
+    PUBLISH,
+    ['--nats-url', NATS_URL, '--channel', 'general', '--from', 'echo-1',
+     '--json', JSON.stringify({ message })],
+    { env: { ...process.env, NATS_URL, ...envExtra }, timeout: 20000 },
+  );
+  await waitFor(
+    (n) => document.querySelectorAll('#chat-messages .chat-row').length > n,
+    before, { timeout: 15000 },
+  );
+}
+await publishAndWaitRow({}, 'provenance cleared');
+{
+  const sub = await page.evaluate(
+    () => document.getElementById('detail-sub')?.textContent || '',
+  );
+  if (sub.includes(MODEL) || sub.includes('self-reported, unverified')) {
+    throw new Error(`stale provenance after a plain message: ${sub}`);
+  }
+}
+console.log('ok: plain message clears stale provenance');
+await publishAndWaitRow(
+  { NATS_HUB_REPORTED_MODEL_PROVIDER: 'smoke-provider-7x' },
+  'provider only',
+);
+{
+  const sub = await page.evaluate(
+    () => document.getElementById('detail-sub')?.textContent || '',
+  );
+  if (sub.includes('self-reported, unverified')) {
+    throw new Error(`self-reported note without a rendered ~ part: ${sub}`);
+  }
+}
+console.log('ok: no self-reported note when no ~ part renders');
+
 if (cspViolations.length) throw new Error(`CSP violations: ${cspViolations.join(' | ')}`);
 console.log('ok: no CSP violations');
 

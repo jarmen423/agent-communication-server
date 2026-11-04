@@ -12,12 +12,18 @@ export function isOperatorSender(from) {
   return f.startsWith('operator') || f.startsWith('human');
 }
 
-// Provenance values are untrusted: strip control characters and cap each
-// part, mirroring the Rust `origin_label` helper. Callers must insert the
-// result with textContent / text nodes, never innerHTML.
+// Provenance values are untrusted: clean and cap each part, mirroring
+// the Rust `origin_label` helper exactly — drop control (Cc) and format
+// (Cf) characters plus U+2028/U+2029, replace the label separator `·`
+// and the self-reported marker `~` with `-` so a value can never forge
+// extra parts or a fake marker, and cap at 64 code points. Callers must
+// insert the result with textContent / text nodes, never innerHTML.
 function cleanOriginPart(value) {
   if (typeof value !== 'string') return '';
-  return value.replace(/[\u0000-\u001F\u007F-\u009F]/g, '').slice(0, 64);
+  const cleaned = value
+    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '')
+    .replace(/[·~]/g, '-');
+  return Array.from(cleaned).slice(0, 64).join('');
 }
 
 /** One-line provenance label: `alice · claude-code · ~model`.
@@ -38,19 +44,13 @@ export function originLabel(origin, verbose = false) {
   if (model) parts.push(`~${model}`);
   if (verbose) {
     const session = cleanOriginPart(reported.session);
-    if (session) parts.push(`~session:${session.slice(0, 8)}`);
+    if (session) parts.push(`~session:${Array.from(session).slice(0, 8).join('')}`);
     const behalf = origin.on_behalf_of && typeof origin.on_behalf_of === 'object'
       ? cleanOriginPart(origin.on_behalf_of.user) || cleanOriginPart(origin.on_behalf_of.identity)
       : '';
     if (behalf) parts.push(`on behalf of ${behalf}`);
   }
   return parts.join(' · ');
-}
-
-/** True when the origin carries any self-reported (unverified) value. */
-export function originHasReported(origin) {
-  const reported = origin && typeof origin === 'object' ? origin.reported : null;
-  return !!reported && typeof reported === 'object' && Object.keys(reported).length > 0;
 }
 
 /** Classify a bus envelope into chat roles: you | agent | system */
