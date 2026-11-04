@@ -8,6 +8,7 @@
 use anyhow::Result;
 use clap::Parser;
 use nats_hub_client::connect_opts::{default_nats_url, env_identity};
+use nats_hub_client::events::origin_label;
 use nats_hub_client::HubClient;
 use tracing_subscriber::EnvFilter;
 
@@ -72,8 +73,19 @@ async fn main() -> Result<()> {
             } else {
                 serde_json::to_string_pretty(&env.payload).unwrap_or_default()
             };
+            let label = env
+                .meta
+                .origin
+                .as_ref()
+                .map(|origin| origin_label(origin, false))
+                .unwrap_or_default();
+            let origin_suffix = if label.is_empty() {
+                String::new()
+            } else {
+                format!(" [{label}]")
+            };
             println!(
-                "{ts} [{kind}] {} → {dest} @{}",
+                "{ts} [{kind}] {} → {dest} @{}{origin_suffix}",
                 env.meta.from, env.meta.channel
             );
             println!("  {payload_str}");

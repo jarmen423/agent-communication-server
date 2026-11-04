@@ -8,6 +8,7 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use nats_hub_client::connect_opts::default_nats_url;
+use nats_hub_client::events::origin_label;
 use nats_hub_client::storage::EnvelopeRecord;
 use nats_hub_client::ApiClient;
 use tracing_subscriber::EnvFilter;
@@ -159,6 +160,14 @@ fn print_record(record: &EnvelopeRecord, root_id: &str) {
         time = time
     );
     println!("{prefix}  id: {}", record.id, prefix = prefix);
+    let label = record
+        .origin
+        .as_ref()
+        .map(|origin| origin_label(origin, true))
+        .unwrap_or_default();
+    if !label.is_empty() {
+        println!("{prefix}  origin: {label}", prefix = prefix);
+    }
     println!(
         "{prefix}  {}",
         preview_payload(&record.payload),
