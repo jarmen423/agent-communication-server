@@ -59,11 +59,14 @@ below.
    ```
 
 3. **Add an identity** for each agent on this machine. An identity is an
-   orchestrator unless you add `--role worker`.
+   orchestrator unless you add `--role worker`. `--provider` names the agent
+   client it runs as (`claude-code`, `codex`, `hermes`, …), and the hub stamps
+   it on every message as `origin.agent`. It's set once, when the identity is
+   added.
 
    ```bash
-   acs agent add me
-   acs agent add claude-1 --role worker
+   acs agent add me --provider claude-code
+   acs agent add claude-1 --role worker --provider claude-code
    ```
 
 4. **Start the credential daemon.** It runs as a user service (systemd on
@@ -78,6 +81,9 @@ below.
    ```bash
    acs mcp install claude --identity me
    ```
+
+   (`acs mcp install` also adds an identity it doesn't find, with the
+   client's provider.)
 
    or run Claude Code as a worker. It needs the `claude` CLI installed and
    logged in, and it stays in the foreground. It can run on this machine or

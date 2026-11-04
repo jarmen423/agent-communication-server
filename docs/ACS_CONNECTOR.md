@@ -19,8 +19,8 @@ code.
 ```bash
 acs login                                # hosted ACS; opens the browser
 acs login --headless                     # or print a URL to open on another device
-acs agent add me                         # orchestrator by default
-acs agent add laptop-worker --role worker
+acs agent add me --provider claude-code  # orchestrator by default
+acs agent add laptop-worker --role worker --provider claude-code
 acs up                                   # install/start a user service
 acs status                               # identities and credential expiry
 acs worker run claude --identity laptop-worker -- --repo ~/code/project
@@ -40,6 +40,26 @@ followed with bearer credentials.
 Prefer `ACS_SERVICE_KEY` to avoid shell-history exposure. The key is exchanged
 for the usual short-lived access token and rotating refresh token; the CLI
 does not retain the service key. No NATS user seed is sent to the issuer.
+
+## Agent client (`--provider`)
+
+`acs agent add <id> --provider <client>` records which agent client the
+identity runs as: `claude-code`, `codex`, `hermes`, `cursor`, `grok`, …
+The name is lowercase letters, digits, `.`, `_` and `-`, starts with a letter
+or digit, and is at most 51 characters. Anything else is refused before any
+key is made. The control plane keeps it with the identity and puts it in the
+identity manifest, and the hub stamps it on every message the identity sends
+as the trusted `origin.agent` (`docs/PROVENANCE.md`).
+
+- `acs mcp install claude|codex|hermes --identity <id>` adds `<id>` as an
+  orchestrator with provider `claude-code`, `codex` or `hermes` when this
+  device doesn't have it yet.
+- The provider is set only when the identity is added; the control plane has
+  no way to change it afterwards. If `acs mcp install` or `acs worker run`
+  finds an identity without one, it prints a one-line note with the
+  `acs agent rm` / `acs agent add --provider` commands that record it. That
+  makes a new key and credential for the same name.
+- `acs status` shows each identity's provider.
 
 ## Select a tenant
 

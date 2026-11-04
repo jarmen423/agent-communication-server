@@ -61,6 +61,11 @@ async fn python_worker(root: &Path, backend: &str) -> Result<(PathBuf, PathBuf)>
 pub async fn run(root: &Path, backend: &str, identity: &str, args: &[String]) -> Result<()> {
     let state = local::load(root)?;
     let id = agents::select(&state, Some(identity))?;
+    if backend != "echo" {
+        if let Some(hint) = agents::provider_hint(&state, id, agents::provider_for(backend)) {
+            eprintln!("{hint}");
+        }
+    }
     let mut cmd = if backend == "hub-worker" {
         let path = std::env::current_exe()?.with_file_name("hub-worker");
         tokio::process::Command::new(if path.is_file() {

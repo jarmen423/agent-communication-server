@@ -14,6 +14,9 @@ pub struct Agent {
     pub role: String,
     pub public_key: String,
     pub expires_at: u64,
+    /// The agent client sent at registration (`claude-code`, `codex`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -169,6 +169,43 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
             assert msg['meta']['origin']['device'] == 'integration laptop'
             await nc.drain()
             print('PASS logged-in device name → provisioning record → origin.device', flush=True)
+            # The agent client: `agent add --provider` and `mcp install` record it
+            # at registration, and the provisioning record carries it to origin.agent.
+            bad = await asyncio.to_thread(acs, env, 'agent', 'add', 'bad-client', '--provider', 'Claude Code', ok=False)
+            assert 'invalid provider' in bad.stderr
+            assert not (root / 'tenants/T_A/creds/bad-client.creds').exists()
+            await asyncio.to_thread(acs, env, 'agent', 'add', 'codex-agent', '--role', 'worker', '--provider', 'codex')
+            await asyncio.to_thread(acs, env, 'mcp', 'install', 'claude', '--identity', 'claude-mcp',
+                                    '--home', str(tmp_path / 'agent-client-home'))
+            hint = await asyncio.to_thread(acs, env, 'mcp', 'install', 'codex', '--identity', 'me',
+                                           '--home', str(tmp_path / 'agent-client-home'))
+            assert 'no agent client recorded' in hint.stderr and '--provider codex' in hint.stderr
+            response = await asyncio.to_thread(httpx.get, server + '/v1/device?tenant=T_A',
+                headers={'Authorization': 'Bearer ' + json.loads((root / 'device.json').read_text())['access_token']})
+            records = {r['identity']: r for r in response.json()['identities']}
+            assert 'bad-client' not in records
+            for ident, client, role in (('codex-agent', 'codex', 'worker'), ('claude-mcp', 'claude-code', 'orchestrator')):
+                record = records[ident]
+                assert record['provider'] == client and record['role'] == role
+                put = await asyncio.to_thread(subprocess.run, [str(REPO / 'target/debug/hub-admin'),
+                    'manifest', 'put', '--as', 'admin-1', '--identity', ident, '--role', role,
+                    '--user', record['owner'], '--device', record['device'], '--agent', record['provider']],
+                    env=admin_env, capture_output=True, text=True)
+                assert put.returncode == 0, put.stderr
+                nc = await nats.connect(os.environ['NATS_URL'],
+                                        user_credentials=str(root / f'tenants/T_A/creds/{ident}.creds'))
+                sub = await nc.subscribe(f'channel.task.agent-client-{ident}')
+                await nc.flush()
+                await nc.publish(f'hub.pub.{ident}.task.agent-client-{ident}', json.dumps({
+                    'meta': {'id': f'agent-client-{ident}', 'from': ident, 'to': None,
+                             'channel': f'task.agent-client-{ident}', 'kind': 'message', 'reply_to': None,
+                             'timestamp': '2026-11-04T00:00:00Z'}, 'payload': {}}).encode())
+                msg = json.loads((await sub.next_msg(timeout=5)).data)
+                assert msg['meta']['origin']['agent'] == client, msg['meta']['origin']
+                await nc.drain()
+            status = (await asyncio.to_thread(acs, env, 'status', '--tenant', 'T_A')).stdout
+            assert 'codex-agent: worker (codex)' in status and 'claude-mcp: orchestrator (claude-code)' in status
+            print('PASS agent add --provider and mcp install → provisioning record → origin.agent', flush=True)
             await asyncio.to_thread(acs, env, 'agent', 'add', 'device-echo', '--role', 'worker')
             await asyncio.to_thread(acs, env, 'agent', 'add', 'device-claude', '--role', 'worker')
             workers = [spawn('echo', [str(ACS), 'worker', 'run', 'echo', '--identity', 'device-echo'], cwd=away),

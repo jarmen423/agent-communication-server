@@ -63,7 +63,19 @@ pub async fn mcp(
     server: Option<PathBuf>,
     python: Option<PathBuf>,
 ) -> Result<()> {
-    let state = local::load(root)?;
+    let mut state = local::load(root)?;
+    let provider = agents::provider_for(client);
+    // Naming an identity this device doesn't have yet registers it, recording
+    // the client as its agent (origin.agent on every message it sends).
+    if let Some(new) = identity.filter(|id| !state.agents.contains_key(*id)) {
+        agents::add(root, new, "orchestrator", provider).await?;
+        state = local::load(root)?;
+    } else if let Some(hint) = agents::select(&state, identity)
+        .ok()
+        .and_then(|id| agents::provider_hint(&state, id, provider))
+    {
+        eprintln!("{hint}");
+    }
     let id = agents::select(&state, identity)?;
     let d = crate::tenants::device(root)?;
     let name = if d["tenants"].as_array().is_some_and(|ts| {

@@ -97,6 +97,10 @@ enum AgentCommand {
         id: String,
         #[arg(long, default_value = "orchestrator", value_parser = ["worker", "orchestrator"])]
         role: String,
+        /// The agent client this identity runs as (claude-code, codex, hermes, …);
+        /// the hub stamps it on every message as origin.agent
+        #[arg(long, value_parser = agents::parse_provider)]
+        provider: Option<String>,
     },
     Rm {
         id: String,
@@ -107,6 +111,8 @@ enum McpCommand {
     Install {
         #[arg(value_parser = ["claude", "codex", "hermes"])]
         client: String,
+        /// Identity to connect; one this device doesn't have yet is added as an
+        /// orchestrator with the client's provider (claude-code, codex, hermes)
         #[arg(long)]
         identity: Option<String>,
         #[arg(long)]
@@ -250,16 +256,17 @@ async fn main() -> Result<()> {
                         );
                         for (id, a) in s.agents {
                             println!(
-                                "{id}: {} credential {}",
+                                "{id}: {} ({}) credential {}",
                                 a.role,
+                                a.provider.as_deref().unwrap_or("no agent client"),
                                 local::expiry(a.expires_at)
                             );
                         }
                     }
                 }
                 Command::Agent {
-                    command: AgentCommand::Add { id, role },
-                } => agents::add(&root, &id, &role).await?,
+                    command: AgentCommand::Add { id, role, provider },
+                } => agents::add(&root, &id, &role, provider.as_deref()).await?,
                 Command::Agent {
                     command: AgentCommand::Rm { id },
                 } => agents::remove(&root, &id).await?,

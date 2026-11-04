@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-from .identity_rules import check_identity
+from .identity_rules import check_identity, check_provider
 from .nats_issuer import check_public_key
 from .store import Identity
 from .tokens import TENANT_CLAIM, opaque_token, token_hash
@@ -252,15 +252,16 @@ class Devices:
             if role not in ("worker", "orchestrator"):
                 raise ValueError("role must be worker or orchestrator")
             public = check_public_key(data.get("public_key"))
+            provider = check_provider(data.get("provider"))
             tenant = self.selected(request, data)
             if tenant is None:
                 return error(403, "access_denied", "foreign tenant")
         except (ValueError, TypeError):
-            return error(400, "invalid_request", "valid identity, role and public user key required")
+            return error(400, "invalid_request", "valid identity, role, provider and public user key required")
         if self.store.identity(tenant, name):
             return error(409, "identity_exists", "identity name already registered")
         ident = Identity(tenant, name, device["owner"], "device", role,
-                         client_id=device["id"], nats_public_keys=[public])
+                         client_id=device["id"], nats_public_keys=[public], provider=provider)
         self.store.identities[f"{tenant}/{name}"] = ident
         self.store.save()
         return JSONResponse({"identity": name, "role": role, "tenant": tenant}, status_code=201, headers=HEADERS)

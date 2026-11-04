@@ -36,6 +36,7 @@ class Identity:
     created_at: float = field(default_factory=time.time)
     revoked: bool = False
     nats_public_keys: list[str] = field(default_factory=list)
+    provider: str | None = None  # the agent client, e.g. "claude-code"
 
 
 @dataclass

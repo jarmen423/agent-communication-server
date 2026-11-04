@@ -18,6 +18,21 @@ OP_NAMESPACES = frozenset({"wave", "session", "agent", "history", "thread",
 RESERVED = frozenset({"hub-server", "hub-orchestrator", "hub-locks", "visualizer"})
 
 
+# Agent client names (``identities.provider``): lowercase, starting with a
+# letter or digit, at most 51 characters so the ``acs-provider:<name>``
+# credential tag fits NATS's 64-character tag limit. Same rule as ``acs``.
+_PROVIDER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,50}$")
+
+
+def check_provider(provider):
+    """``None`` or a valid agent client name; anything else is rejected."""
+    if provider is None:
+        return None
+    if not isinstance(provider, str) or not _PROVIDER.fullmatch(provider):
+        raise ValueError("invalid provider")
+    return provider
+
+
 def check_identity(name: str) -> str:
     if not isinstance(name, str) or not _VALID.match(name):
         raise ValueError(f"invalid identity {name!r}: must be one or more of [A-Za-z0-9_-]")

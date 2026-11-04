@@ -17,6 +17,76 @@ pub fn check_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Longest agent client name: the control plane tags credentials with
+/// `acs-provider:<name>`, and NATS tags are at most 64 characters.
+const MAX_PROVIDER: usize = 64 - "acs-provider:".len();
+
+/// The control plane's rule for an agent client name (`identities.provider`):
+/// `^[a-z0-9][a-z0-9._-]{0,50}$`.
+pub fn check_provider(p: &str) -> Result<()> {
+    let b = p.as_bytes();
+    let ok = (1..=MAX_PROVIDER).contains(&b.len())
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"._-".contains(c));
+    if !ok {
+        bail!(
+            "invalid provider: use lowercase letters, digits, '.', '_' or '-', \
+             starting with a letter or digit, at most {MAX_PROVIDER} characters (e.g. claude-code)"
+        );
+    }
+    Ok(())
+}
+
+/// clap value parser for `--provider`.
+pub fn parse_provider(p: &str) -> Result<String> {
+    check_provider(p)?;
+    Ok(p.to_owned())
+}
+
+/// The agent client a worker backend or MCP client runs as, when known.
+pub fn provider_for(client: &str) -> Option<&'static str> {
+    Some(match client {
+        "claude" => "claude-code",
+        "codex" => "codex",
+        "cursor" => "cursor",
+        "hermes" | "hermes_acp" => "hermes",
+        "grok" | "grok_acp" => "grok",
+        "kilo" | "kilo_acp" => "kilo",
+        "opencode" | "opencode_acp" => "opencode",
+        _ => return None,
+    })
+}
+
+/// A one-line hint when an identity's recorded agent client is missing or
+/// differs from `expected`. The control plane has no way to change it in
+/// place, so the fix is to register the identity again.
+pub fn provider_hint(state: &State, id: &str, expected: Option<&str>) -> Option<String> {
+    let agent = state.agents.get(id)?;
+    let role = if agent.role == "worker" {
+        " --role worker"
+    } else {
+        ""
+    };
+    let fix = |p: &str| {
+        format!(
+            "acs agent rm {id} --tenant {t} && acs agent add {id}{role} --tenant {t} --provider {p}",
+            t = state.tenant
+        )
+    };
+    match (agent.provider.as_deref(), expected) {
+        (None, e) => Some(format!(
+            "note: {id} has no agent client recorded, so its messages carry no origin.agent; \
+             to record one: {}",
+            fix(e.unwrap_or("<client>"))
+        )),
+        (Some(p), Some(e)) if p != e => Some(format!(
+            "note: {id} is recorded as agent client {p}, so its messages carry origin.agent = {p}"
+        )),
+        _ => None,
+    }
+}
+
 /// The named identity, or the only one when none is named.
 pub fn select<'a>(state: &'a State, identity: Option<&'a str>) -> Result<&'a str> {
     let id = match identity {
@@ -33,10 +103,13 @@ pub fn select<'a>(state: &'a State, identity: Option<&'a str>) -> Result<&'a str
     Ok(id)
 }
 
-pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
+pub async fn add(root: &Path, id: &str, role: &str, provider: Option<&str>) -> Result<()> {
     check_id(id)?;
     if !["worker", "orchestrator"].contains(&role) {
         bail!("role must be worker or orchestrator");
+    }
+    if let Some(p) = provider {
+        check_provider(p)?;
     }
     let mut state = local::load(root)?;
     if state.agents.contains_key(id) {
@@ -49,12 +122,17 @@ pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
     // Persist the local key before sending the public half. A retry can refresh
     // a successfully registered identity even after an interrupted JWT request.
     local::write_creds(root, id, "PENDING", &seed)?;
+    let mut body =
+        json!({"identity": id, "role": role, "public_key": public, "tenant": state.tenant});
+    if let Some(p) = provider {
+        body["provider"] = json!(p);
+    }
     let registration = api
         .request(
             Method::POST,
             "/v1/device/identities",
             Some(&state.access_token),
-            json!({"identity": id, "role": role, "public_key": public, "tenant":state.tenant}),
+            body,
         )
         .await;
     if let Err(e) = &registration {
@@ -75,12 +153,17 @@ pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
             role: role.into(),
             public_key: public,
             expires_at: 0,
+            provider: provider.map(str::to_owned),
         },
     );
     local::save(root, &state)?;
     refresh(root, &mut state, id).await?;
+    let kind = match provider {
+        Some(p) => format!("{role}, {p}"),
+        None => role.to_owned(),
+    };
     println!(
-        "Added {id} ({role}): {}",
+        "Added {id} ({kind}): {}",
         local::creds_path(root, id).display()
     );
     Ok(())
@@ -174,6 +257,35 @@ pub async fn remove(root: &Path, id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_names_follow_the_control_plane_rule() {
+        for ok in [
+            "claude-code",
+            "codex",
+            "hermes",
+            "claude.ai",
+            "0x",
+            "a",
+            &"a".repeat(51),
+        ] {
+            check_provider(ok).unwrap();
+        }
+        for bad in [
+            "",
+            "Claude",
+            "-x",
+            ".x",
+            "_x",
+            "a b",
+            "a/b",
+            "a:b",
+            "é",
+            &"a".repeat(52),
+        ] {
+            assert!(check_provider(bad).is_err(), "accepted {bad:?}");
+        }
+    }
 
     #[test]
     fn rejects_reserved_components_and_api_namespaces() {

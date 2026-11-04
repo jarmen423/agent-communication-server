@@ -97,7 +97,8 @@ def test_device_identity_ownership_tenants_revocation_and_refresh_replay(tmp_pat
 @pytest.mark.parametrize('extra', [
     {'identity': 'hub-server'}, {'identity': 'a.b'}, {'identity': 'wave'},
     {'identity': ''}, {'role': 'admin'}, {'public_key': 'SU-not-a-public-key'},
-    {'tenant': 'T_B'},
+    {'tenant': 'T_B'}, {'provider': 'Claude'}, {'provider': ''}, {'provider': '-x'},
+    {'provider': 'a' * 52}, {'provider': ['codex']}, {'provider': 'a b'},
 ])
 def test_registration_validation(extra):
     async def go():
@@ -171,4 +172,24 @@ def test_device_public_client_identifier_is_required():
             response = await http.post('/device/token', data={
                 'grant_type': DEVICE_GRANT, 'device_code': code['device_code'], 'client_id': 'acs'})
             assert response.status_code == 200
+    asyncio.run(go())
+
+
+def test_registration_records_the_agent_client(tmp_path):
+    async def go():
+        http, _, _, store = make()
+        store.path = tmp_path / 'state.json'
+        async with http:
+            t = await login(http)
+            for name, provider in (('with-client', 'claude-code'), ('without', None)):
+                body = {'identity': name, 'public_key': public()}
+                if provider:
+                    body['provider'] = provider
+                r = await http.post('/v1/device/identities', headers=headers(t), json=body)
+                assert r.status_code == 201, r.text
+            records = {i['identity']: i for i in
+                       (await http.get('/v1/device', headers=headers(t))).json()['identities']}
+            assert records['with-client']['provider'] == 'claude-code'
+            assert records['without']['provider'] is None
+            assert Store(store.path).identity('T_A', 'with-client').provider == 'claude-code'
     asyncio.run(go())
