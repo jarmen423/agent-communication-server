@@ -96,17 +96,20 @@ def test_headless_login_agents_install_preserves_config_and_logout(device_stack)
     acs(env, 'agent', 'add', 'me')
     acs(env, 'agent', 'add', 'bot', '--role', 'worker')
     root = Path(env['ACS_HOME'])
-    state = json.loads((root / 'state.json').read_text())
-    creds = root / 'creds/me.creds'
+    tenant_dir = root / 'tenants/T_A'
+    device = json.loads((root / 'device.json').read_text())
+    state = json.loads((tenant_dir / 'state.json').read_text())
+    creds = tenant_dir / 'creds/me.creds'
     original = creds.read_text()
     claims = decode_jwt(original.splitlines()[1])
     assert claims['name'] == 'me' and claims['sub'] == state['agents']['me']['public_key']
-    for path in (creds, root / 'refresh.token', root / 'state.json'):
+    for path in (creds, root / 'refresh.token', root / 'device.json', tenant_dir / 'state.json'):
         assert path.stat().st_mode & 0o777 == 0o600
-    assert original.split('BEGIN USER NKEY SEED-----\n')[1].splitlines()[0] not in json.dumps(state)
+    seed = original.split('BEGIN USER NKEY SEED-----\n')[1].splitlines()[0]
+    assert seed not in json.dumps(state) and seed not in json.dumps(device)
     status = acs(env, 'status').stdout
     assert all(s in status for s in ('Server:', 'Tenant: T_A', 'Device:', 'Daemon: stopped', 'me:', 'bot:'))
-    assert state['access_token'] not in status
+    assert device['access_token'] not in status
     home = tmp / 'home'
     home.mkdir()
     (home / '.claude.json').write_text(json.dumps({'unrelated': 42, 'mcpServers': {'other': {'command': 'other'}}}))
@@ -133,9 +136,9 @@ def test_headless_login_agents_install_preserves_config_and_logout(device_stack)
     acs(env, 'mcp', 'install', 'claude', '--home', str(home), ok=False)  # ambiguous identity
     assert (home / '.claude.json').read_bytes() == before
     acs(env, 'agent', 'rm', 'bot')
-    assert not (root / 'creds/bot.creds').exists()
+    assert not (tenant_dir / 'creds/bot.creds').exists()
     acs(env, 'logout')
-    assert not (root / 'state.json').exists() and not creds.exists()
+    assert not (root / 'device.json').exists() and not creds.exists()
 
 
 def test_service_key_login_rotation_and_reserved_identity(device_stack):
@@ -148,9 +151,9 @@ def test_service_key_login_rotation_and_reserved_identity(device_stack):
     acs(env, 'agent', 'add', '../bad', ok=False)
     root = Path(env['ACS_HOME'])
     token = (root / 'refresh.token').read_text()
-    state = json.loads((root / 'state.json').read_text())
-    state['access_expires_at'] = 0
-    (root / 'state.json').write_text(json.dumps(state))
+    device = json.loads((root / 'device.json').read_text())
+    device['access_expires_at'] = 0
+    (root / 'device.json').write_text(json.dumps(device))
     acs(env, 'agent', 'add', 'bot')
     assert (root / 'refresh.token').read_text() != token
     acs(env, 'logout')
