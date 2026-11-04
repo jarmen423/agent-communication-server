@@ -109,3 +109,66 @@ def test_server_tenant_slugs_are_validated_before_paths_are_written(tmp_path):
     assert 'invalid tenant slug' in acs(env, 'status', ok=False).stderr
     assert not (tmp_path / 'escaped').exists()
     assert not (root / 'device.json').exists()
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('gated', [False, True])
+def test_credential_response_cannot_cross_tenant_directories(tmp_path, legacy, gated):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    requests = []
+    selected = 'A' if legacy else 'B'
+    foreign = 'B' if legacy else 'A'
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            requests.append((self.path, raw))
+            status = 200
+            if self.path == '/device/token':
+                result = {'tenant': 'A', 'tenants': ['A', 'B'], 'device': 'test-device',
+                          'access_token': 'test-access', 'refresh_token': 'test-refresh',
+                          'expires_in': 3600, 'nats_url': 'nats://127.0.0.1:1'}
+                if legacy:
+                    result.pop('tenants')
+            elif self.path == '/v1/device/identities':
+                result = {'tenant': selected, 'identity': 'me', 'role': 'orchestrator'}
+                if gated:
+                    status = 403
+                    result = {'error': 'access_denied', 'error_description': 'untrusted server details'}
+            else:
+                result = {'tenant': foreign, 'jwt': 'foreign-credential', 'expires_at': 9999999999}
+            payload = json.dumps(result).encode()
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    root = tmp_path / 'acs'
+    env = {**os.environ, 'ACS_HOME': str(root), 'ACS_NO_KEYRING': '1',
+           'ACS_SERVER': f'http://127.0.0.1:{server.server_port}'}
+    try:
+        acs(env, 'login', '--key', 'test-key')
+        error = acs(env, 'agent', 'add', 'me', '--tenant', selected, ok=False).stderr
+        if gated:
+            assert 'cannot add an identity in this tenant' in error
+            assert 'untrusted server details' not in error
+            assert not (root / 'tenants' / selected / 'creds/me.creds').exists()
+        else:
+            assert 'credential tenant mismatch' in error
+            assert 'foreign-credential' not in (root / 'tenants' / selected / 'creds/me.creds').read_text()
+        assert not (root / 'tenants' / foreign / 'creds/me.creds').exists()
+        for path, raw in requests:
+            if path.startswith('/v1/'):
+                assert json.loads(raw)['tenant'] == selected
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

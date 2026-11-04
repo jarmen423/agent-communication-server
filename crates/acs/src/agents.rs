@@ -59,6 +59,9 @@ pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
         .await
     {
         std::fs::remove_file(local::creds_path(root, id))?;
+        if e.to_string().ends_with("access_denied") {
+            bail!("cannot add an identity in this tenant; check your tenant access and whether the tenant is ready");
+        }
         return Err(e);
     }
     state.agents.insert(
@@ -96,7 +99,7 @@ pub async fn refresh(root: &Path, state: &mut State, id: &str) -> Result<()> {
             json!({"identity": id, "public_key": agent.public_key, "tenant":state.tenant}),
         )
         .await?;
-    if value["tenant"].as_str().is_some_and(|t| t != state.tenant) {
+    if value["tenant"].as_str() != Some(state.tenant.as_str()) {
         bail!("credential tenant mismatch");
     }
     let jwt = api::string(&value, "jwt")?;
