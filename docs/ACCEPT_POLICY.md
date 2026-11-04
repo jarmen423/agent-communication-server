@@ -73,7 +73,9 @@ close do not start work and remain available after access changes.
 
 Rejection terminals are emitted only for bound senders and include
 `refused_sender` and `message_id`. Clients match both against their own send.
-The orchestrator handles refusals only through its private inbox notices.
+The orchestrator handles its private inbox notices and matching worker refusal
+terminals. Worker terminals must name `hub-orchestrator` as `refused_sender`
+and its dispatch id as `message_id`.
 
 The reply exemption is multi-use within 24 hours: several replies may refer
 to the same delivered DM. It does not grant access to unknown or removed targets.

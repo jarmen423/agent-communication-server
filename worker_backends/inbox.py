@@ -95,8 +95,7 @@ class InboxDispatcher:
         if not isinstance(payload, dict) or payload.get("action") not in SESSION_CHANNEL_ACTIONS:
             return
         if ((envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS
-                and not (payload.get("action") == "session_close"
-                         and (envelope.get("meta") or {}).get("kind") == "control")):
+                and not (payload.get("action") == "session_close")):
             return
         if self.accept_check is not None and not await self.accept_check.allows(envelope):
             return
@@ -221,8 +220,7 @@ class AcceptCheck:
         payload = payload if isinstance(payload, dict) else {}
         action = payload.get("action")
         if (cancel_request(envelope) is not None or
-                (action == "session_close" and
-                 (envelope.get("meta") or {}).get("kind") == "control") or
+                action == "session_close" or
                 (action not in ("session_start", "session_send") and
                  (envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS)):
             return True

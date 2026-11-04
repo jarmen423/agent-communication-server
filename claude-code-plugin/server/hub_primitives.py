@@ -7,7 +7,8 @@ correlated to the task envelope id (``meta.reply_to`` or ``payload.task_id``);
 ``status``/``event`` envelopes are progress, never the result. A result
 counts only when ``meta.from`` is the worker the task was delegated to
 (HARDENING.md C5; best effort on a permissive hub, where ``meta.from`` is
-self-asserted, real on a ``--require-bound-identity`` hub).
+self-asserted, real on a ``--require-bound-identity`` hub). Rejected message
+or status envelopes also require the caller identity and original sent id.
 """
 
 from __future__ import annotations
@@ -45,6 +46,20 @@ def is_task_result(env: dict, task_id: str, worker: str | None = None) -> bool:
         return False
     payload = env.get("payload", {})
     return meta.get("reply_to") == task_id or payload.get("task_id") == task_id
+
+
+def is_task_completion(env: dict, task_id: str, worker: str,
+                       caller: str | None) -> bool:
+    """Match results or refusals bound to this caller's dispatch."""
+    payload = env.get("payload") or {}
+    if payload.get("rejected") is True:
+        meta = env.get("meta") or {}
+        return (caller is not None
+                and meta.get("kind") in ("message", "status")
+                and meta.get("from") in ("hub-server", worker)
+                and payload.get("refused_sender") == caller
+                and payload.get("message_id") == task_id)
+    return is_task_result(env, task_id, worker)
 
 
 def summarize_env(it: dict) -> dict:
@@ -169,33 +184,22 @@ class TaskTracker:
     async def _feed(self, env: dict) -> None:
         meta = env.get("meta", {})
         payload = env.get("payload", {})
-        if payload.get("rejected") is True and (
-                meta.get("from") not in ("hub-server", self.worker)
-                or payload.get("refused_sender") != self.sender
-                or payload.get("message_id") != self.task_id):
-            await self.other_messages.put(env)
-            return
         kind = meta.get("kind")
-        if kind == "status":
-            status = env.get("payload", {}).get("status")
+        if is_task_completion(env, self.task_id, self.worker, self.sender):
+            if self.result is None:
+                self.result = env
+                status = payload.get("status")
+                self.state = status if status in ("error", "cancelled") else "done"
+                self.done.set()
+        elif payload.get("rejected") is True:
+            await self.other_messages.put(env)
+        elif kind == "status":
+            status = payload.get("status")
             if isinstance(status, str):
                 self.last_status = status
             await self.events.put(env)
         elif kind == "event":
             await self.events.put(env)
-        elif (is_task_result(env, self.task_id, self.worker) or (
-                self.sender is not None and meta.get("from") == "hub-server" and env.get("payload", {}).get("rejected") is True
-                and env.get("payload", {}).get("task_id") == self.task_id
-                and env.get("payload", {}).get("message_id") == self.task_id
-                and env.get("payload", {}).get("refused_sender") == self.sender)) and self.result is None:
-            self.result = env
-            payload = env.get("payload", {})
-            if payload.get("rejected") is True:
-                payload["error"] = "refused: " + str(payload.get("error", "accept policy"))
-            status = payload.get("status")
-            # Terminal status set: done | error | cancelled (contract §4.2).
-            self.state = status if status in ("error", "cancelled") else "done"
-            self.done.set()
         else:
             if is_task_result(env, self.task_id):  # right task, wrong sender
                 print(f"[nats-hub] ignoring result for {self.task_id} from "

@@ -1,5 +1,6 @@
 """Worker policy checks reject inbox bypasses before execution."""
 import pytest
+from test_accept_policy_admission import test_live_rust_refusal_cannot_claim_session  # noqa: F401
 from worker_backends.inbox import policy_allows, task_channel, AcceptCheck
 
 @pytest.mark.parametrize("origin,allowed", [(None, False), ({}, False),
@@ -129,7 +130,7 @@ async def test_mcp_tracker_only_trusts_router_rejection(monkeypatch):
     assert not tracker.done.is_set()
     await tracker._feed(terminal("hub-server"))
     assert tracker.done.is_set()
-    assert "refused" in tracker.result["payload"]["error"]
+    assert tracker.result["payload"]["error"] == "denied"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["router", "worker"])
@@ -203,7 +204,7 @@ async def test_session_turn_policy_after_resume(resumed):
     runner = asyncio.create_task(dispatcher.run())
     try:
         for action in ("session_send", "session_close"):
-            env = {"meta":{"id":action,"from":"bob","kind":"control" if action == "session_close" else "message",
+            env = {"meta":{"id":action,"from":"bob","kind":"message",
                            "origin":{"identity":"bob","user":"bob"}},
                    "payload":{"action":action,"session_id":"sid","prompt":"do work"}}
             await callbacks[0](SimpleNamespace(subject="channel.session.sid", data=json.dumps(env).encode()))
@@ -299,7 +300,7 @@ async def test_live_resumed_session_refuses_turn_but_allows_close():
         await asyncio.wait_for(resumed(),5)
         for action in ("session_send","session_close"):
             env = {"meta":{"id":uuid.uuid4().hex,"from":bob,"channel":channel,
-                           "kind":"control" if action == "session_close" else "message","timestamp":"2026-11-04T00:00:00Z"},
+                           "kind":"message","timestamp":"2026-11-04T00:00:00Z"},
                    "payload":{"action":action,"session_id":sid,"message":"must not execute"}}
             await nc.publish(f"hub.pub.{bob}.{channel}",json.dumps(env).encode())
             await nc.flush()

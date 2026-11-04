@@ -223,7 +223,7 @@ async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
             on_cancel(client, inbox, id, &env.meta.from, None).await;
             continue;
         }
-        if task_prompt(&env, direct).is_ok() && !POLICY.check(client, &env).await {
+        if inbox::needs_policy(&env, direct) && !POLICY.check(client, &env).await {
             continue;
         }
         if !admit_session(inbox, &env) {
@@ -243,7 +243,8 @@ fn admit_session(inbox: &mut Inbox, env: &Envelope) -> bool {
     if matches!(
         env.meta.kind,
         MessageKind::Status | MessageKind::Event | MessageKind::Control
-    ) {
+    ) && env.payload["action"] != "session_close"
+    {
         return true;
     }
     match inbox.sessions.admit(env) {
@@ -283,6 +284,9 @@ async fn queue_or_reject(
     direct: bool,
     running: &Envelope,
 ) {
+    if inbox::needs_policy(&env, direct) && !POLICY.check(client, &env).await {
+        return;
+    }
     if !admit_session(inbox, &env) {
         return;
     }
@@ -293,9 +297,6 @@ async fn queue_or_reject(
             return;
         }
     };
-    if !POLICY.check(client, &env).await {
-        return;
-    }
     if inbox.alias_redispatch(&env, running) {
         info!(id = %env.meta.id, "session_start for a session already in flight: aliased, not re-run");
         return;

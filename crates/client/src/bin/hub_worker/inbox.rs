@@ -232,6 +232,15 @@ pub fn cancel_target(env: &Envelope, direct: bool) -> Option<&str> {
         .flatten()
 }
 
+/// Check session admission even when a start/send carries no prompt.
+pub fn needs_policy(env: &Envelope, direct: bool) -> bool {
+    match env.payload["action"].as_str() {
+        Some("session_close") => false,
+        Some("session_start" | "session_send") => true,
+        _ => task_prompt(env, direct).is_ok(),
+    }
+}
+
 /// The prompt if `env` is a task this worker should run, else `Err(reason)`.
 ///
 /// Progress/bookkeeping kinds are never tasks. Never answer a result either:
@@ -239,10 +248,12 @@ pub fn cancel_target(env: &Envelope, direct: bool) -> Option<&str> {
 /// task channel the reply is a DM (rule 6) — only for envelopes sent to us,
 /// not for chatter on the broadcast channel.
 pub fn task_prompt(env: &Envelope, direct: bool) -> Result<String, &'static str> {
-    if matches!(
-        env.meta.kind,
-        MessageKind::Status | MessageKind::Event | MessageKind::Control
-    ) || looks_like_task_result(env)
+    if env.payload["action"] == "session_close"
+        || matches!(
+            env.meta.kind,
+            MessageKind::Status | MessageKind::Event | MessageKind::Control
+        )
+        || looks_like_task_result(env)
     {
         return Err("not a task");
     }
@@ -271,6 +282,27 @@ mod tests {
     fn inbox(max: usize) -> Inbox {
         let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Inbox::new(rx, None, max)
+    }
+
+    #[test]
+    fn session_admission_checks_policy_without_a_prompt() {
+        for action in ["session_start", "session_send"] {
+            for prompt in ["", "work"] {
+                let env = task("mallory", json!({"action":action, "prompt":prompt}));
+                assert!(needs_policy(&env, true));
+                assert!(needs_policy(&env, false));
+            }
+        }
+        for kind in [
+            MessageKind::Message,
+            MessageKind::Control,
+            MessageKind::Human,
+        ] {
+            let mut env = task("boss", json!({"action":"session_close", "prompt":"work"}));
+            env.meta.kind = kind;
+            assert!(!needs_policy(&env, true));
+            assert!(task_prompt(&env, true).is_err());
+        }
     }
 
     #[test]

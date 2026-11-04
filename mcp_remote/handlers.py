@@ -69,7 +69,7 @@ def _view_data(view: stored.TaskView) -> dict:
 
 async def _get_task_result(args: dict) -> dict:
     nc = await conn.get_nc()
-    view = stored.TaskView(args["task_id"], args["worker"])
+    view = stored.TaskView(args["task_id"], args["worker"], conn.identity())
     cursor = args.get("cursor")
     if cursor is None:
         await view.wait(nc, float(args.get("wait_secs", 25)))
@@ -95,7 +95,7 @@ async def _get_task_result(args: dict) -> dict:
 
 async def _cancel_task(args: dict) -> dict:
     nc = await conn.get_nc()
-    view = stored.TaskView(args["task_id"], args["worker"])
+    view = stored.TaskView(args["task_id"], args["worker"], conn.identity())
     await view.update(nc)
     if view.result is not None:
         return _ok({**_view_data(view), "note": f"task already finished "

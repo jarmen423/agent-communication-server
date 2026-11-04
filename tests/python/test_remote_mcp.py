@@ -259,7 +259,7 @@ def test_task_view_reads_stream_and_ignores_forged_results():
 
     async def go():
         nc = _FakeStream(msgs)
-        view = stored.TaskView(task_id, "w1")
+        view = stored.TaskView(task_id, "w1", "alice")
         await view.update(nc)
         assert view.state == "running" and view.last_status == "working"
         assert len(view.events) == 2 and view.result is None
@@ -268,7 +268,7 @@ def test_task_view_reads_stream_and_ignores_forged_results():
         await view.wait(nc, 2, poll=0.05)
         assert view.state == "error" and view.result["payload"]["error"] == "boom"
         with pytest.raises(stored.NotDurable, match="--durable"):
-            await stored.TaskView(task_id, "w1").update(_FakeStream([], durable=False))
+            await stored.TaskView(task_id, "w1", "alice").update(_FakeStream([], durable=False))
     asyncio.run(go())
 
 
@@ -286,3 +286,62 @@ def test_new_dirs_are_client_side_apache():
                 "stub_control_plane/nats_issuer.py", "scripts/dev/remote_mcp_demo.sh",
                 "docs/REMOTE_MCP.md", "mcp_server/hub_app.py"):
         assert lic._license_for(rel) == "Apache-2.0", rel
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["worker", "hub-server", "stranger"])
+@pytest.mark.parametrize("kind", ["message", "status"])
+async def test_refusal_correlation_is_shared_by_local_and_hosted(monkeypatch, source, kind):
+    from hub_primitives import TaskTracker
+    from mcp_remote.stored import TaskView
+    monkeypatch.setattr(conn, "identity", lambda: "alice")
+    tracker = TaskTracker("sent-id", "task.sent-id", "worker")
+    view = TaskView("sent-id", "worker", "alice")
+    for caller, message_id in (("mallory", "atk-1"), ("mallory", "sent-id"),
+                               ("alice", "atk-1"), (None, None)):
+        env = _env(source, kind, {"rejected": True, "status": "error",
+            "task_id": "sent-id", "refused_sender": caller, "message_id": message_id})
+        await tracker._feed(env)
+        view._feed(env)
+        assert not tracker.done.is_set() and view.state == "running"
+        assert view.events == []
+    env = _env(source, kind, {"rejected": True, "status": "error",
+        "refused_sender": "alice", "message_id": "sent-id", "error": "denied"})
+    await tracker._feed(env)
+    view._feed(env)
+    assert tracker.done.is_set() == (source != "stranger")
+    assert view.state == ("refused" if source != "stranger" else "running")
+    assert env["payload"]["error"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_wait_refusal_has_one_prefix(monkeypatch):
+    import hub_handlers
+    from hub_primitives import TaskTracker
+    monkeypatch.setattr(conn, "identity", lambda: "alice")
+    tracker = TaskTracker("sent-id", "task.sent-id", "worker")
+    await tracker._feed(_env("worker", "message", {"rejected": True,
+        "refused_sender": "alice", "message_id": "sent-id", "error": "denied"}))
+    class Hub:
+        async def wait_for_task(self, *args):
+            return tracker.snapshot()
+    monkeypatch.setattr(hub_handlers, "hub", lambda: Hub())
+    result = await hub_handlers._wait_for_task({"task_id": "sent-id", "timeout": 1})
+    assert result["error"] == "refused: denied"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["hub-server", "worker"])
+async def test_hosted_wait_reports_own_refusal(monkeypatch, source):
+    from mcp_remote import handlers
+    task_id = "abcd1234-0000-0000-0000-000000000000"
+    stream = _FakeStream([("channel.task.abcd1234", _env(source, "message", {
+        "status": "error", "rejected": True, "task_id": task_id,
+        "refused_sender": "alice", "message_id": task_id, "error": "denied"}))])
+    async def get_nc():
+        return stream
+    monkeypatch.setattr(conn, "get_nc", get_nc)
+    monkeypatch.setattr(conn, "identity", lambda: "alice")
+    result = await handlers._get_task_result({"task_id": task_id, "worker": "worker", "wait_secs": 0})
+    assert result["data"]["state"] == "refused"
+    assert result["data"]["error"] == "denied"

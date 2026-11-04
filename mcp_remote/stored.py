@@ -22,7 +22,7 @@ from typing import Any
 import nats.errors
 
 import hub_delivery
-from hub_primitives import is_task_result, summarize_env
+from hub_primitives import is_task_completion, summarize_env
 
 REQUEST_TIMEOUT = 3.0
 MAX_SCAN = 20_000  # messages read back for one task channel (stream keeps 10k per subject)
@@ -68,11 +68,11 @@ async def read_stored(nc: Any, subject: str, *, after_seq: int = 0,
 
 
 class TaskView:
-    """What the stored task channel says about one task (C5: only
-    ``worker``'s correlated message counts as the result)."""
+    """Stored worker results and refusals correlated to the caller's dispatch."""
 
-    def __init__(self, task_id: str, worker: str) -> None:
+    def __init__(self, task_id: str, worker: str, caller: str) -> None:
         self.task_id, self.worker = task_id, worker
+        self.caller = caller
         self.channel = hub_delivery.task_channel_for(task_id)
         self.last_seq = 0
         self.scanned = 0
@@ -97,19 +97,24 @@ class TaskView:
     def _feed(self, env: dict) -> None:
         meta = env.get("meta") or {}
         kind = meta.get("kind")
-        if kind in ("status", "event"):
+        if is_task_completion(env, self.task_id, self.worker, self.caller):
+            if self.result is None:
+                self.result = env
+        elif (env.get("payload") or {}).get("rejected") is True:
+            return
+        elif kind in ("status", "event"):
             payload = env.get("payload") or {}
             if kind == "status" and isinstance(payload.get("status"), str):
                 self.last_status = payload["status"]
             self.events = (self.events + [{"from": meta.get("from"), "kind": kind,
                                            "payload": payload}])[-20:]
-        elif is_task_result(env, self.task_id, self.worker):
-            self.result = env
 
     @property
     def state(self) -> str:
         if self.result is None:
             return "running"
+        if (self.result.get("payload") or {}).get("rejected") is True:
+            return "refused"
         status = (self.result.get("payload") or {}).get("status")
         return status if status in ("error", "cancelled") else "done"
 
