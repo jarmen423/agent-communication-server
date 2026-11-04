@@ -84,7 +84,7 @@ export function centerline(m: Machine, a: Agent): Pt[] {
   return [...branch, ...trunk.slice(1)];
 }
 
-function lane(points: Pt[]): Lane {
+export function lane(points: Pt[]): Lane {
   const pts = new Float32Array(points.length * 2);
   const cum = new Float32Array(points.length);
   points.forEach((p, i) => {

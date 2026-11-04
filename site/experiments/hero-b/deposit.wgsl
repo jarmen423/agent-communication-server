@@ -12,11 +12,14 @@
 //   look: channel (0 sent, 1 received), intensity, sigma, dash period (0 = solid)
 
 struct View {
-  size: vec2f,     // viewBox width, height
-  px: f32,         // device pixels per viewBox unit
+  size: vec2f,     // target size in the units below (B: the design space itself; the web: target pixels)
+  px: f32,         // target pixels per design unit
   tau: f32,        // seconds for light to fall to 1/e
   halo: f32,       // sigma of the soft halo, viewBox units
   halo_gain: f32,  // halo peak relative to the core
+  scale: f32,      // design units → target units (1 for B, cover scale for the web)
+  unused: f32,
+  off: vec2f,      // cover offset, target units (0 for B)
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -45,7 +48,8 @@ struct VOut {
   let n = vec2f(-d.y, d.x) / max(length(d), 1e-4);
   let p = mix(ends.xy, ends.zw, c.x) + n * (c.y * reach);
   var out: VOut;
-  out.pos = vec4f(p.x / view.size.x * 2.0 - 1.0, 1.0 - p.y / view.size.y * 2.0, 0.0, 1.0);
+  let q = p * view.scale + view.off;
+  out.pos = vec4f(q.x / view.size.x * 2.0 - 1.0, 1.0 - q.y / view.size.y * 2.0, 0.0, 1.0);
   out.local = vec2f(c.x, c.y * reach);
   out.path = path;
   out.look = look;

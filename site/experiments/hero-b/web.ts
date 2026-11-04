@@ -1,6 +1,9 @@
-// The ASCII web, live. Two passes per frame: web-cells.wgsl (analytic light,
-// one texel per character cell) and web.wgsl (the field and the hub lamp),
-// both cover-mapped from the design space onto the full-bleed hero canvas.
+// The ASCII web, live. Per frame: plain B's long exposure on the web's
+// tracks (web-trails.ts: fade + deposits into a light target), the ground's
+// cells (web-cells.wgsl: hub and click rings, one texel per character), then
+// one pass to the canvas: the field and the hub lamp (web.wgsl) and the
+// developed tracks over them (web-trails.wgsl). All cover-mapped from the
+// design space onto the full-bleed hero canvas.
 import { effect, init, sampler, surface, target, texture } from "vgpu";
 import type { Frame, Gpu, Target, Texture } from "vgpu";
 import type { HeroPalette, HeroRenderer } from "@/components/hero/gpu-stage";
@@ -8,8 +11,9 @@ import { ATLAS_COLS, canvasAtlas, monoFamily, rgba, type AtlasMaker } from "./at
 import { FONT, glyphTable } from "./glyphs";
 import { run } from "./run";
 import cellsShader from "./web-cells.wgsl";
-import { WEB_LOOK, WEB_RAMP, YIELD, lineBox, lineSigma, webRows } from "./web-light";
-import { clickRings, cover, createWeb, frameAt, LINE_POINTS, PULSES_PER_LINE, RIPPLES, WEB, WEB_POSTER_T, type Band, type WebFrame, type WebLayout } from "./web-model";
+import { WEB_LOOK, YIELD, webRows } from "./web-light";
+import { clickRings, cover, FEATHER, groundFrame, WEB, type Band, type WebFrame, type WebLayout } from "./web-model";
+import { createTrails } from "./web-trails";
 import fieldShader from "./web.wgsl";
 import { placeAlpha } from "./web-places";
 
@@ -23,46 +27,34 @@ export type WebModule = { startWeb(canvas: HTMLCanvasElement, opts: { band: Band
 
 /** The per-frame uniform for web-cells.wgsl. */
 export function webUniform(l: WebLayout, f: WebFrame) {
-  const [cols, rows] = l.grid;
-  const lineInfo: number[][] = [];
-  const boxes: number[][] = [];
-  const pts: number[][] = [];
-  const pulses: number[][] = [];
-  for (let i = 0; i < 6; i++) {
-    const line = f.lines[i];
-    lineInfo.push(line ? [line.alive, line.pulses.length, 0, 0] : [0, 0, 0, 0]);
-    boxes.push(line ? lineBox(line.pts, l) : [1, 1, -1, -1]);
-    for (let j = 0; j < LINE_POINTS; j += 2) pts.push(line ? Array.from(line.pts.subarray(j * 2, j * 2 + 4)) : [0, 0, 0, 0]);
-    for (let k = 0; k < PULSES_PER_LINE; k++) pulses.push(line?.pulses[k] ?? [0, 0, 1, 1]);
-  }
   return {
-    grid: [cols, rows],
-    cell: [l.width / cols, l.height / rows],
     hub: [l.hub.cx, l.hub.cy],
-    sigma: lineSigma(l),
-    lines: Math.min(6, f.lines.length),
-    look: [WEB_LOOK.ahead, WEB_LOOK.lift, WEB_LOOK.ripple, 0],
-    line_info: lineInfo,
-    line_box: boxes,
-    pts,
-    pulses,
-    ripples: f.ripples.slice(0, RIPPLES),
+    cell: [l.width / l.grid[0], l.height / l.grid[1]],
+    look: [WEB_LOOK.ripple, WEB_LOOK.click, 0, 0],
+    ripples: f.ripples,
     clicks: f.clicks,
     mask: f.mask.slice(0, 4),
-    mask2: [f.mask[4], YIELD.floor, YIELD.radius, WEB_LOOK.click],
+    mask2: [FEATHER, YIELD.floor, YIELD.radius, 0],
   };
 }
 
-export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, size: readonly [number, number], makeAtlas: AtlasMaker) {
+/** The light target's size for a canvas: CSS resolution (trails are soft light; the develop pass upsamples). */
+const lightSize = (w: number, h: number, css: number): [number, number] => {
+  const k = css > 0 ? Math.min(1, Math.max(0.5, css / w)) : 1;
+  return [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
+};
+
+export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, size: readonly [number, number], makeAtlas: AtlasMaker, cssWidth = 0) {
   const [cols, rows] = l.grid;
-  const web = createWeb(l);
-  let t = WEB_POSTER_T;
+  const trails = createTrails(gpu, l, lightSize(size[0], size[1], cssWidth), { cover: true, palette });
+  trails.setOutput(size);
   let copy: readonly number[] = l.copy;
   const clicks: { x: number; y: number; t: number }[] = [];
-  const frameNow = () => frameAt(l, web.live(t), t, { copy, clicks: clickRings(clicks, t) });
+  const now = () => trails.ex.time;
+  const frameNow = () => groundFrame(l, trails.traffic.live(now()), now(), { copy, clicks: clickRings(clicks, now()) });
   const cells = target(gpu, { size: [cols, rows], format: "rgba16float", label: "hero-b.web-cells" });
   const light = effect(gpu, cellsShader, { set: { web: webUniform(l, frameNow()) } });
-  const { chars, index } = glyphTable(webRows(cols, rows), WEB_RAMP.chars);
+  const { chars, index } = glyphTable(webRows(cols, rows), []);
   const text = texture(gpu, { kind: "2d", size: [cols, rows], format: "rgba8uint", usage: ["texture_binding", "copy_dst"], label: "hero-b.web-text" });
   gpu.gpu.queue.writeTexture({ texture: text.gpu }, rgba(index), { bytesPerRow: cols * 4 }, [cols, rows]);
 
@@ -93,53 +85,56 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
       ink: [...pal.laneInk, 1],
       teal: [...pal.teal, 1],
       orange: [...pal.orange, 1],
-      look: [WEB_LOOK.base, WEB_LOOK.liftAlpha, WEB_LOOK.gain, WEB_LOOK.litScale],
-      look2: [WEB_LOOK.hue, WEB_LOOK.ink, 0, 0],
-      ramp_at: WEB_RAMP.at,
-      ramp: WEB_RAMP.chars.map((c) => chars.indexOf(c)),
+      look: [WEB_LOOK.base, WEB_LOOK.liftAlpha, WEB_LOOK.ink, 0],
     };
   };
   const { plate } = l;
   const lampUniform = (f: WebFrame) => ({ plate: [plate.x, plate.y, plate.w, plate.h], glow: [f.glow, plate.r, 0.7, 0], events: f.events });
-  const first = frameNow();
   const draw = effect(gpu, fieldShader, {
-    set: { cells, text, atlas: atlas!, samp: sampler(gpu, { minFilter: "linear", magFilter: "linear" }), field: fieldUniform(), lamp: lampUniform(first) },
+    set: { cells, text, atlas: atlas!, samp: sampler(gpu, { minFilter: "linear", magFilter: "linear" }), field: fieldUniform(), lamp: lampUniform(frameNow()) },
   });
 
   return {
-    web,
+    traffic: trails.traffic,
     get time() {
-      return t;
+      return now();
     },
-    compile: (out: Target) => Promise.all([light.compile(cells), draw.compile(out)]),
+    compile: (out: Target) => Promise.all([light.compile(cells), draw.compile(out), trails.compile(out)]),
     encode(f: Frame, out: Target, dt: number) {
-      t += dt;
-      while (clicks.length && t - clicks[0].t > 2) clicks.shift();
+      trails.ex.encode(f, dt);
+      while (clicks.length && now() - clicks[0].t > 2) clicks.shift();
       const frame = frameNow();
       light.set({ web: webUniform(l, frame) });
       draw.set({ lamp: lampUniform(frame) });
       f.pass(cells, light);
-      f.pass({ target: out, clear: [0, 0, 0, 0] }, (p) => p.draw(draw));
+      f.pass({ target: out, clear: [0, 0, 0, 0] }, (p) => {
+        p.draw(draw);
+        p.draw(trails.develop);
+      });
     },
     setCopy(rect: readonly number[]) {
       copy = rect;
+      trails.setCopy(rect);
     },
     click(x: number, y: number) {
-      clicks.push({ x, y, t });
+      clicks.push({ x, y, t: now() });
       if (clicks.length > 4) clicks.shift();
     },
-    resize(w: number, h: number) {
+    resize(w: number, h: number, css = 0) {
       current = [w, h];
       upload();
       draw.set({ atlas: atlas!, field: fieldUniform() });
+      trails.resize([w, h], lightSize(w, h, css));
     },
     setPalette(p: HeroPalette) {
       pal = p;
       draw.set({ field: fieldUniform() });
+      trails.setPalette(p);
     },
     dispose() {
       light.dispose();
       draw.dispose();
+      trails.dispose();
       text.destroy();
       atlas?.destroy();
     },
@@ -158,12 +153,12 @@ export const startWeb: WebModule["startWeb"] = async (canvas, { band, palette })
     // A full-viewport canvas: at most 1.5 device px per CSS px, and less on very
     // large heroes so the field pass stays near a fixed pixel budget.
     const out = surface(gpu, canvas, { dpr: [1, dprCap(canvas.clientWidth, canvas.clientHeight)] });
-    const layer = createWebLayer(gpu, layout, palette, out.size, canvasAtlas(family));
-    out.onResize(({ width, height }) => layer.resize(width, height));
+    const layer = createWebLayer(gpu, layout, palette, out.size, canvasAtlas(family), canvas.clientWidth);
+    out.onResize(({ width, height }) => layer.resize(width, height, canvas.clientWidth));
     await layer.compile(out);
-    // Places come and go: fade their cards in the overlay (DOM, a handful of elements) with the same schedule.
-    const cards = [...(canvas.closest?.("section")?.querySelectorAll<SVGGElement>(`[data-band="${band}"] [data-place]`) ?? [])].map((el) => {
-      const [i, j] = (el.dataset.place ?? "0:0").split(":").map(Number);
+    // Places come and go: fade their cards and rails in the overlay (DOM, a few dozen elements) with the same schedule.
+    const cards = [...(canvas.closest?.("section")?.querySelectorAll<SVGGElement>(`[data-band="${band}"] :is([data-place], [data-rail])`) ?? [])].map((el) => {
+      const [i, j] = (el.dataset.place ?? el.dataset.rail ?? "0:0").split(":").map(Number);
       return { el, i, j, alpha: -1 };
     });
     const fadeCards = () => {

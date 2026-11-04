@@ -63,14 +63,14 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1040, 745, "end", "website-2", "teammate-2"),
     S(740, 735, "end", "laptop-1"),
   ],
+  // Nothing left of the copy: a track from there would cross the headline on its way to the hub.
   W: [
-    S(345, 300, "start", "home-1", "ci-4"),
-    S(345, 560, "start", "office-1", "home-3"),
     S(1560, 185, "start", "office-3", "cloud-2"),
-    S(1880, 200, "start", "cloud-1", "home-2"),
+    S(1880, 200, "start", "cloud-1", "home-2", "home-1"),
     S(1965, 420, "start", "teammate-4", "cloud-3"),
-    S(1955, 640, "start", "office-2", "cloud-4"),
+    S(1955, 640, "start", "office-2", "cloud-4", "ci-4"),
     S(1690, 740, "end", "teammate-2"),
+    S(1385, 740, "end", "office-1", "home-3"),
     S(1080, 740, "end", "website-2"),
     S(760, 730, "end", "laptop-1"),
   ],

@@ -9,7 +9,26 @@ import type { Frame, Gpu } from "vgpu";
 import depositShader from "./deposit.wgsl";
 import fadeShader from "./fade.wgsl";
 import type { Layout } from "./layout";
-import { createTraffic, Deposits, emit, exposure, POSTER_T, STRIDE, TAU } from "./schedule";
+import { createTraffic, Deposits, emit, exposure, POSTER_T, STRIDE, TAU, type Msg } from "./schedule";
+
+/** Anything that can say which messages carry light at `t` (B's traffic, or the web's). */
+export type Traffic = { live(t: number): Msg[] };
+export type LightOptions = {
+  through?: boolean;
+  /** Messages to draw; default: B's own traffic for `layout`. */
+  traffic?: Traffic;
+  /** Cover-map the design space onto the target (the web); default: the target is the design space (B). */
+  cover?: boolean;
+  /** Start time (default: B's poster moment). */
+  t0?: number;
+};
+
+/** Design units → target: B draws the design space as is; the web cover-maps it onto the target. */
+export function viewMap(layout: Pick<Layout, "width" | "height">, w: number, h: number, cover: boolean) {
+  if (!cover) return { size: [layout.width, layout.height], px: w / layout.width, scale: 1, unused: 0, off: [0, 0] };
+  const k = Math.max(w / layout.width, h / layout.height);
+  return { size: [w, h], px: k, scale: k, unused: 0, off: [(w - layout.width * k) / 2, (h - layout.height * k) / 2] };
+}
 
 /** Instances for a full rebuild of the exposure (about 16k on the wide stage). */
 const CAPACITY = 32768;
@@ -21,19 +40,19 @@ const INSTANCE = {
   look: { format: "float32x4", location: 2 },
 } as const;
 
-export function createLight(gpu: Gpu, layout: Layout, size: readonly [number, number], opts: { through?: boolean } = {}) {
+export function createLight(gpu: Gpu, layout: Layout, size: readonly [number, number], opts: LightOptions = {}) {
   const light = target(gpu, { size: [size[0], size[1]], format: "rgba16float", label: "hero-b.light" });
   // One instance per deposit, as a vertex stream (works on adapters without vertex-stage storage).
   const segs = geometry(gpu, {
     vertexCount: 6,
     buffers: [{ stepMode: "instance", data: new Float32Array(CAPACITY * STRIDE), attributes: INSTANCE }],
   });
-  const view = (w: number) => ({ size: [layout.width, layout.height], px: w / layout.width, tau: TAU, halo: layout.halo, halo_gain: 0.035 });
-  const deposit = draw(gpu, { shader: depositShader, geometry: segs, blend: "additive", set: { view: view(size[0]) } });
+  const view = (w: number, h: number) => ({ ...viewMap(layout, w, h, !!opts.cover), tau: TAU, halo: layout.halo, halo_gain: 0.035 });
+  const deposit = draw(gpu, { shader: depositShader, geometry: segs, blend: "additive", set: { view: view(size[0], size[1]) } });
   const fade = effect(gpu, fadeShader, { blend: { color: { src: "zero", dst: "src-alpha" } }, set: { fade: { keep: 1 } } });
-  const traffic = createTraffic(layout, 7, opts);
+  const traffic = opts.traffic ?? createTraffic(layout, 7, opts);
   const batch = new Deposits(CAPACITY);
-  let t = POSTER_T;
+  let t = opts.t0 ?? POSTER_T;
   let rebuild = true;
 
   /** Advance time by `dt` and encode the light pass: a full rebuild, or fade and add what moved. */
@@ -69,7 +88,7 @@ export function createLight(gpu: Gpu, layout: Layout, size: readonly [number, nu
     encode,
     resize(w: number, h: number) {
       light.resize([w, h]);
-      deposit.set({ view: view(w) });
+      deposit.set({ view: view(w, h) });
       rebuild = true;
     },
     dispose() {

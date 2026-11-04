@@ -38,7 +38,7 @@ export const POSTER_T = 30;
 export const STRIDE = 12;
 
 const HUB_DELAY = 0.16;
-const STYLE = {
+export const STYLE = {
   task: { speed: 250, intensity: 1, sigma: 1, dash: 0 },
   status: { speed: 340, intensity: 0.6, sigma: 0.75, dash: 12 },
   event: { speed: 340, intensity: 0.6, sigma: 0.75, dash: 12 },
@@ -197,7 +197,7 @@ export function emit(m: Msg, ta: number, tb: number, out: Deposits, layout: Layo
 }
 
 /** Everything still visible at `t`, in one batch (the poster, and the first live frame). */
-export function exposure(traffic: ReturnType<typeof createTraffic>, layout: Layout, t: number, out: Deposits) {
+export function exposure(traffic: { live(t: number): Msg[] }, layout: Layout, t: number, out: Deposits) {
   out.reset();
   for (const m of traffic.live(t)) emit(m, t - HISTORY, t, out, layout);
   return out;
