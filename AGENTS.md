@@ -157,6 +157,7 @@ docs/                      — living docs; docs/archive/ = finished plans and h
 make setup     # nats-server → .tools/bin, Python venv → .venv (idempotent)
 make doctor    # toolchain check with fix hints
 make build     # all bins incl. hub-tui (auto-applies the BINDGEN fix; see CONTRIBUTING.md)
+make test-manifest # manifest writer + accept policy, bound and durable
 make test      # Rust + Python tests against an isolated nats-server + hub-server
 make lint      # fmt --check + clippy
 make up        # local stack: nats-server :4222, hub-server + visualizer :9191, echo-1/echo-2
@@ -204,7 +205,7 @@ Manual commands (against a running stack):
 | `hub-agents [--capability CAP] [--alive SECS] [--identity ID]` | List/search agents |
 | `hub-worker [--identity ID] --execute CMD` | Universal worker: prompt on stdin → CMD → result |
 | `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
-| `hub-delegate --to AGENT (--prompt MSG \| --prompt-file PATH \| --prompt -) [--from ID] [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel. `--from` falls back to `orchestrator` when `NATS_HUB_IDENTITY` is unset. Only the result goes to stdout; logs go to stderr. Ctrl-C sends a cancel (§4.2) and a second Ctrl-C exits. Exit codes: 0 done, 1 worker error, 2 timeout, 3 channel closed, 4 cancelled, 130 interrupted. |
+| `hub-delegate --to AGENT (--prompt MSG \| --prompt-file PATH \| --prompt -) [--from ID] [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel. `--from` falls back to `orchestrator` when `NATS_HUB_IDENTITY` is unset. Only the result goes to stdout; logs go to stderr. Ctrl-C sends a cancel (§4.2) and a second Ctrl-C exits. Exit codes: 0 done, 1 worker error, 2 timeout, 3 channel closed, 4 cancelled, 5 refused by accept policy, 130 interrupted. |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
 | `hub-wave create --goal G [--from ID] --tasks FILE`, `spawn/status/cancel/list` | Parallel wave orchestration |
@@ -252,6 +253,7 @@ over `wss://` (or `tls://`/`nats://` on a trusted network).
 
 ## Conventions
 
+- **Accept policy**: a hub with a manifest writer gates every DM; unknown or removed targets fail closed. See `docs/ACCEPT_POLICY.md`.
 - **Identity**: set once at connect and stamped on every envelope. Never put it in payloads. The MCP server takes it from `NATS_HUB_IDENTITY`, never from tool arguments.
 - **Wire format**: JSON `Envelope`s. Payloads are free-form JSON. `meta.origin` is optional and omits null fields, so read it with a default. Clients may send only `meta.origin.reported`.
 - **Subjects**: `hub.send.<channel>` (publish), `channel.<name>` (broadcast), `channel.inbox.<identity>` (DM), `channel.task.<uuid>`, `channel.session.<uuid>`, `channel.wave.<id>[.task.<task_id>]`, `hub.api.<op>` (query API), `hub.register`, `hub.presence`.
@@ -332,6 +334,7 @@ The client has no default features or storage feature. All its CLIs, including
 - `CONTRIBUTING.md`: dev setup, tests, conventions, troubleshooting
 - `refocus-iteration-2.md` (current) and `refocus.md` (iteration 1, reply contract §6)
 - `docs/WORKER_BACKENDS.md`: worker backend types and entrypoints
+- `docs/ACCEPT_POLICY.md`: per-identity DM policy, refusals and worker checks
 - `docs/SECURITY.md`, `docs/OPERATOR_HUB.md`, `docs/JOIN_HUB.md`, `docs/QUICK_START_REMOTE.md`: distributed hub + auth
 - `docs/REMOTE_INSTALL.md`, `docs/REMOTE_AGENTS.md`: remote workers
 - `docs/BRIDGES.md`: human bridges

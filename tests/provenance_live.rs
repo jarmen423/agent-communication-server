@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 const TENANT: &str = "test-tenant";
 
 fn stack_url() -> Option<String> {
-    if std::env::var("NATS_HUB_TEST_STACK").ok().as_deref() != Some("1") {
-        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_STACK=1)");
+    if std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() != Some("1") {
+        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_MANIFEST=1)");
         return None;
     }
     Some(std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into()))
@@ -180,6 +180,7 @@ async fn dm_carries_manifest_origin() {
     let (channel, model, session) = (unique("prov"), unique("model"), unique("session"));
     provision(&nc, &sender, &user).await;
 
+    provision(&nc, &rcpt, &user).await;
     let mut inbox = subscribed(&nc, format!("channel.inbox.{rcpt}")).await;
     publish(
         &nc,
@@ -206,6 +207,7 @@ async fn durable_inbox_stores_the_same_origin() {
     let (channel, model, session) = (unique("prov"), unique("model"), unique("session"));
     provision(&nc, &sender, &user).await;
 
+    provision(&nc, &rcpt, &user).await;
     let target = match attach_inbox(&nc, &rcpt, Duration::from_secs(10)).await {
         Attach::Attached(target) => target,
         other => panic!("attach failed: {other:?}"),

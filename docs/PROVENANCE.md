@@ -160,7 +160,7 @@ One record per identity:
 | `kind` | `device` \| `connector` | How it connects; default `device` |
 | `agent` | string \| null | The agent client, e.g. `claude-code` |
 | `role` | `worker` \| `orchestrator` \| `admin` \| `service` | Default `worker` |
-| `accept` | object \| null | Who may give it tasks: `{"from": "owner"}`, `{"from": "tenant"}` or `{"from": "users", "users": ["alice"]}`. The hub stores this but doesn't enforce it yet |
+| `accept` | object \| null | Who may give it tasks: `{"from": "owner"}`, `{"from": "tenant"}` or `{"from": "users", "users": ["alice"]}`. The hub enforces this when a manifest writer is configured; see [Accept policy](ACCEPT_POLICY.md) |
 | `rev` | integer ≥ 0 | See below |
 
 Unknown fields are ignored, so a provisioning system can add fields before a hub

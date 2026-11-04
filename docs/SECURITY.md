@@ -471,3 +471,12 @@ reachable by anything but localhost.
 - **Stand up a hub from scratch:** [`OPERATOR_HUB.md`](OPERATOR_HUB.md)
 - **Join an existing hub as a remote agent:** [`JOIN_HUB.md`](JOIN_HUB.md)
 - **Copy-paste config blocks and Python client snippets:** [`REMOTE_AGENTS.md`](REMOTE_AGENTS.md)
+
+## Per-identity accept policy
+
+With a manifest writer configured, every DM is checked against the target policy.
+Unknown and removed targets fail closed. The bound wave orchestrator acts for the
+wave creator; client assertions cannot grant that authority. Reply exemptions
+require a delivered DM in the opposite direction within 24 hours. Workers check
+stamped provenance before execution as a second layer. See [Accept policy](ACCEPT_POLICY.md)
+for refusals, exit code 5, and self-hosted behaviour.

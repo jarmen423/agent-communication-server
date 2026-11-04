@@ -87,6 +87,9 @@ jobs:
       - name: Full suite, durable delivery
         run: make test-durable
 
+      - name: Manifest writer + accept policy
+        run: make test-manifest
+
       - name: Operator mode (pinned nsc, scoped JWTs, tenants, credential lifecycle)
         run: |
           scripts/dev/install_nsc.sh

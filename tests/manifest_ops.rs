@@ -175,8 +175,8 @@ async fn unknown_manifest_op_is_refused_after_the_gate() {
 // ── Live against with_stack.sh ─────────────────────────────────────
 
 fn stack_url() -> Option<String> {
-    if std::env::var("NATS_HUB_TEST_STACK").ok().as_deref() != Some("1") {
-        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_STACK=1)");
+    if std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() != Some("1") {
+        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_MANIFEST=1)");
         return None;
     }
     Some(std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into()))

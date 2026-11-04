@@ -214,8 +214,8 @@ fn add_agent_help_points_to_the_manifest() {
 /// Against the live stack, as the writer `with_stack.sh` configures.
 #[test]
 fn manifest_put_get_against_the_live_stack() {
-    if std::env::var("NATS_HUB_TEST_STACK").ok().as_deref() != Some("1") {
-        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_STACK=1)");
+    if std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() != Some("1") {
+        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_MANIFEST=1)");
         return;
     }
     let as_writer = ["--as", "test-manifest"];

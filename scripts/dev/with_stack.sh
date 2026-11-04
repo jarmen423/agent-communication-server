@@ -32,7 +32,7 @@ port="$(free_port)"
 echo "==> nats-server on :$port"
 nats-server -a 127.0.0.1 -p "$port" -js -sd "$tmp/js" >"$tmp/nats.log" 2>&1 &
 pids+=("$!")
-wait_port 127.0.0.1 "$port" || { echo "nats-server failed to start"; cat "$tmp/nats.log"; exit 1; }
+wait_port 127.0.0.1 "$port" 2>&2 || { echo "nats-server failed to start"; cat "$tmp/nats.log"; exit 1; }
 
 export NATS_URL="nats://127.0.0.1:$port"
 export TEST_NATS_URL="$NATS_URL"
@@ -43,7 +43,11 @@ export NATS_HUB_TEST_STACK=1
 # need an identity — ApiClient/tools pick up NATS_HUB_IDENTITY=test-admin, and
 # tests can branch on the same env var for mode-dependent assertions.
 HUB_ARGS=(--nats-url "$NATS_URL" --db-path "$tmp/db"
-  --tenant test-tenant --manifest-writer test-manifest)
+  --tenant test-tenant)
+if [[ "${NATS_HUB_MANIFEST:-0}" == 1 ]]; then
+  HUB_ARGS+=(--manifest-writer test-manifest)
+  export NATS_HUB_TEST_MANIFEST=1
+fi
 if [[ -n "${NATS_HUB_REQUIRE_BOUND:-}" ]]; then
   HUB_ARGS+=(--require-bound-identity --api-admin test-admin)
   export NATS_HUB_IDENTITY=test-admin
