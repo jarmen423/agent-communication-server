@@ -350,6 +350,33 @@ async fn load_ignores_rows_for_names_that_became_writers() {
 }
 
 #[tokio::test]
+async fn load_turns_invalid_stored_records_into_tombstones() {
+    let store = RowStore::default();
+    let mut bad_user = rec("bad-user", 4);
+    bad_user.user = Some("not a handle".into());
+    store.rows.lock().unwrap().extend([
+        ManifestRow {
+            identity: "bad-user".into(),
+            rev: 4,
+            record: Some(bad_user),
+        },
+        ManifestRow {
+            identity: "rev-mismatch".into(),
+            rev: 2,
+            record: Some(rec("rev-mismatch", 7)),
+        },
+    ]);
+    let m = IdentityManifest::default();
+    assert_eq!(m.load(&store).await.unwrap(), 0);
+    assert_eq!(m.lookup("bad-user"), Lookup::Removed { rev: 4 });
+    assert_eq!(m.lookup("rev-mismatch"), Lookup::Removed { rev: 7 });
+    assert!(
+        m.get("bad-user").is_none(),
+        "an invalid record stamps nothing"
+    );
+}
+
+#[tokio::test]
 async fn concurrent_puts_end_at_the_highest_rev() {
     let store = RowStore::default();
     let m = IdentityManifest::default();

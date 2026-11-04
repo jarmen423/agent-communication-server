@@ -258,6 +258,16 @@ impl IdentityManifest {
                         rec.identity
                     )
                 }
+                // A stored record that no longer validates, or whose rev
+                // disagrees with its row, is not trusted: it loads as a
+                // tombstone at the higher rev, so the identity stamps nothing
+                // and an older write still can't bring it back.
+                Some(rec) if rec.rev != row.rev || rec.validate().is_err() => {
+                    warn!(identity = %row.identity, "stored manifest record is invalid, loading it as removed");
+                    Slot::Removed {
+                        rev: rec.rev.max(row.rev),
+                    }
+                }
                 Some(rec) => Slot::Live(Arc::new(rec)),
                 None => Slot::Removed { rev: row.rev },
             };
