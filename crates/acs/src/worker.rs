@@ -69,7 +69,7 @@ pub async fn run(root: &Path, backend: &str, identity: &str, args: &[String]) ->
             PathBuf::from("hub-worker")
         })
     } else if BACKENDS.contains(&backend) {
-        let (script, python) = python_worker(root, backend).await?;
+        let (script, python) = python_worker(crate::tenants::device_root(root), backend).await?;
         let mut cmd = tokio::process::Command::new(python);
         cmd.arg(script);
         cmd

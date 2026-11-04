@@ -21,6 +21,8 @@ pub struct State {
     pub server: String,
     pub tenant: String,
     pub device: String,
+    #[serde(default)]
+    pub device_name: Option<String>,
     pub nats_url: String,
     pub access_token: String,
     pub access_expires_at: u64,
@@ -93,9 +95,24 @@ pub fn root() -> Result<PathBuf> {
     Ok(root.canonicalize()?)
 }
 
+pub fn private_dir(path: &Path) -> Result<()> {
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            private_dir(parent)?;
+        }
+        fs::create_dir(path)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("file must have a parent")?;
-    fs::create_dir_all(parent)?;
+    private_dir(parent)?;
     let temp = parent.join(format!(
         ".acs-{}-{:016x}.tmp",
         std::process::id(),
@@ -137,19 +154,20 @@ pub fn lock(root: &Path, name: &str) -> Result<File> {
 }
 
 pub fn load(root: &Path) -> Result<State> {
-    let bytes = fs::read(root.join("state.json")).context("not logged in; run acs login")?;
-    Ok(serde_json::from_slice(&bytes)?)
+    crate::tenants::load(root)
 }
 
 pub fn save(root: &Path, state: &State) -> Result<()> {
-    atomic(&root.join("state.json"), &serde_json::to_vec_pretty(state)?)
+    crate::tenants::save(root, state)
 }
 
 fn entry(root: &Path) -> Result<keyring::Entry> {
+    let root = crate::tenants::device_root(root);
     Ok(keyring::Entry::new("acs-device", &root.to_string_lossy())?)
 }
 
 pub fn store_refresh(root: &Path, token: &str) -> Result<()> {
+    let root = crate::tenants::device_root(root);
     // Write the crash-safe fallback first; remove it only after keychain success.
     atomic(&root.join("refresh.token"), token.as_bytes())?;
     if std::env::var_os("ACS_NO_KEYRING").is_none() {
@@ -166,6 +184,7 @@ pub fn store_refresh(root: &Path, token: &str) -> Result<()> {
 }
 
 pub fn refresh(root: &Path) -> Result<String> {
+    let root = crate::tenants::device_root(root);
     // A file wins if a previous keychain write failed during rotation.
     if let Ok(token) = fs::read_to_string(root.join("refresh.token")) {
         return Ok(token);
@@ -186,6 +205,12 @@ pub fn clear(root: &Path) -> Result<()> {
         }
     }
     let creds = root.join("creds");
+    if creds.is_symlink() {
+        fs::remove_file(&creds)?;
+    }
+    if root.join("tenants").exists() {
+        fs::remove_dir_all(root.join("tenants"))?;
+    }
     if creds.exists() {
         fs::remove_dir_all(creds)?;
     }
@@ -193,6 +218,9 @@ pub fn clear(root: &Path) -> Result<()> {
         "refresh.token",
         "keychain.used",
         "state.json",
+        "state.json.bak",
+        "device.json",
+        "current",
         "logout.revoked",
     ] {
         let path = root.join(name);

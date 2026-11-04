@@ -65,7 +65,13 @@ pub async fn mcp(
 ) -> Result<()> {
     let state = local::load(root)?;
     let id = agents::select(&state, identity)?;
-    let (server, python) = runtime(root, server, python).await?;
+    let d = crate::tenants::device(root)?;
+    let name = if d["tenant"] == state.tenant {
+        "nats-hub".to_owned()
+    } else {
+        format!("nats-hub-{}", state.tenant)
+    };
+    let (server, python) = runtime(crate::tenants::device_root(root), server, python).await?;
     let home = match home {
         Some(path) => path,
         None => local::home()?,
@@ -92,7 +98,7 @@ pub async fn mcp(
                 .or_insert(json!({}))
                 .as_object_mut()
                 .context("mcpServers must be an object")?;
-            servers.insert("nats-hub".into(), config);
+            servers.insert(name.clone(), config);
             local::atomic(&path, &serde_json::to_vec_pretty(&doc)?)?;
             path
         }
@@ -120,7 +126,7 @@ pub async fn mcp(
             let servers = doc["mcp_servers"]
                 .as_table_like_mut()
                 .context("mcp_servers must be a table")?;
-            servers.insert("nats-hub", toml_edit::Item::Table(table));
+            servers.insert(&name, toml_edit::Item::Table(table));
             local::atomic(&path, doc.to_string().as_bytes())?;
             path
         }
@@ -140,7 +146,7 @@ pub async fn mcp(
                 .as_mapping_mut()
                 .context("mcp_servers must be a mapping")?;
             servers.insert(
-                serde_yaml::Value::String("nats-hub".into()),
+                serde_yaml::Value::String(name.clone()),
                 serde_yaml::to_value(config)?,
             );
             local::atomic(&path, serde_yaml::to_string(&doc)?.as_bytes())?;

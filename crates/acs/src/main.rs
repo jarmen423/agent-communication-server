@@ -4,7 +4,9 @@ mod daemon;
 mod exec;
 mod install;
 mod local;
+mod migration;
 mod runtime;
+mod tenants;
 mod worker;
 
 use anyhow::Result;
@@ -19,6 +21,8 @@ use std::path::PathBuf;
     about = "ACS device login, credential manager and agent connector"
 )]
 struct Cli {
+    #[arg(long, global = true, env = "ACS_TENANT")]
+    tenant: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -35,11 +39,18 @@ enum Command {
         server: String,
         #[arg(long)]
         headless: bool,
+        #[arg(long, env = "ACS_DEVICE_NAME")]
+        device_name: Option<String>,
         #[arg(long, env = "ACS_SERVICE_KEY", hide_env_values = true)]
         key: Option<String>,
     },
     /// Revoke this device and remove its local state
     Logout,
+    /// List available tenants or select the default
+    Tenant {
+        #[command(subcommand)]
+        command: TenantCommand,
+    },
     /// Show the device, its identities and their credential expiry
     Status,
     /// Print `export` lines for one identity: eval "$(acs env <id>)"
@@ -72,6 +83,12 @@ enum Command {
         #[command(subcommand)]
         command: WorkerCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum TenantCommand {
+    List,
+    Use { tenant: String },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +134,26 @@ enum WorkerCommand {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let root = local::root()?;
+    migration::run(&root)?;
+    let scoped = matches!(
+        cli.command,
+        Command::Env { .. }
+            | Command::Exec { .. }
+            | Command::Worker { .. }
+            | Command::Agent { .. }
+            | Command::Mcp { .. }
+    );
+    let device_root = root.clone();
+    let root = if scoped {
+        tenants::select(&root, cli.tenant.as_deref())?
+    } else {
+        root
+    };
+    if !scoped
+        && (cli.tenant.is_some() || matches!(cli.command, Command::Up { .. } | Command::Down))
+    {
+        tenants::select(&root, cli.tenant.as_deref())?;
+    }
     match cli.command {
         Command::Up { foreground: true } => daemon::foreground(&root).await?,
         Command::Up { foreground: false } => daemon::up(&root).await?,
@@ -132,13 +169,24 @@ async fn main() -> Result<()> {
         Command::Env { identity } => exec::print(&root, &identity)?,
         Command::Exec { identity, command } => exec::run(&root, &identity, &command).await?,
         command => {
-            let _lock = local::lock(&root, "operation.lock")?;
+            let _lock = local::lock(&device_root, "operation.lock")?;
             match command {
                 Command::Login {
                     server,
                     headless,
+                    device_name,
                     key,
-                } => api::login(&root, &server, headless, key).await?,
+                } => api::login(&root, &server, headless, key, device_name).await?,
+                Command::Tenant { command } => {
+                    tenants::command(
+                        &root,
+                        match &command {
+                            TenantCommand::List => None,
+                            TenantCommand::Use { tenant } => Some(tenant),
+                        },
+                    )
+                    .await?
+                }
                 Command::Logout => {
                     daemon::down(&root).await?;
                     if !root.join("logout.revoked").exists() {
@@ -159,25 +207,30 @@ async fn main() -> Result<()> {
                     println!("Logged out; device revoked and local state removed");
                 }
                 Command::Status => {
-                    let s = local::load(&root)?;
-                    println!(
-                        "Server: {}\nTenant: {}\nDevice: {}\nNATS: {}\nDaemon: {}",
-                        s.server,
-                        s.tenant,
-                        s.device,
-                        s.nats_url,
-                        if daemon::running(&root) {
-                            "running"
-                        } else {
-                            "stopped"
+                    for tenant in tenants::names(&root)? {
+                        if cli.tenant.as_ref().is_some_and(|t| t != &tenant) {
+                            continue;
                         }
-                    );
-                    for (id, a) in s.agents {
+                        let s = local::load(&tenants::path(&root, &tenant)?)?;
                         println!(
-                            "{id}: {} credential {}",
-                            a.role,
-                            local::expiry(a.expires_at)
+                            "Server: {}\nTenant: {}\nDevice: {}\nNATS: {}\nDaemon: {}",
+                            s.server,
+                            s.tenant,
+                            s.device,
+                            s.nats_url,
+                            if daemon::running(&root) {
+                                "running"
+                            } else {
+                                "stopped"
+                            }
                         );
+                        for (id, a) in s.agents {
+                            println!(
+                                "{id}: {} credential {}",
+                                a.role,
+                                local::expiry(a.expires_at)
+                            );
+                        }
                     }
                 }
                 Command::Agent {

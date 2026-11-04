@@ -23,7 +23,7 @@ async fn stopped() {
 
 pub async fn foreground(root: &Path) -> Result<()> {
     let _daemon = local::lock(root, "daemon.lock").context("daemon already running")?;
-    local::load(root)?;
+    crate::tenants::device(root)?;
     local::atomic(
         &root.join("daemon.pid"),
         std::process::id().to_string().as_bytes(),
@@ -40,37 +40,44 @@ pub async fn foreground(root: &Path) -> Result<()> {
         let Ok(_operation) = local::lock(root, "operation.lock") else {
             continue;
         };
-        let mut state = match local::load(root) {
-            Ok(s) => s,
-            Err(_) => {
-                eprintln!("Login removed; credential daemon stopping");
-                break;
-            }
-        };
-        let ids: Vec<_> = state.agents.keys().cloned().collect();
-        for id in ids {
-            let now = local::now();
-            if retries.get(&id).is_some_and(|(next, _)| *next > now) {
-                continue;
-            }
-            let remaining = state.agents[&id].expires_at.saturating_sub(now);
-            // 15–25 seconds of jitter avoids a herd and covers short test TTLs.
-            if remaining > rand::thread_rng().gen_range(15..=25) {
-                continue;
-            }
-            match agents::refresh(root, &mut state, &id).await {
-                Ok(()) => {
-                    retries.remove(&id);
-                }
+        for tenant in crate::tenants::names(root)? {
+            let tenant_root = crate::tenants::path(root, &tenant)?;
+            let mut state = match local::load(&tenant_root) {
+                Ok(s) => s,
                 Err(e) => {
-                    let attempt = retries
-                        .get(&id)
-                        .map_or(0, |(_, n)| *n)
-                        .saturating_add(1)
-                        .min(8);
-                    let delay = (1_u64 << attempt).min(60) + rand::thread_rng().gen_range(0..=3);
-                    retries.insert(id.clone(), (now + delay, attempt));
-                    eprintln!("Refresh {id} failed ({e}); retry in {delay}s");
+                    eprintln!("Tenant {tenant} state unavailable ({e}); skipping");
+                    continue;
+                }
+            };
+            let ids: Vec<_> = state.agents.keys().cloned().collect();
+            for id in ids {
+                let now = local::now();
+                if retries
+                    .get(&format!("{tenant}/{id}"))
+                    .is_some_and(|(next, _)| *next > now)
+                {
+                    continue;
+                }
+                let remaining = state.agents[&id].expires_at.saturating_sub(now);
+                // 15–25 seconds of jitter avoids a herd and covers short test TTLs.
+                if remaining > rand::thread_rng().gen_range(15..=25) {
+                    continue;
+                }
+                match agents::refresh(&tenant_root, &mut state, &id).await {
+                    Ok(()) => {
+                        retries.remove(&format!("{tenant}/{id}"));
+                    }
+                    Err(e) => {
+                        let attempt = retries
+                            .get(&format!("{tenant}/{id}"))
+                            .map_or(0, |(_, n)| *n)
+                            .saturating_add(1)
+                            .min(8);
+                        let delay =
+                            (1_u64 << attempt).min(60) + rand::thread_rng().gen_range(0..=3);
+                        retries.insert(format!("{tenant}/{id}"), (now + delay, attempt));
+                        eprintln!("Refresh {id} failed ({e}); retry in {delay}s");
+                    }
                 }
             }
         }
@@ -107,7 +114,7 @@ pub async fn down(root: &Path) -> Result<()> {
 }
 
 pub async fn up(root: &Path) -> Result<()> {
-    local::load(root)?;
+    crate::tenants::device(root)?;
     let exe = std::env::current_exe()?;
     if cfg!(target_os = "linux") {
         let unit = local::home()?.join(".config/systemd/user/acs.service");

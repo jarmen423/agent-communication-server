@@ -54,7 +54,7 @@ pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
             Method::POST,
             "/v1/device/identities",
             Some(&state.access_token),
-            json!({"identity": id, "role": role, "public_key": public}),
+            json!({"identity": id, "role": role, "public_key": public, "tenant":state.tenant}),
         )
         .await
     {
@@ -79,6 +79,7 @@ pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
 }
 
 pub async fn refresh(root: &Path, state: &mut State, id: &str) -> Result<()> {
+    check_id(id)?;
     let api = api::authorized(root, state).await?;
     let agent = state.agents.get(id).context("identity not configured")?;
     let seed = local::seed(root, id)?;
@@ -92,9 +93,12 @@ pub async fn refresh(root: &Path, state: &mut State, id: &str) -> Result<()> {
             Method::POST,
             "/v1/credentials/nats",
             Some(&state.access_token),
-            json!({"identity": id, "public_key": agent.public_key}),
+            json!({"identity": id, "public_key": agent.public_key, "tenant":state.tenant}),
         )
         .await?;
+    if value["tenant"].as_str().is_some_and(|t| t != state.tenant) {
+        bail!("credential tenant mismatch");
+    }
     let jwt = api::string(&value, "jwt")?;
     let expiry = value["expires_at"]
         .as_u64()
@@ -115,7 +119,7 @@ pub async fn remove(root: &Path, id: &str) -> Result<()> {
     let api = api::authorized(root, &mut state).await?;
     api.request(
         Method::DELETE,
-        &format!("/v1/device/identities/{id}"),
+        &format!("/v1/device/identities/{id}?tenant={}", state.tenant),
         Some(&state.access_token),
         json!({}),
     )

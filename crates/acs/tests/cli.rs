@@ -27,7 +27,17 @@ fn device() -> tempfile::TempDir {
         "access_expires_at": 0, "agents": {
             "me": {"role": "orchestrator", "public_key": "U1", "expires_at": now + 23 * 3600 + 60},
             "old": {"role": "worker", "public_key": "U2", "expires_at": now - 600}}});
-    std::fs::write(root.path().join("state.json"), state.to_string()).unwrap();
+    std::fs::create_dir_all(root.path().join("tenants/T")).unwrap();
+    std::fs::write(
+        root.path().join("tenants/T/state.json"),
+        serde_json::json!({"nats_url":state["nats_url"], "agents":state["agents"]}).to_string(),
+    )
+    .unwrap();
+    let mut device = state;
+    device.as_object_mut().unwrap().remove("agents");
+    device["tenants"] = serde_json::json!([{"tenant":"T","personal":true}]);
+    std::fs::write(root.path().join("device.json"), device.to_string()).unwrap();
+    std::fs::write(root.path().join("current"), "T").unwrap();
     root
 }
 
@@ -85,7 +95,11 @@ fn env_prints_eval_ready_exports_for_one_identity() {
     let out = acs(root.path(), &["env", "me"]);
     assert!(out.status.success());
     let script = String::from_utf8(out.stdout).unwrap();
-    let creds = root.path().canonicalize().unwrap().join("creds/me.creds");
+    let creds = root
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("tenants/T/creds/me.creds");
     for line in [
         "export NATS_URL='wss://nats.example:443'".to_owned(),
         format!("export NATS_CREDENTIALS_FILE='{}'", creds.display()),

@@ -153,13 +153,17 @@ pub fn string(value: &Value, name: &str) -> Result<String> {
 }
 
 pub fn accept(root: &Path, state: &mut State, value: &Value) -> Result<()> {
+    if let Some(ts) = value.get("tenants") {
+        crate::tenants::normalize(ts, &state.tenant)?;
+    }
     local::store_refresh(root, &string(value, "refresh_token")?)?;
     state.access_token = string(value, "access_token")?;
     state.access_expires_at = local::now()
         + value["expires_in"]
             .as_u64()
             .context("missing token expiry")?;
-    local::save(root, state)
+    local::save(root, state)?;
+    crate::tenants::membership(root, value)
 }
 
 pub async fn authorized(root: &Path, state: &mut State) -> Result<Api> {
@@ -178,9 +182,31 @@ pub async fn authorized(root: &Path, state: &mut State) -> Result<Api> {
     Ok(api)
 }
 
-pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String>) -> Result<()> {
-    if root.join("state.json").exists() {
+pub async fn login(
+    root: &Path,
+    server: &str,
+    headless: bool,
+    key: Option<String>,
+    device_name: Option<String>,
+) -> Result<()> {
+    if root.join("device.json").exists() {
         bail!("already logged in; log out before changing devices");
+    }
+    let name = match device_name {
+        Some(name) => name,
+        None => String::from_utf8(
+            tokio::process::Command::new("hostname")
+                .output()
+                .await
+                .map(|o| o.stdout)
+                .unwrap_or_default(),
+        )
+        .unwrap_or_default(),
+    };
+    let name: String = name.trim().chars().take(64).collect();
+    let mut code_body = json!({"client_id":"acs"});
+    if !name.is_empty() && !name.chars().any(char::is_control) {
+        code_body["device_name"] = json!(name);
     }
     let api = Api::new(server)?;
     let value = if let Some(key) = key {
@@ -193,12 +219,7 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
         .await?
     } else {
         let code = api
-            .request(
-                Method::POST,
-                "/device/code",
-                None,
-                json!({"client_id": "acs"}),
-            )
+            .request(Method::POST, "/device/code", None, code_body)
             .await?;
         let url = string(&code, "verification_uri_complete")?;
         // Only open a URL belonging to the selected issuer.
@@ -257,12 +278,19 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
         server: api.server,
         tenant: string(&value, "tenant")?,
         device: string(&value, "device")?,
+        device_name: if name.is_empty() || name.chars().any(char::is_control) {
+            None
+        } else {
+            Some(name)
+        },
         nats_url: string(&value, "nats_url")?,
         access_token: String::new(),
         access_expires_at: 0,
         agents: BTreeMap::new(),
     };
+    crate::tenants::validate(&state.tenant)?;
     accept(root, &mut state, &value)?;
+    local::atomic(&root.join("current"), state.tenant.as_bytes())?;
     println!("Logged in: tenant {} device {}", state.tenant, state.device);
     println!("Next: acs agent add <id> [--role worker], then acs up");
     Ok(())
