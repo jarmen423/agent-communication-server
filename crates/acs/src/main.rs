@@ -149,8 +149,8 @@ async fn main() -> Result<()> {
     } else {
         root
     };
-    if !scoped
-        && (cli.tenant.is_some() || matches!(cli.command, Command::Up { .. } | Command::Down))
+    if matches!(cli.command, Command::Up { .. } | Command::Down)
+        || (matches!(cli.command, Command::Status) && cli.tenant.is_some())
     {
         tenants::select(&root, cli.tenant.as_deref())?;
     }

@@ -36,7 +36,8 @@ def test_device_name_and_tenant_api(device_stack):
     assert (root / 'tenants/T_A/creds/me.creds').stat().st_mode & 0o777 == 0o600
 
 
-def test_migration_preserves_old_credential_path_and_keyring_location(device_stack):
+@pytest.mark.parametrize('published_tree', [False, True])
+def test_migration_preserves_old_credential_path_and_keyring_location(device_stack, published_tree):
     env, _, _ = device_stack
     headless_login(env)
     acs(env, 'agent', 'add', 'me')
@@ -50,6 +51,10 @@ def test_migration_preserves_old_credential_path_and_keyring_location(device_sta
     (root / 'device.json').unlink()
     (root / 'current').unlink()
     (root / 'state.json').write_text(json.dumps(old))
+    if published_tree:
+        target = root / 'tenants/T_A'
+        shutil.copytree(root / 'creds', target / 'creds')
+        (target / 'state.json').write_text(json.dumps({'nats_url': old['nats_url'], 'agents': old['agents']}))
     refresh = (root / 'refresh.token').read_bytes()
     abandoned = root / '.migrate-999999'
     abandoned.mkdir()
@@ -90,12 +95,13 @@ def test_device_hostname_is_sent_by_default(device_stack):
     import socket
     env, _, url = device_stack
     env = {k: v for k, v in env.items() if k != 'ACS_DEVICE_NAME'}
-    headless_login(env)
+    headless_login({**env, 'ACS_TENANT': 'not-selected-yet'})
     acs(env, 'agent', 'add', 'host')
     device = json.loads((Path(env['ACS_HOME']) / 'device.json').read_text())
     result = httpx.get(url + '/v1/device?tenant=T_A',
                       headers={'Authorization': 'Bearer ' + device['access_token']}).json()
     assert result['tenants'][0]['identities'][0]['device'] == socket.gethostname().strip()[:64]
+    acs({**env, 'ACS_TENANT': 'not-selected-yet'}, 'logout')
 
 
 def test_server_tenant_slugs_are_validated_before_paths_are_written(tmp_path):
