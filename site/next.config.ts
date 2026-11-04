@@ -9,8 +9,8 @@ const repoRoot = path.resolve(process.cwd(), "..");
 const nextConfig: NextConfig = {
   // STATIC_EXPORT=1 writes a plain static site to out/ (Cloudflare static assets).
   // Every route is prerendered, so nothing is lost.
-  // Own build dir, so an export never clobbers the .next a running `next start` uses.
-  ...(process.env.STATIC_EXPORT === "1" ? { output: "export" as const, distDir: ".next-export" } : {}),
+  // Export mode writes the finished site into distDir: out/ (what wrangler serves), never the .next a running `next start` uses.
+  ...(process.env.STATIC_EXPORT === "1" ? { output: "export" as const, distDir: "out" } : {}),
   reactStrictMode: true,
   poweredByHeader: false,
   turbopack: {
