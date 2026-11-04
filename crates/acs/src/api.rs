@@ -206,7 +206,12 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
         if verify.origin() != Url::parse(&api.server)?.origin() {
             bail!("foreign verification URL refused");
         }
+        let lifetime = code["expires_in"].as_u64().unwrap_or(300);
         println!("Open {url}");
+        println!(
+            "and approve this device (the link expires in {} min)",
+            lifetime.div_ceil(60)
+        );
         use std::io::Write;
         std::io::stdout().flush()?;
         if !headless {
@@ -227,7 +232,7 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
             }
         }
         let mut interval = code["interval"].as_u64().unwrap_or(5).max(1);
-        let deadline = local::now() + code["expires_in"].as_u64().unwrap_or(300);
+        let deadline = local::now() + lifetime;
         loop {
             if local::now() >= deadline {
                 bail!("device login expired; run acs login again");
@@ -238,6 +243,12 @@ pub async fn login(root: &Path, server: &str, headless: bool, key: Option<String
                 Ok(value) => break value,
                 Err(e) if e.to_string().ends_with("authorization_pending") => (),
                 Err(e) if e.to_string().ends_with("slow_down") => interval += 5,
+                Err(e) if e.to_string().ends_with("expired_token") => {
+                    bail!("the sign-in link expired before it was approved; run acs login again")
+                }
+                Err(e) if e.to_string().ends_with("access_denied") => {
+                    bail!("sign-in was denied in the browser; run acs login to try again")
+                }
                 Err(e) => return Err(e),
             }
         }
