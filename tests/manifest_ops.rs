@@ -463,6 +463,40 @@ async fn api_admin_reads_but_cannot_write_on_a_writer_hub() {
     assert_eq!(listed["ok"], true, "{listed}");
 }
 
+/// Refused admin writes leave an existing record exactly as the writer left it:
+/// an overwrite, a remove and a sync that would tombstone it all change nothing.
+#[tokio::test]
+async fn refused_admin_writes_leave_existing_records_unchanged() {
+    let nc = live!();
+    const ADMIN: &str = "test-admin";
+    let id = unique("kept");
+    let rev = next_rev();
+    let seed = json!({"record": user_record(&id, "alice", rev)});
+    assert_eq!(
+        write_ok(&nc, "manifest.put", seed).await["result"],
+        "applied"
+    );
+    let before = write_ok(&nc, "manifest.get", json!({"identity": id})).await;
+
+    let writes = [
+        (
+            "manifest.put",
+            json!({"record": user_record(&id, "mallory", next_rev())}),
+        ),
+        (
+            "manifest.remove",
+            json!({"identity": id, "rev": next_rev()}),
+        ),
+        ("manifest.sync", json!({"rev": next_rev(), "records": []})),
+    ];
+    for (op, params) in writes {
+        let resp = call(&nc, ADMIN, op, params).await;
+        assert_eq!(error_of(&resp), WRITES_RESERVED, "{op}");
+        let after = write_ok(&nc, "manifest.get", json!({"identity": id})).await;
+        assert_eq!(after, before, "{op} must not change the record");
+    }
+}
+
 /// A bound hub with no writer leaves the manifest to its API admins.
 #[tokio::test]
 async fn api_admin_writes_on_a_hub_without_a_writer() {
