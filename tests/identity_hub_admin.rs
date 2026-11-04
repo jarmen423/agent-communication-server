@@ -211,14 +211,23 @@ fn add_agent_help_points_to_the_manifest() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("hub-admin manifest put"));
 }
 
-/// Against the live stack, as the writer `with_stack.sh` configures.
+/// Against the live stack, as the identity that may write there: the writer on
+/// a hub that has one (`make test-manifest`), or else the API admin (`make
+/// test-bound`).
 #[test]
 fn manifest_put_get_against_the_live_stack() {
-    if std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() != Some("1") {
-        eprintln!("Skipping — needs scripts/dev/with_stack.sh (NATS_HUB_TEST_MANIFEST=1)");
+    let has_writer = std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() == Some("1");
+    let is_bound = std::env::var("NATS_HUB_REQUIRE_BOUND").ok().as_deref() == Some("1");
+    if !has_writer && !is_bound {
+        eprintln!("Skipping — needs make test-manifest or make test-bound");
         return;
     }
-    let as_writer = ["--as", "test-manifest"];
+    let caller = if has_writer {
+        "test-manifest"
+    } else {
+        "test-admin"
+    };
+    let as_writer = ["--as", caller];
     let identity = format!("cli-{}", uuid::Uuid::new_v4().simple());
     let json_of = |out: &Output| -> serde_json::Value {
         assert!(out.status.success(), "{}", stderr(out));
@@ -264,9 +273,11 @@ fn manifest_put_get_against_the_live_stack() {
         "5",
     ]));
     assert_eq!(again["result"], "stale");
-    let refused = run(&["put", "--identity", "test-manifest", "--user", "alice"]);
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(stderr(&refused).contains("reserved for the manifest writer"));
+    if has_writer {
+        let refused = run(&["put", "--identity", "test-manifest", "--user", "alice"]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(stderr(&refused).contains("reserved for the manifest writer"));
+    }
 
     // The default rev is the current time, so it beats the explicit rev above.
     let removed = json_of(&run(&["remove", "--identity", &identity]));
@@ -283,6 +294,42 @@ fn manifest_put_get_against_the_live_stack() {
     ]);
     assert_eq!(forbidden.status.code(), Some(1));
     assert!(stderr(&forbidden).contains("forbidden"));
+}
+
+/// On a hub with a writer, the API admin can read through `hub-admin manifest`
+/// but not change anything.
+#[test]
+fn manifest_admin_is_read_only_on_a_writer_hub() {
+    if std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() != Some("1") {
+        eprintln!("Skipping — needs make test-manifest");
+        return;
+    }
+    let identity = format!("cli-{}", uuid::Uuid::new_v4().simple());
+    let as_admin = |args: &[&str]| {
+        let mut all = vec!["manifest"];
+        all.extend_from_slice(args);
+        all.extend_from_slice(&["--as", "test-admin"]);
+        hub_admin(&all)
+    };
+    let sync_file = tmp_file("manifest.json", r#"{"rev": 1, "records": []}"#);
+    let writes: [&[&str]; 3] = [
+        &["put", "--identity", &identity, "--user", "alice"],
+        &["remove", "--identity", &identity],
+        &["sync", "--file", sync_file.to_str().unwrap()],
+    ];
+    for args in writes {
+        let refused = as_admin(args);
+        assert_eq!(refused.status.code(), Some(1), "{args:?}");
+        assert!(
+            stderr(&refused).contains("manifest writes are reserved to it"),
+            "{args:?}: {}",
+            stderr(&refused)
+        );
+    }
+    let got = as_admin(&["get", "--identity", &identity]);
+    assert!(got.status.success(), "{}", stderr(&got));
+    let got: serde_json::Value = serde_json::from_slice(&got.stdout).unwrap();
+    assert!(got["rev"].is_null(), "nothing may be written: {got}");
 }
 
 fn nats_server() -> Option<PathBuf> {

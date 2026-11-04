@@ -1,6 +1,8 @@
 //! Identity manifest API ops: authorization and the JSON shapes, both directly
-//! through `handle_request_authorized` and live against `with_stack.sh` (which
-//! always runs hub-server with `--manifest-writer test-manifest`).
+//! through `handle_request_authorized` and live against `with_stack.sh`: most
+//! live tests need the writer stack (`--manifest-writer test-manifest`, via
+//! `make test-manifest`), and one needs the bound stack with no writer (`make
+//! test-bound`).
 //!
 //! Tests in this file share one hub and run in parallel, so each uses its own
 //! identities. A sync tombstones live slots below its snapshot rev, so the one
@@ -18,6 +20,8 @@ use serde_json::{json, Value};
 const WRITER: &str = "test-manifest";
 const FORBIDDEN: &str =
     "forbidden: manifest ops need a manifest writer (--manifest-writer) or an API admin";
+const WRITES_RESERVED: &str =
+    "forbidden: this hub has a manifest writer; manifest writes are reserved to it";
 
 // ── Directly through the query API (no NATS) ───────────────────────
 
@@ -138,8 +142,27 @@ async fn gate_holds_on_a_permissive_hub_and_under_require_bound() {
         .unwrap()
         .contains("legacy hub.api.<op> rejected"));
 
-    let resp = direct(&s, &bound, "hub.api.boss.manifest.put", "manifest.put", put).await;
-    assert!(resp.ok, "an API admin may write: {resp:?}");
+    let resp = direct(
+        &s,
+        &bound,
+        "hub.api.boss.manifest.put",
+        "manifest.put",
+        put.clone(),
+    )
+    .await;
+    assert_eq!(resp.error.as_deref(), Some(WRITES_RESERVED));
+    let manifest = bound.manifest.as_ref().unwrap();
+    assert!(manifest.get("gated").is_none(), "the put must not apply");
+
+    let resp = direct(
+        &s,
+        &bound,
+        "hub.api.writer.manifest.put",
+        "manifest.put",
+        put,
+    )
+    .await;
+    assert!(resp.ok, "the writer may write: {resp:?}");
     assert_eq!(resp.data.unwrap()["result"], "applied");
 }
 
@@ -406,19 +429,86 @@ async fn legacy_put_is_refused_in_every_mode() {
     assert!(got["rev"].is_null(), "nothing may be written: {got}");
 }
 
-/// `test-admin` is an API admin only in bound mode.
+/// A hub with a writer lets `test-admin`, its API admin, read the manifest but
+/// not change it. The stack's writer can still do both.
 #[tokio::test]
-async fn api_admin_may_write_where_it_is_an_admin() {
+async fn api_admin_reads_but_cannot_write_on_a_writer_hub() {
     let nc = live!();
+    const ADMIN: &str = "test-admin";
     let id = unique("byadmin");
-    let params = json!({"record": user_record(&id, "alice", next_rev())});
-    let resp = call(&nc, "test-admin", "manifest.put", params).await;
-    if require_bound() {
-        assert_eq!(resp["ok"], true, "{resp}");
-        assert_eq!(resp["data"]["result"], "applied");
-    } else {
-        assert_eq!(error_of(&resp), FORBIDDEN);
+    let rev = next_rev();
+    let put = json!({"record": user_record(&id, "alice", rev)});
+
+    let writes = [
+        ("manifest.put", put.clone()),
+        ("manifest.remove", json!({"identity": id, "rev": rev})),
+        ("manifest.sync", json!({"rev": next_rev(), "records": []})),
+    ];
+    for (op, params) in writes {
+        let resp = call(&nc, ADMIN, op, params).await;
+        assert_eq!(error_of(&resp), WRITES_RESERVED, "{op}");
     }
+    let got = write_ok(&nc, "manifest.get", json!({"identity": id})).await;
+    assert!(got["rev"].is_null(), "nothing may be written: {got}");
+
+    assert_eq!(
+        write_ok(&nc, "manifest.put", put).await["result"],
+        "applied"
+    );
+
+    let got = call(&nc, ADMIN, "manifest.get", json!({"identity": id})).await;
+    assert_eq!(got["ok"], true, "{got}");
+    assert_eq!(got["data"]["record"]["user"], "alice");
+    let listed = call(&nc, ADMIN, "manifest.list", json!({"limit": 1})).await;
+    assert_eq!(listed["ok"], true, "{listed}");
+}
+
+/// A bound hub with no writer leaves the manifest to its API admins.
+#[tokio::test]
+async fn api_admin_writes_on_a_hub_without_a_writer() {
+    let on_bound_stack = std::env::var("NATS_HUB_REQUIRE_BOUND").ok().as_deref() == Some("1");
+    let has_writer = std::env::var("NATS_HUB_TEST_MANIFEST").ok().as_deref() == Some("1");
+    if !on_bound_stack || has_writer {
+        eprintln!("Skipping — needs the bound stack with no manifest writer (make test-bound)");
+        return;
+    }
+    let url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
+    let nc = async_nats::connect(&url).await.unwrap();
+    const ADMIN: &str = "test-admin";
+    let id = unique("noted");
+    let rev = next_rev();
+
+    let put = json!({"record": user_record(&id, "alice", rev)});
+    let resp = call(&nc, ADMIN, "manifest.put", put.clone()).await;
+    assert_eq!(resp["ok"], true, "{resp}");
+    assert_eq!(resp["data"]["result"], "applied");
+
+    let got = call(&nc, ADMIN, "manifest.get", json!({"identity": id})).await;
+    assert_eq!(got["data"]["record"]["user"], "alice");
+    let listed = call(&nc, ADMIN, "manifest.list", json!({"limit": 1})).await;
+    assert_eq!(listed["ok"], true, "{listed}");
+
+    // `test-manifest` is only an ordinary caller here.
+    let resp = call(&nc, WRITER, "manifest.put", put).await;
+    assert_eq!(error_of(&resp), FORBIDDEN);
+
+    let mine = call(&nc, &id, "manifest.self", json!({})).await;
+    assert_eq!(mine["data"]["record"]["user"], "alice");
+    assert_eq!(mine["data"]["enforced"], false);
+
+    let removed = json!({"identity": id, "rev": rev + 1});
+    let resp = call(&nc, ADMIN, "manifest.remove", removed).await;
+    assert_eq!(resp["data"]["result"], "applied", "{resp}");
+
+    // Rev 1 is below every record the suites write, so this tombstones nothing.
+    let resp = call(
+        &nc,
+        ADMIN,
+        "manifest.sync",
+        json!({"rev": 1, "records": []}),
+    )
+    .await;
+    assert_eq!(resp["ok"], true, "{resp}");
 }
 
 #[tokio::test]

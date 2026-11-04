@@ -193,16 +193,23 @@ The subject is `hub.api.<caller>.manifest.<op>`, with the usual
 
 | Op | Params | `data` | Who |
 |---|---|---|---|
-| `manifest.put` | `{"record": {…}}` | `{"identity", "result": "applied"\|"stale", "rev"}` | writer |
-| `manifest.remove` | `{"identity", "rev"}` | same as put | writer |
-| `manifest.sync` | `{"rev": S, "records": […]}` | `{"rev", "applied", "stale", "removed", "live"}` | writer |
-| `manifest.get` | `{"identity"}` | `{"identity", "rev", "removed", "record"}` | writer |
-| `manifest.list` | `{"limit"?, "after"?}` | `{"records": […], "next_after"}`, live records sorted by identity | writer |
+| `manifest.put` | `{"record": {…}}` | `{"identity", "result": "applied"\|"stale", "rev"}` | manifest write access |
+| `manifest.remove` | `{"identity", "rev"}` | same as put | manifest write access |
+| `manifest.sync` | `{"rev": S, "records": […]}` | `{"rev", "applied", "stale", "removed", "live"}` | manifest write access |
+| `manifest.get` | `{"identity"}` | `{"identity", "rev", "removed", "record"}` | writer or API admin |
+| `manifest.list` | `{"limit"?, "after"?}` | `{"records": […], "next_after"}`, live records sorted by identity | writer or API admin |
 | `manifest.self` | `{}` | `{"identity", "record"}` for the caller's own identity | any bound caller |
 
-"Writer" means a bound caller listed in `--manifest-writer` or `--api-admin`.
-This holds on permissive hubs too: a legacy `hub.api.manifest.put` has no caller
-identity and is always refused.
+"Writer" means a bound caller listed in `--manifest-writer`, and "API admin" one
+listed in `--api-admin`. Who has manifest write access depends on the hub:
+
+- **With `--manifest-writer`:** only the writer. An API admin can read the manifest
+  but not change it, and a write answers `forbidden: this hub has a manifest writer;
+  manifest writes are reserved to it`.
+- **Without a writer:** API admins.
+
+These rules hold on permissive hubs too: a legacy `hub.api.manifest.put` has no
+caller identity and is always refused.
 
 A bad record answers `ok: false` with `bad manifest record: <field>: <why>`. In a
 sync, one bad record fails the whole request and nothing is applied. A hub without
@@ -241,6 +248,9 @@ hub-admin manifest list --limit 50
 hub-admin manifest remove --identity alice-claude
 hub-admin manifest sync --file manifest.json   # {"rev": N?, "records": [...]}
 ```
+
+Run these as the hub's manifest writer. On a hub with no writer, an API admin can
+run them too. On a hub with a writer, an API admin can run only `get` and `list`.
 
 `--rev`, and a missing `rev` in a sync file, default to the current Unix time in
 milliseconds. Records are validated locally before anything is sent. The command

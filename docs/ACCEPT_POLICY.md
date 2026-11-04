@@ -2,8 +2,9 @@
 
 A hub configured with `--manifest-writer` checks every direct message against
 the target's identity manifest. Broadcast results on task channels are unaffected.
-Without a manifest writer, routing remains permissive, even when an API admin
-has stored manifest records. Legacy sends cannot claim reserved hub identities,
+Only the manifest writer can change records on such a hub; an API admin can only
+read them. Without a manifest writer, routing remains permissive, even when an
+API admin has stored manifest records. Legacy sends cannot claim reserved hub identities,
 even in permissive mode.
 
 Unknown and removed targets refuse messages, including before the first manifest

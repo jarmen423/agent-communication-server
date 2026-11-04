@@ -309,8 +309,10 @@ The router stamps `meta.origin` on every routed envelope: the tenant label, the
 bound identity and, from the identity manifest, who owns that identity. It
 discards any trusted values a client sends. The client's own `reported` block
 (session, model) passes through unverified. Manifest ops have their own gate,
-which also applies on permissive hubs: writers are `--manifest-writer` or
-`--api-admin` identities on a bound subject. See [`PROVENANCE.md`](PROVENANCE.md).
+which also applies on permissive hubs and needs a bound subject. With a manifest
+writer configured, only it can change the manifest, and `--api-admin` identities
+can read the manifest but not change it. With no writer configured, `--api-admin`
+identities can change it. See [`PROVENANCE.md`](PROVENANCE.md).
 
 ### Honest threat model — what is and isn't proved
 

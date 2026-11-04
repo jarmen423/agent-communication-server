@@ -145,7 +145,7 @@ docs/                      — living docs; docs/archive/ = finished plans and h
 
 - **`Envelope`**: the wire unit. `Meta` (id, from, to, channel, timestamp, kind, reply_to) plus a free-form JSON `payload`.
 - **`Origin`** (`meta.origin`): message provenance. The router stamps the trusted fields (tenant, bound identity, owning user, device, agent client, owner kind) and discards client values; only `reported` (session, model, unverified) passes through. Trustworthy only with per-identity credentials and `--require-bound-identity`. See `docs/PROVENANCE.md`.
-- **`IdentityManifest`** / **`ManifestRecord`**: who owns an identity, recorded by whoever provisions credentials. Cached in memory over `Storage`, ordered by `rev`, with tombstones. Written through the `manifest.*` API ops by a `--manifest-writer` or API admin. One hub-server owns it.
+- **`IdentityManifest`** / **`ManifestRecord`**: who owns an identity, recorded by whoever provisions credentials. Cached in memory over `Storage`, ordered by `rev`, with tombstones. Written through the `manifest.*` API ops by the `--manifest-writer`; only a hub with no writer lets an API admin write (with a writer, admins can only read). One hub-server owns it.
 - **`HubClient`**: wraps `async_nats::Client` and carries an `identity` that is stamped on every envelope. `connect()` reads auth from `NATS_*` env; `connect_with_opts()` takes `HubConnectOptions`. Methods: `send_message()`, `send_to()`, `send_reply()`, `subscribe_inbox()`, `subscribe_channel()`, `subscribe_subject()`, `subscribe_all()`, `start_session()`, `send_to_session()`, `close_session()`, `subscribe_session()`, `set_reported()`, `register()`, `heartbeat()`, `drain()`.
 - **`ControlPlane`**: the router. Routes by `meta.to`, keeps the `AgentRegistry` and loads it from the DB on startup, and optionally mirrors to `Storage`.
 - **`AgentRegistry`**: in-memory agent cache for hot-path queries (`find_by_capability()`, `find_alive()`, `touch()`, `deregister()`).
@@ -199,7 +199,7 @@ Manual commands (against a running stack):
 | `acs agent add/rm`, `acs mcp install claude\|codex\|hermes`, `acs worker run <backend> --identity ID -- ARGS` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
 | `acs env ID`, `acs exec ID -- CMD [ARGS…]` | Print `export` lines for, or run `CMD` with, that identity's `NATS_URL`, `NATS_CREDENTIALS_FILE` and `NATS_HUB_IDENTITY` (other `NATS_*` auth vars stripped) |
 | `hub-server [--db-path PATH] [--metrics-addr ADDR] [--ws-addr ADDR --static-dir DIR] [--tenant LABEL] [--manifest-writer ID]` | Router + query API; optional Prometheus `/metrics` and WS bridge/visualizer; `--tenant` is stamped as `origin.tenant`, `--manifest-writer` may write the identity manifest (needs `--db-path`) |
-| `hub-admin manifest put/remove/sync/get/list --as ID` | Drive the identity manifest as a writer or API admin (`--as` falls back to `NATS_HUB_IDENTITY`; `docs/PROVENANCE.md`) |
+| `hub-admin manifest put/remove/sync/get/list --as ID` | Drive the identity manifest as the writer. API admins can only `get`/`list` on a hub with a writer, and can use every subcommand on a hub without one (`--as` falls back to `NATS_HUB_IDENTITY`; `docs/PROVENANCE.md`) |
 | `hub-publish --channel CH [--to AGENT] [--kind KIND] [--from ID] --message MSG` | Send a message (broadcast or DM) |
 | `hub-observe [--channel CH]` | Watch messages (read-only, live) |
 | `hub-interact [--from ID] --channel CH` | Interactive REPL |
