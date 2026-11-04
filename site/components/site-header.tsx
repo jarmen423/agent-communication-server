@@ -1,13 +1,15 @@
 import Link from "next/link";
 import { INVITE_REQUEST_URL, NAV, SIGN_IN_URL } from "@/content/site";
+import { HeaderTone } from "./header-tone";
 import { Lockup } from "./logo";
 import { MobileMenu } from "./mobile-menu";
 import { SearchButton } from "./search-button";
 import { ThemeToggle } from "./theme-toggle";
 
-export function SiteHeader({ current }: { current?: "docs" | "pricing" | "home" }) {
+export function SiteHeader({ current, tone }: { current?: "docs" | "pricing" | "home"; tone?: "dark" }) {
   return (
-    <header className="site-header sticky top-0 z-40">
+    <header className="site-header sticky top-0 z-40" data-tone={tone}>
+      {tone && <HeaderTone />}
       <div className="container-page flex h-16 items-center gap-4">
         <Link href="/" className="-m-2 rounded-md p-2" aria-label="Agent Communication Server home">
           <Lockup id="nav" compact />
