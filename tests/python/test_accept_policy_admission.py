@@ -12,7 +12,7 @@ import pytest
 @pytest.mark.parametrize("busy", [False, True])
 @pytest.mark.parametrize("prompt", [None, "work"])
 @pytest.mark.parametrize("action", ["session_start", "session_send"])
-async def test_live_rust_refusal_cannot_claim_session(busy, prompt, action):
+async def test_live_rust_refusal_cannot_claim_session(busy, prompt, action, tmp_path):
     if os.environ.get("NATS_HUB_TEST_MANIFEST") != "1":
         pytest.skip("requires manifest writer stack")
     nc = await nats.connect(os.environ["NATS_URL"])
@@ -27,8 +27,11 @@ async def test_live_rust_refusal_cannot_claim_session(busy, prompt, action):
         "identity": worker, "user": "alice", "owner_kind": "user", "agent": "echo",
         "accept": {"from": "owner"}, "rev": 9_000_000_000_000}})
     sub = await nc.subscribe("channel." + channel)
+    slow_cat = tmp_path / "slow_cat.sh"  # --execute runs argv directly, not through a shell
+    slow_cat.write_text("#!/bin/sh\nsleep 1\nexec cat\n")
+    slow_cat.chmod(0o755)
     process = await asyncio.create_subprocess_exec("target/debug/hub-worker", "--identity", worker,
-        "--execute", "sleep 1; cat", "--nats-url", os.environ["NATS_URL"],
+        "--execute", str(slow_cat), "--nats-url", os.environ["NATS_URL"],
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     async def send(sender, payload):
         msg_id = uuid.uuid4().hex
