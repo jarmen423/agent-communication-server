@@ -3,7 +3,10 @@
 // to show the hub is agent-agnostic and spans environments. Every band has a
 // few slots around the hub; a slot shows one location at a time and, where it
 // has several, rotates between them (fade out, a short gap, fade in), so the
-// set of places changes calmly over time. Deterministic, like the rest.
+// set of places changes calmly over time. On laptops and wider, a few places also
+// sit beyond the frame, up and to the left: only their tracks show, reaching
+// out of the hub behind the headline and off the edge. Deterministic, like
+// the rest.
 
 export type Role = "orchestrator" | "worker";
 export type Place = { id: string; agents: readonly (readonly [string, Role])[] };
@@ -30,12 +33,25 @@ export const PLACES: Record<string, Place> = Object.fromEntries(
       ["home-2", [["hermes-2", W], ["opencode-2", W]]],
       ["home-3", [["claude-4", W], ["hermes-4", W]]],
       ["ci-4", [["ci-1", W], ["ci-2", W]]],
+      // Beyond the frame (reach slots): never labelled, always there.
+      ["cloud-5", [["codex-7", W], ["claude-3", W], ["kilo-3", W]]],
+      ["teammate-5", [["claude-9", O], ["codex-8", W]]],
+      ["office-4", [["cursor-3", W], ["hermes-5", W]]],
     ] as const
   ).map(([id, agents]) => [id, { id, agents }]),
 );
 
+type P2 = readonly [number, number];
+/**
+ * A reach: the slot sits beyond the frame (no card; its ports are off screen)
+ * and only its trunk shows: the cubic from the gate through `c1` and `c2` into
+ * the plate's left face at `face` (-1 top, 1 bottom), design units. Drawn by
+ * hand per band so each one fans out of the hub, crosses the headline on a
+ * slant and leaves the left edge clear of the header.
+ */
+export type Reach = { face: number; gate: P2; c1: P2; c2: P2 };
 /** A slot: title baseline at (x, y); ports run down from it; names on the `align` side. */
-export type Slot = { x: number; y: number; align: "start" | "end"; places: readonly string[] };
+export type Slot = { x: number; y: number; align: "start" | "end"; places: readonly string[]; reach?: Reach };
 
 /** Card metrics per variant (design units). */
 export const CARD = {
@@ -44,6 +60,26 @@ export const CARD = {
 } as const;
 
 const S = (x: number, y: number, align: Slot["align"], ...places: string[]): Slot => ({ x, y, align, places });
+/** A reach slot: one place beyond the frame, its ports just behind the gate (design x < 0: off screen at every aspect). */
+const R = (place: string, face: number, gate: P2, c1: P2, c2: P2): Slot => {
+  const rows = Math.min(PLACES[place].agents.length, CARD.wide.rows);
+  return { x: gate[0] - 80, y: gate[1] - CARD.wide.first - (CARD.wide.row * (rows - 1)) / 2, align: "end", places: [place], reach: { face, gate, c1, c2 } };
+};
+
+/** Three tracks out of the hub's upper left, fanning behind the headline and off the left edge (laptops, then wide screens). */
+const REACH = {
+  M: [
+    R("cloud-5", -0.74, [-20, 110], [650, 110], [1250, 180]),
+    R("teammate-5", -0.5, [-20, 150], [700, 165], [1150, 300]),
+    R("office-4", -0.26, [-20, 260], [600, 250], [1150, 420]),
+  ],
+  // The hub sits further right here; the near controls follow it (and pass under office-3's card).
+  W: [
+    R("cloud-5", -0.74, [-20, 110], [650, 110], [1350, 190]),
+    R("teammate-5", -0.5, [-20, 150], [700, 165], [1260, 300]),
+    R("office-4", -0.26, [-20, 260], [600, 250], [1260, 420]),
+  ],
+};
 
 /** Slots per band. Left of the hub, names sit left of the ports (lines leave toward the hub); right of it, on the right. */
 export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
@@ -62,8 +98,9 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1340, 735, "end", "office-2", "cloud-4"),
     S(1040, 745, "end", "website-2", "teammate-2"),
     S(740, 735, "end", "laptop-1"),
+    ...REACH.M,
   ],
-  // Nothing left of the copy: a track from there would cross the headline on its way to the hub.
+  // No cards left of the copy (a card's track would cross the headline); only the reaches go there.
   W: [
     S(1560, 185, "start", "office-3", "cloud-2"),
     S(1880, 200, "start", "cloud-1", "home-2", "home-1"),
@@ -73,6 +110,7 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1385, 740, "end", "office-1", "home-3"),
     S(1080, 740, "end", "website-2"),
     S(760, 730, "end", "laptop-1"),
+    ...REACH.W,
   ],
   tall: [
     S(36, 540, "start", "laptop-1"),

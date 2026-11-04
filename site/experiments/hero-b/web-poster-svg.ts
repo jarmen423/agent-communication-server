@@ -59,7 +59,8 @@ function cards(l: WebLayout) {
   const r = l.variant === "tall" ? 3.5 : 4.5;
   return l.slots
     .flatMap((slot, i) =>
-      slot.places.map((pid, j) => {
+      // Reaches have no card: their places are beyond the frame.
+      (slot.reach ? [] : slot.places).map((pid, j) => {
         const start = slot.align === "start";
         const anchor = start ? "start" : "end";
         const rows = PLACES[pid].agents.slice(0, card.rows).map(([id, role], k) => {

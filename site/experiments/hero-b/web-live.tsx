@@ -7,7 +7,8 @@
 // instead of an aspect-ratio box, and it starts the web with its own layout:
 // the aspect band's (the same media queries the poster's CSS uses). Once live
 // it also measures the copy block into design space (the field yields around
-// it) and turns a pointerdown on empty field into a neutral ring.
+// it, less behind the headline) and turns a pointerdown on empty field into a
+// neutral ring.
 // The poster crossfades out once the live canvas has a frame.
 import { useEffect, useRef, useState } from "react";
 import type { HeroPalette } from "@/components/hero/gpu-stage";
@@ -99,12 +100,15 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       return [(x - r.left - m.x) / m.k, (y - r.top - m.y) / m.k] as const;
     };
     const copy = section?.querySelector("[data-web-copy]");
+    const title = copy?.querySelector(".hero-title");
     const measure = () => {
       if (!renderer || !copy) return;
       const c = copy.getBoundingClientRect();
       const [x0, y0] = toDesign(c.left - COPY_MARGIN, c.top - COPY_MARGIN);
       const [x1, y1] = toDesign(c.right + COPY_MARGIN, c.bottom + COPY_MARGIN);
-      renderer.setCopy([x0, y0, x1, y1]);
+      // The headline's bottom: above it the tracks yield less (the reaches show behind the large type).
+      const head = title ? toDesign(0, title.getBoundingClientRect().bottom)[1] : y0;
+      renderer.setCopy([x0, y0, x1, y1, head]);
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);

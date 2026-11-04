@@ -12,6 +12,13 @@ import { createWebTraffic } from "./web-tracks";
 export const WEB_LOOK = { base: 0.06, liftAlpha: 0.24, ripple: 0.32, click: 1.4, ink: 0.9 };
 /** Around the copy the field yields: tracks, rings and the lamp fall to `floor` (the quiet texture stays). */
 export const YIELD = { floor: 0.15, radius: 40 };
+/**
+ * Above the headline's bottom the tracks yield less (to `floor`), so the
+ * reaches show behind the large type, whose halos keep it readable; over
+ * `ramp` design units below it the yield returns to YIELD.floor, before the
+ * paragraph. Tracks only: the ground keeps YIELD everywhere.
+ */
+export const HEAD = { floor: 0.6, ramp: 32 };
 
 /** 0 inside the copy block, rising (smoothstep) to 1 at `feather` outside it: no edge anywhere. */
 export function yieldAt(x: number, y: number, m: readonly number[]) {

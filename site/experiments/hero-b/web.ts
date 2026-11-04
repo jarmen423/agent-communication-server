@@ -18,7 +18,7 @@ import fieldShader from "./web.wgsl";
 import { placeAlpha } from "./web-places";
 
 export type WebRenderer = HeroRenderer & {
-  /** The copy block's rect in design units: the field yields around it. */
+  /** The copy block's rect in design units, then the headline's bottom: the field yields around it. */
   setCopy(rect: readonly number[]): void;
   /** A visitor's click at a design-space point: one neutral ring. */
   click(x: number, y: number): void;

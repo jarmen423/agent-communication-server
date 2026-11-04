@@ -6,7 +6,7 @@ import { effect, sampler } from "vgpu";
 import type { Gpu, Target } from "vgpu";
 import { createLight } from "./light";
 import { FEATHER, WEB_POSTER_T, type WebLayout } from "./web-model";
-import { YIELD } from "./web-light";
+import { HEAD, YIELD } from "./web-light";
 import { createWebTraffic } from "./web-tracks";
 import trailsShader from "./web-trails.wgsl";
 
@@ -31,6 +31,8 @@ export function createTrails(gpu: Gpu, w: WebLayout, lightSize: readonly [number
       map: [k, (out[0] - w.width * k) / 2, (out[1] - w.height * k) / 2, 0],
       mask: copy.slice(0, 4),
       mask2: [FEATHER, YIELD.floor, YIELD.radius, 0],
+      // No headline bottom given: the head zone is empty (the whole block yields fully).
+      head: [HEAD.floor, copy[4] ?? copy[1], HEAD.ramp, 0],
     };
   };
   const develop = effect(gpu, trailsShader, {

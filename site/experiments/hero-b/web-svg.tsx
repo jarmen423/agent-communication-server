@@ -61,6 +61,7 @@ export function webLabel() {
     "Agent Communication Server at work: a quiet field of the hub's own traffic log fills the background. " +
     "Around hub-server sit places such as laptop-1, website-2, teammate-2, cloud-1, office-3 and home-1, each with different agents (Claude Code, Codex, Hermes, Cursor, Grok, OpenCode, Kilo, Antigravity, chat apps), and places come and go. " +
     "Every place is wired to hub-server by a track with two lanes, and every message travels through the hub as light that fades slowly, like a long exposure. " +
+    "On wider screens a few tracks also reach up and to the left behind the headline, to places beyond the frame. " +
     "Each task is a teal trail sent out from an orchestrator to a worker in another place; status, progress and one result come back as orange trails received on the other lane."
   );
 }
@@ -81,7 +82,7 @@ export function WebOverlay({ layout: l, className }: { layout: WebLayout; classN
       <path d={lensPath(hub.cx, hub.cy, hub.size)} fill="var(--lane-ink)" />
       <g className="dg-mono">
         {l.slots.map((slot, i) =>
-          slot.places.map((pid, j) => <use key={pid} data-place={`${i}:${j}`} href={`${DOC.src}#card-${l.band}-${i}-${j}`} opacity={alphaAt(i, j)} />),
+          (slot.reach ? [] : slot.places).map((pid, j) => <use key={pid} data-place={`${i}:${j}`} href={`${DOC.src}#card-${l.band}-${i}-${j}`} opacity={alphaAt(i, j)} />),
         )}
       </g>
       <g className="dg-mono" fontSize={size} {...halo}>

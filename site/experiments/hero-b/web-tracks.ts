@@ -23,7 +23,7 @@ const TRACK = {
   tall: { sigma: 0.72, halo: 2.6, gap: 4, drift: 1.8, speed: 0.7, gate: 22 },
 } as const;
 
-/** Where a slot's trunk starts (the gate) and where it meets the plate (entry, with the face's outward normal). */
+/** Where a slot's trunk starts (the gate) and where it meets the plate (entry, with the trunk's direction out of the plate there). */
 export function slotGeometry(w: WebLayout, i: number) {
   const slot = w.slots[i];
   const card = CARD[w.variant];
@@ -33,11 +33,25 @@ export function slotGeometry(w: WebLayout, i: number) {
   const axis: Pt = [Math.sign(dx) || 1, 0];
   const gate: Pt = [port[0] + axis[0] * tr.gate, port[1]];
   const half = w.plate.w / 2;
+  if (slot.reach) {
+    // The hand-drawn cubic, in centerline()'s terms: directions toward each control, reach as a share of the span.
+    const { face, c1, c2 } = slot.reach;
+    const from: Pt = [slot.reach.gate[0], slot.reach.gate[1]];
+    const entry: Pt = [w.hub.cx - half, w.hub.cy + face * half];
+    const span = Math.hypot(entry[0] - from[0], entry[1] - from[1]);
+    const toward = (a: Pt, b: readonly [number, number]) => {
+      const n = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      return { dir: [(b[0] - a[0]) / n, (b[1] - a[1]) / n] as Pt, share: n / span };
+    };
+    const out = toward(from, c1);
+    const back = toward(entry, c2);
+    return { gate: from, axis: out.dir, entry, edge: back.dir, bend: [out.share, back.share] as const };
+  }
   const d = [port[0] - w.hub.cx, port[1] - w.hub.cy];
   const n = Math.max(Math.abs(d[0]), Math.abs(d[1])) || 1;
   const entry: Pt = [w.hub.cx + (d[0] / n) * half, w.hub.cy + (d[1] / n) * half];
   const edge: Pt = Math.abs(d[0]) >= Math.abs(d[1]) ? [Math.sign(d[0]), 0] : [0, Math.sign(d[1])];
-  return { gate, axis, entry, edge };
+  return { gate, axis, entry, edge, bend: undefined };
 }
 
 const layouts = new WeakMap<WebLayout, Layout>();
@@ -92,7 +106,8 @@ export function railPath(w: WebLayout, slot: number, rows: number) {
   const m = trackLayout(w).machines[slot];
   const { gate, axis, entry, edge } = m;
   const span = Math.hypot(entry[0] - gate[0], entry[1] - gate[1]);
-  let d = `M${pt(gate)}C${pt([gate[0] + axis[0] * span * 0.42, gate[1] + axis[1] * span * 0.42])} ${pt([entry[0] + edge[0] * span * 0.42, entry[1] + edge[1] * span * 0.42])} ${pt(entry)}`;
+  const [b0, b1] = m.bend ?? [0.42, 0.42];
+  let d = `M${pt(gate)}C${pt([gate[0] + axis[0] * span * b0, gate[1] + axis[1] * span * b0])} ${pt([entry[0] + edge[0] * span * b1, entry[1] + edge[1] * span * b1])} ${pt(entry)}`;
   const ports = new Map<string, Pt>();
   for (const a of m.agents) ports.set(`${a.x},${a.y}`, [a.x, a.y]);
   for (const n of [...ports.values()].sort((p, q) => p[1] - q[1]).slice(0, rows)) {

@@ -18,6 +18,8 @@ export type Machine = {
   /** Where the trunk meets the hub plate, and the plate edge's outward normal there. */
   entry: Pt;
   edge: Pt;
+  /** How far the trunk's controls reach from the gate and from the entry, as shares of its span (B: 0.42 each). */
+  bend?: readonly [number, number];
   /** Machine name position (SVG text anchor point). */
   label: { x: number; y: number; anchor: "start" | "middle" | "end" };
 };
@@ -80,7 +82,8 @@ export function centerline(m: Machine, a: Agent): Pt[] {
   const branchLen = dist(n, m.gate);
   const branch = branchLen < 1 ? [n] : cubic(n, add(n, m.axis, along * 0.55), add(n, m.axis, along * 0.75), m.gate, Math.max(4, Math.ceil(branchLen / 6)));
   const span = dist(m.gate, m.entry);
-  const trunk = cubic(m.gate, add(m.gate, m.axis, span * 0.42), add(m.entry, m.edge, span * 0.42), m.entry, Math.ceil(span / 7));
+  const [b0, b1] = m.bend ?? [0.42, 0.42];
+  const trunk = cubic(m.gate, add(m.gate, m.axis, span * b0), add(m.entry, m.edge, span * b1), m.entry, Math.ceil(span / 7));
   return [...branch, ...trunk.slice(1)];
 }
 

@@ -401,7 +401,7 @@ const overlaps = (a, b, pad = 0) => a[0] < b[2] + pad && a[2] > b[0] - pad && a[
 
 for (const band of ["P", "M", "W", "tall"]) {
   const l = webModel.WEB[band];
-  const boxes = l.slots.flatMap((slot) => slot.places.map((pid) => ({ pid, slot, box: cardBox(l, slot, pid) })));
+  const boxes = l.slots.filter((slot) => !slot.reach).flatMap((slot) => slot.places.map((pid) => ({ pid, slot, box: cardBox(l, slot, pid) })));
   const size = band === "tall" ? 12 : 14;
   const hubBox = [l.plate.x - 6, l.plate.y - 6, l.plate.x + l.plate.w + 6, l.plate.y + l.plate.h + size * 3.8];
   const legendHalf = 10.5 * size * 0.9 * 0.6;
@@ -434,6 +434,33 @@ for (const band of ["P", "M", "W", "tall"]) {
     for (const a of boxes) for (const b of boxes) if (a.slot !== b.slot) assert.ok(!overlaps(a.box, b.box, 6), `${a.pid} vs ${b.pid}`);
     assert.ok(l.plate.x > l.copy[2] || l.plate.y > l.copy[3], "the hub sits beside or below the copy");
   });
+
+  const reaches = l.slots.map((slot, i) => ({ slot, i })).filter((r) => r.slot.reach);
+  if (band === "M" || band === "W")
+    test(`web ${band}: three reaches leave the hub's upper left, behind the headline and off the left edge`, () => {
+      assert.equal(reaches.length, 3);
+      const t = webTracks.trackLayout(l);
+      const [x0, y0, x1, , head] = l.copy;
+      for (const { slot, i } of reaches) {
+        const m = t.machines[i];
+        assert.ok(Math.abs(m.entry[0] - l.plate.x) < 1e-6 && m.entry[1] < l.hub.cy && m.entry[1] > l.plate.y + l.plate.r - 2, `${slot.places[0]}: out of the plate's left face, upper half`);
+        for (const [aspect, h] of CASES[band]) {
+          const c = webModel.cover(l, aspect * h, h);
+          for (const p of [m.gate, ...m.agents.map((a) => [a.x, a.y])]) assert.ok(p[0] * c.k + c.x < -4, `${slot.places[0]}: gate and ports beyond the frame at ${aspect}×${h}`);
+        }
+        const trunk = webTracks.railPath(l, i, 0);
+        const pts = t.lanes[m.agents[0].id].toHub.pts;
+        let behind = 0;
+        for (let k = 0; k < pts.length; k += 2) {
+          const [x, y] = [pts[k], pts[k + 1]];
+          if (x > x0 && x < x1 && y > y0 && y < head) behind++;
+          if (x > x0 && x < x1) assert.ok(y < head + 4, `${slot.places[0]}: stays above the paragraph (y ${y.toFixed(0)} at x ${x.toFixed(0)})`);
+          for (const { pid, box } of boxes) assert.ok(!(x > box[0] - 12 && x < box[2] + 12 && y > box[1] - 12 && y < box[3] + 12), `${slot.places[0]} clear of ${pid}`);
+        }
+        assert.ok(behind > 20, `${slot.places[0]}: runs behind the headline`);
+        assert.ok(trunk.startsWith("M") && !trunk.includes("NaN"));
+      }
+    });
 }
 
 test("the field yields around the copy, with a smooth feather and no edge", () => {
@@ -496,7 +523,8 @@ test("posters/web.svg is up to date (run tools/bake-web.mjs after changing the w
   for (const id of ["field-wide", "field-tall", "hub-P", "hub-M", "hub-W", "hub-tall"]) assert.ok(committed.includes(`id="${id}"`), id);
   for (const [band, l] of Object.entries(webModel.WEB))
     l.slots.forEach((slot, i) => slot.places.forEach((_, j) => {
-      assert.ok(committed.includes(`id="card-${band}-${i}-${j}"><text`), `card-${band}-${i}-${j}: text only (the label guard measures it)`);
+      if (slot.reach) assert.ok(!committed.includes(`id="card-${band}-${i}-${j}"`), `card-${band}-${i}-${j}: a reach has no card`);
+      else assert.ok(committed.includes(`id="card-${band}-${i}-${j}"><text`), `card-${band}-${i}-${j}: text only (the label guard measures it)`);
       assert.ok(committed.includes(`<path id="rail-${band}-${i}-${j}" d="M`), `rail-${band}-${i}-${j}`);
     }));
   assert.ok(!committed.includes("var(--"), "literal colours: an external document cannot see page variables");

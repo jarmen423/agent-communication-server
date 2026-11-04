@@ -34,9 +34,11 @@ export type WebLayout = {
   /**
    * The copy block (+16 px) measured at this band's reference viewport (P 768 × 1024,
    * M 1440 × 900, W 1894 × 920, phone 390 × 844), design units: the poster's mask.
-   * The live layer measures the real one.
+   * The fifth number is the headline's bottom: above it the tracks yield less
+   * (HEAD in web-light.ts), so the reaches show behind the large type while the
+   * paragraph keeps its full yield. The live layer measures the real ones.
    */
-  copy: readonly [number, number, number, number];
+  copy: readonly [number, number, number, number, number];
 };
 
 const plateOf = (cx: number, cy: number, size: number, r: number) => {
@@ -69,11 +71,11 @@ const desktop = (band: "P" | "M" | "W", hub: [number, number, number], copy: Web
 
 export const WEB: Record<Band, WebLayout> = {
   // Near-portrait screens (tablets, squarish windows): copy on top, the hub and its places below.
-  P: desktop("P", [1200, 730, 92], [840, 120, 1332, 558]),
-  // Laptops: copy upper left, the hub upper right (about 78% across, 43% down), places around it.
-  M: desktop("M", [1640, 430, 108], [551, 133, 1442, 583]),
-  // Wide and short screens: the same, with one more place along the bottom (none left of the copy).
-  W: desktop("W", [1780, 430, 110], [565, 130, 1437, 570]),
+  P: desktop("P", [1200, 730, 92], [840, 120, 1332, 558, 350]),
+  // Laptops: copy upper left, the hub upper right (about 78% across, 43% down), places around it, three reaching off the left edge.
+  M: desktop("M", [1640, 430, 108], [551, 133, 1442, 583, 424]),
+  // Wide and short screens: the same, with one more place along the bottom (no cards left of the copy).
+  W: desktop("W", [1780, 430, 110], [565, 130, 1437, 570, 415]),
   tall: {
     band: "tall",
     variant: "tall",
@@ -85,7 +87,7 @@ export const WEB: Record<Band, WebLayout> = {
     speed: 0.5,
     agents: agentsOf(SLOTS.tall, CARD.tall),
     slots: SLOTS.tall,
-    copy: [17, 80, 384, 495],
+    copy: [17, 80, 384, 495, 258],
   },
 };
 

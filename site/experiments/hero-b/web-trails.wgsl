@@ -4,7 +4,8 @@
 // so sent light gets a little more gain: both directions read equally. The
 // light target may be smaller than the output (soft
 // light survives the upscale), so it is sampled. Around the copy block the
-// tracks yield (a feathered rounded rect, as in web-cells.wgsl).
+// tracks yield (a feathered rounded rect, as in web-cells.wgsl), less behind
+// the headline than behind the paragraph (head: the reaches show there).
 
 struct Trails {
   teal: vec4f,
@@ -14,6 +15,7 @@ struct Trails {
   map: vec4f,        // output px per design unit, offset x, offset y
   mask: vec4f,       // copy block x0, y0, x1, y1 (design units)
   mask2: vec4f,      // feather, floor, corner radius
+  head: vec4f,       // headline floor, headline bottom y (design units), ramp
 }
 
 @group(0) @binding(0) var light: texture_2d<f32>;
@@ -31,6 +33,7 @@ struct Trails {
   let r = trails.mask2.z;
   let m = abs(u - (trails.mask.xy + half)) - half + vec2f(r);
   let sd = length(max(m, vec2f(0.0))) + min(max(m.x, m.y), 0.0) - r;
-  let k = trails.mask2.y + (1.0 - trails.mask2.y) * smoothstep(0.0, trails.mask2.x, sd);
+  let low = mix(trails.head.x, trails.mask2.y, smoothstep(trails.head.y, trails.head.y + trails.head.z, u.y));
+  let k = low + (1.0 - low) * smoothstep(0.0, trails.mask2.x, sd);
   return vec4f(mix(trails.teal.rgb, trails.orange.rgb, share) * a, a) * k;
 }
