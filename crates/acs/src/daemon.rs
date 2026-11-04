@@ -2,7 +2,7 @@
 use crate::{agents, local};
 use anyhow::{bail, Context, Result};
 use rand::Rng;
-use std::{collections::HashMap, path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, process::Stdio, time::Duration};
 
 pub fn running(root: &Path) -> bool {
     local::lock(root, "daemon.lock").is_err()
@@ -45,7 +45,13 @@ pub async fn foreground(root: &Path) -> Result<()> {
             continue;
         };
         for tenant in crate::tenants::names(root)? {
-            let tenant_root = crate::tenants::path(root, &tenant)?;
+            let tenant_root = match crate::tenants::path(root, &tenant) {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("Tenant {tenant} state unavailable ({e}); skipping");
+                    continue;
+                }
+            };
             let mut state = match local::load(&tenant_root) {
                 Ok(s) => s,
                 Err(e) => {
@@ -122,17 +128,8 @@ pub async fn up(root: &Path) -> Result<()> {
     let exe = std::env::current_exe()?;
     if cfg!(target_os = "linux") {
         let unit = local::home()?.join(".config/systemd/user/acs.service");
-        // systemd expands percent specifiers even inside quoted arguments.
-        let quote = |s: &str| {
-            format!(
-                "\"{}\"",
-                s.replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('%', "%%")
-            )
-        };
         let contents = format!("[Unit]\nDescription=ACS device credential manager\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart={} up --foreground\nEnvironment={}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
-            quote(&exe.to_string_lossy()), quote(&format!("ACS_HOME={}", root.display())));
+            systemd_quote(&exe.to_string_lossy()), systemd_quote(&format!("ACS_HOME={}", root.display())));
         local::atomic(&unit, contents.as_bytes())?;
         for args in [
             vec!["--user", "daemon-reload"],
@@ -140,6 +137,8 @@ pub async fn up(root: &Path) -> Result<()> {
         ] {
             if !tokio::process::Command::new("systemctl")
                 .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
                 .status()
                 .await?
                 .success()
@@ -150,64 +149,113 @@ pub async fn up(root: &Path) -> Result<()> {
                 );
             }
         }
-        println!("Installed and started {}", unit.display());
+        eprintln!("Installed and started {}", unit.display());
     } else if cfg!(target_os = "macos") {
         let path = local::home()?.join("Library/LaunchAgents/com.agentmemorylabs.acs.plist");
-        let xml = |s: &str| {
-            s.replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-        };
-        let contents = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.agentmemorylabs.acs</string><key>ProgramArguments</key><array><string>{}</string><string>up</string><string>--foreground</string></array><key>EnvironmentVariables</key><dict><key>ACS_HOME</key><string>{}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict></dict></plist>", xml(&exe.to_string_lossy()), xml(&root.to_string_lossy()));
+        let contents = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Label</key><string>com.agentmemorylabs.acs</string><key>ProgramArguments</key><array><string>{}</string><string>up</string><string>--foreground</string></array><key>EnvironmentVariables</key><dict><key>ACS_HOME</key><string>{}</string></dict><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict></dict></plist>", xml_escape(&exe.to_string_lossy()), xml_escape(&root.to_string_lossy()));
         local::atomic(&path, contents.as_bytes())?;
         if !tokio::process::Command::new("launchctl")
             .arg("load")
             .arg(&path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
             .status()
             .await?
             .success()
         {
             bail!("launchd load failed");
         }
-        println!("Installed {}", path.display());
+        eprintln!("Installed {}", path.display());
     } else {
         bail!("user service installation supports Linux and macOS; use --foreground");
     }
     Ok(())
 }
 
-/// An older daemon exits successfully when its legacy login file disappears.
-pub async fn restart_after_upgrade() {
+// systemd expands percent specifiers even inside quoted arguments.
+fn systemd_quote(s: &str) -> String {
+    format!(
+        "\"{}\"",
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+    )
+}
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Reinstall only this home's service, then verify a new daemon took its lock.
+pub async fn restart_after_upgrade(root: &Path) {
     let result: Result<()> = async {
         let home = local::home()?;
-        let status = if cfg!(target_os = "linux")
-            && home.join(".config/systemd/user/acs.service").is_file()
-        {
-            tokio::process::Command::new("systemctl")
-                .args(["--user", "restart", "acs.service"])
+        let previous = std::fs::read_to_string(root.join("daemon.pid")).ok();
+        let mut restart = if cfg!(target_os = "linux") {
+            let unit = home.join(".config/systemd/user/acs.service");
+            let contents = std::fs::read_to_string(&unit)?;
+            let expected = format!(
+                "Environment={}",
+                systemd_quote(&format!("ACS_HOME={}", root.display()))
+            );
+            if !contents.lines().any(|line| line == expected) {
+                bail!("installed user service belongs to another ACS_HOME");
+            }
+            up(root).await?;
+            let mut cmd = tokio::process::Command::new("systemctl");
+            cmd.args(["--user", "restart", "acs.service"]);
+            cmd
+        } else if cfg!(target_os = "macos") {
+            let path = home.join("Library/LaunchAgents/com.agentmemorylabs.acs.plist");
+            let contents = std::fs::read_to_string(&path)?;
+            let expected = format!(
+                "<key>ACS_HOME</key><string>{}</string>",
+                xml_escape(&root.to_string_lossy())
+            );
+            if !contents.contains(&expected) {
+                bail!("installed user service belongs to another ACS_HOME");
+            }
+            let status = tokio::process::Command::new("launchctl")
+                .arg("unload")
+                .arg(&path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
                 .status()
-                .await?
-        } else if cfg!(target_os = "macos")
-            && home
-                .join("Library/LaunchAgents/com.agentmemorylabs.acs.plist")
-                .is_file()
-        {
-            tokio::process::Command::new("launchctl")
-                .args([
-                    "kickstart",
-                    "-k",
-                    &format!("gui/{}/com.agentmemorylabs.acs", unsafe { libc::getuid() }),
-                ])
-                .status()
-                .await?
+                .await?;
+            if !status.success() {
+                bail!("service unload failed");
+            }
+            up(root).await?;
+            let mut cmd = tokio::process::Command::new("launchctl");
+            #[cfg(unix)]
+            cmd.args([
+                "kickstart",
+                "-k",
+                &format!("gui/{}/com.agentmemorylabs.acs", unsafe { libc::getuid() }),
+            ]);
+            cmd
         } else {
-            bail!("no installed user service");
+            bail!("no supported user service");
         };
-        if !status.success() {
+        if !restart
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()
+            .await?
+            .success()
+        {
             bail!("service restart failed");
         }
-        Ok(())
+        for _ in 0..100 {
+            let pid = std::fs::read_to_string(root.join("daemon.pid")).ok();
+            if pid.is_some() && pid != previous && running(root) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        bail!("credential daemon did not start within 10 seconds");
     }
     .await;
     if let Err(e) = result {

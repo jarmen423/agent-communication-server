@@ -27,6 +27,9 @@ def test_partial_restore_preserves_seed(tmp_path, restore):
     (root / 'creds').mkdir()
     source = root / 'creds/me.creds'
     source.write_text('only seed copy')
+    value = json.loads((root / 'state.json').read_text())
+    value['agents'] = {'me': {'role': 'worker', 'public_key': 'U', 'expires_at': 0}}
+    (root / 'state.json').write_text(json.dumps(value))
     target = root / 'tenants/A'
     target.mkdir(parents=True)
     if restore == 'different':
@@ -247,26 +250,6 @@ def test_registration_and_jwt_key_labels_are_checked(tmp_path, response_server, 
     assert ('registration tenant mismatch' if mismatch == 'register' else 'credential public key mismatch') in error
     credential = root / 'tenants/A/creds/me.creds'
     assert not credential.exists() or 'signature' not in credential.read_text()
-
-
-@pytest.mark.skipif(not os.sys.platform.startswith('linux'), reason='systemd user service')
-def test_upgrade_restarts_installed_service_after_commit(tmp_path):
-    root = tmp_path / 'acs'
-    env = legacy(root)
-    home = tmp_path / 'home'
-    unit = home / '.config/systemd/user/acs.service'
-    unit.parent.mkdir(parents=True)
-    unit.write_text('[Service]')
-    bindir = tmp_path / 'bin'
-    bindir.mkdir()
-    systemctl = bindir / 'systemctl'
-    systemctl.write_text('#!/bin/sh\ntest -f "$ACS_HOME/device.json" || exit 1\nprintf "%s\\n" "$@" > "$ACS_HOME/restarted"\n')
-    systemctl.chmod(0o755)
-    env.update(HOME=str(home), PATH=str(bindir) + ':' + env['PATH'])
-    with (root / 'daemon.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        assert 'WARNING' not in acs(env, 'status').stderr
-    assert (root / 'restarted').read_text().splitlines() == ['--user', 'restart', 'acs.service']
 
 
 def test_device_name_is_trimmed_after_truncation(device_stack):

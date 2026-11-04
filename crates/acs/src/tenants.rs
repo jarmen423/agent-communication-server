@@ -90,6 +90,9 @@ pub fn select(root: &Path, explicit: Option<&str>) -> Result<PathBuf> {
     path(root, chosen)
 }
 pub fn device_state(root: &Path) -> Result<State> {
+    if !root.join("device.json").exists() && root.join("state.json").exists() {
+        return Ok(serde_json::from_slice(&fs::read(root.join("state.json"))?)?);
+    }
     let mut d = device(root)?;
     d["agents"] = json!({});
     Ok(serde_json::from_value(d)?)

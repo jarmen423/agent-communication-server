@@ -138,7 +138,9 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| std::env::var("ACS_TENANT").ok());
     let root = local::root()?;
-    migration::run(&root).await?;
+    if !matches!(cli.command, Command::Logout) {
+        migration::run(&root).await?;
+    }
     let scoped = matches!(
         cli.command,
         Command::Env { .. }
@@ -227,7 +229,13 @@ async fn main() -> Result<()> {
                         if selected.as_ref().is_some_and(|t| t != &tenant) {
                             continue;
                         }
-                        let s = local::load(&tenants::path(&root, &tenant)?)?;
+                        let s = match tenants::path(&root, &tenant).and_then(|p| local::load(&p)) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("Tenant {tenant} state unavailable ({e}); skipping");
+                                continue;
+                            }
+                        };
                         println!(
                             "Server: {}\nTenant: {}\nDevice: {}\nNATS: {}\nDaemon: {}",
                             s.server,

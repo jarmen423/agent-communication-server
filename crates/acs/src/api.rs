@@ -158,6 +158,12 @@ pub fn accept(root: &Path, state: &mut State, value: &Value) -> Result<()> {
         + value["expires_in"]
             .as_u64()
             .context("missing token expiry")?;
+    if !root.join("device.json").exists()
+        && root.join("state.json").exists()
+        && root == crate::tenants::device_root(root)
+    {
+        return local::atomic_private(&root.join("state.json"), &serde_json::to_vec_pretty(state)?);
+    }
     if root == crate::tenants::device_root(root) && root.join("device.json").exists() {
         let mut d = crate::tenants::device(root)?;
         d["access_token"] = json!(state.access_token);
