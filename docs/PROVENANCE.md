@@ -105,7 +105,7 @@ caps: the hub drops what doesn't fit.
 | Other headless CLI workers | session id parsed from the output | `--model`/`-m` in the backend's arguments | `--provider` in the backend's arguments | none |
 | SDK workers | `session_id` or `agent_id` from the returned context | what the entrypoint configured | what the entrypoint configured | none |
 | MCP server (stdio) | env, else the host's session (below) | env | env | `client`: `clientInfo` name and version |
-| Remote MCP endpoint | a per-connection id | never | never | `client`: `clientInfo` name and version |
+| Remote MCP endpoint | never | never | never | — |
 | Bridges, email plugin | never | never | never | none |
 
 - **Workers.** A worker's environment applies until its backend knows better, and
@@ -121,11 +121,8 @@ caps: the hub drops what doesn't fit.
   `CLAUDE_CODE_SESSION_ID` is used. That value is fixed when the server starts, so
   it doesn't follow `/clear`. The host's model isn't visible to an MCP server, so
   it is reported only if the environment sets it.
-- **The remote endpoint** ignores its process environment: one process serves many
-  identities. Its `initialize` response issues an `Mcp-Session-Id` that is random,
-  unrelated to the access token or the user, and holds the client label. Clients
-  echo it on later requests, and the endpoint keeps no state for it. A client that
-  doesn't echo it reports nothing.
+- **The remote endpoint** reports nothing yet. It ignores its process environment,
+  because one process serves many identities, and it keeps no per-connection state.
 
 ## Stamping rules
 

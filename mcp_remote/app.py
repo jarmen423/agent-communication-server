@@ -1,9 +1,8 @@
 """Starlette app of the remote MCP endpoint (resource server).
 
 - ``POST /mcp`` (or the path of ``--resource-url``): MCP over streamable
-  HTTP, **stateless** (each request stands alone), so any replica behind a
-  load balancer can serve any request. ``Mcp-Session-Id`` holds no server
-  state: it only carries what a connection reports (``connection_id.py``).
+  HTTP, **stateless** (no ``Mcp-Session-Id``; each request stands alone), so
+  any replica behind a load balancer can serve any request.
 - Unauthenticated → ``401`` with ``WWW-Authenticate: Bearer
   resource_metadata="…/.well-known/oauth-protected-resource/mcp"``.
 - ``GET /.well-known/oauth-protected-resource[/mcp]``: RFC 9728 metadata
@@ -40,10 +39,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 import hub_connection as conn
-import hub_origin
 from hub_app import build_server
 
-from . import connection_id
 from .auth import HubAccessToken, JwksTokenVerifier
 from .handlers import HANDLERS, current_token
 from .pool import NatsPool
@@ -70,8 +67,7 @@ def bind_from(pool: NatsPool):
         async def get_nc() -> Any:
             return await pool.get(tok.tenant, tok.identity, tok.token)
 
-        reported = connection_id.reported_from(request.headers.get(connection_id.HEADER))
-        with conn.bound(tok.identity, get_nc), hub_origin.scoped(reported):
+        with conn.bound(tok.identity, get_nc):
             reset = current_token.set(tok)
             try:
                 yield tok
@@ -86,7 +82,6 @@ class _AsgiEndpoint:
         self.manager = manager
 
     async def __call__(self, scope, receive, send) -> None:
-        receive, send = await connection_id.on_initialize(scope, receive, send)
         await self.manager.handle_request(scope, receive, send)
 
 

@@ -23,7 +23,6 @@ import hub_origin
 from fixtures.helpers import BIN, FAKE_ACP
 from fixtures.live import (REPO_ROOT, fake_env, live, run, send_task, start_worker, stop_worker,
                            uniq, wait_result)
-from mcp_remote import connection_id
 from worker_backends import origin_report
 from worker_backends.acp_agent import AcpAgentBackend, AcpAgentTransport
 from worker_backends.claude_code import ClaudeCodeBackend, ClaudeCodeConfig
@@ -409,78 +408,6 @@ def test_hook_survives_an_unusable_runtime_dir(tmp_path):
         input=json.dumps({"session_id": "s"}), capture_output=True, text=True, env=env,
         timeout=30)
     assert proc.returncode == 0 and json.loads(proc.stdout)
-
-
-# ── Remote endpoint ─────────────────────────────────────────────────────
-
-
-def test_connection_id_round_trip():
-    issued = connection_id.issue({"name": "claude-ai", "version": "1.0"})
-    out = connection_id.reported_from(issued)
-    assert out["client"] == "claude-ai 1.0" and len(out["session"]) == 32
-    assert connection_id.reported_from(connection_id.issue({"name": "x" * 300})).keys() == {
-        "session"}
-    assert connection_id.reported_from(connection_id.issue()).keys() == {"session"}
-    assert connection_id.issue() != connection_id.issue()
-
-
-@pytest.mark.parametrize("bad", [None, "", "not-ours", "g" * 32, "0" * 32 + ".!!", "0" * 33])
-def test_foreign_connection_ids_report_nothing(bad):
-    assert connection_id.reported_from(bad) == {}
-
-
-def test_remote_connection_reports_session_and_client_only(monkeypatch):
-    from stub_control_plane.tokens import TokenIssuer
-
-    from mcp_remote.app import create_app
-
-    monkeypatch.setenv(ENV_MODEL, "must-not-leak")
-    issuer_url, resource = "http://127.0.0.1:9300", "http://mcp.test/mcp"
-    app = create_app(resource_url=resource, issuer=issuer_url, nats_url="nats://127.0.0.1:1",
-                     cp_url="http://127.0.0.1:1", service_key="s" * 43)
-    issuer = TokenIssuer(issuer_url)
-    app.state.verifier.load_jwks(issuer.jwks())
-    token = issuer.mint(subject="u", client_id="c1", audience=resource, scopes=["acs:hub"],
-                        tenant="T_A", identity="claude-web-7", ttl_secs=600).token
-    published: list[bytes] = []
-
-    class FakeNc:
-        async def publish(self, subject, data):
-            published.append(data)
-
-        async def flush(self):
-            pass
-
-    async def fake_get(tenant, identity, access_token):
-        return FakeNc()
-
-    app.state.pool.get = fake_get
-    headers = {"Accept": "application/json, text/event-stream",
-               "Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-        "protocolVersion": "2025-06-18", "capabilities": {},
-        "clientInfo": {"name": "chat-app", "version": "7"}}}
-    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-        "name": "send_direct", "arguments": {"to": "w1", "message": "hi"}}}
-
-    async def go():
-        async with app.router.lifespan_context(app), httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://mcp.test") as http:
-            first = await http.post("/mcp", json=init, headers=headers)
-            assert first.status_code == 200, first.text
-            issued = first.headers["mcp-session-id"]
-            with_id = await http.post("/mcp", json=call,
-                                      headers={**headers, "Mcp-Session-Id": issued})
-            assert with_id.status_code == 200, with_id.text
-            assert "mcp-session-id" not in with_id.headers
-            without = await http.post("/mcp", json=call, headers=headers)
-            assert without.status_code == 200, without.text
-            return issued
-
-    issued = asyncio.run(go())
-    assert len(published) == 2, published
-    assert reported_of(published[0]) == {"session": issued.split(".")[0], "client": "chat-app 7"}
-    assert reported_of(published[1]) == {}
 
 
 # ── Live, through the router ────────────────────────────────────────────
