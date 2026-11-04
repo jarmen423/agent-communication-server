@@ -271,7 +271,7 @@ for (const [name, l] of Object.entries(webModel.WEB)) {
     const max = Math.max(...counts);
     const mean = counts.reduce((s, c) => s + c, 0) / counts.length;
     assert.ok(max <= l.maxLines, `max ${max}`);
-    assert.ok(mean >= (name === "wide" ? 3 : 1.5) && mean <= 6, `mean ${mean.toFixed(2)}`);
+    assert.ok(mean >= l.maxLines * 0.4 && mean <= 6, `mean ${mean.toFixed(2)}`);
     assert.ok(Math.min(...counts) >= 1, "never empty");
   });
 
@@ -284,13 +284,14 @@ for (const [name, l] of Object.entries(webModel.WEB)) {
     assert.equal(frame.ripples.length, webModel.RIPPLES);
     const light = webLight.cellLight(l, frame);
     const [cols, rows] = l.grid;
-    assert.equal(light.length, cols * rows * 3);
+    assert.equal(light.length, cols * rows * 4);
     for (const line of frame.lines) {
       for (const [s, amp] of line.pulses) {
         const x = web.live(t).find((y) => y.pts === line.pts);
         if (s < 0 || s > x.length) continue;
         const [px, py] = webModel.pointAt(x, s);
-        const i = (Math.min(rows - 1, Math.floor(py / (l.height / rows))) * cols + Math.min(cols - 1, Math.floor(px / (l.width / cols)))) * 3;
+        const i = (Math.min(rows - 1, Math.floor(py / (l.height / rows))) * cols + Math.min(cols - 1, Math.floor(px / (l.width / cols)))) * 4;
+        if (light[i + 3] < 0.5) continue; // under the copy the field yields
         if (amp > 0) assert.ok(light[i] > 0.1, "teal where a sent pulse is");
         else assert.ok(light[i + 1] > 0.1, "orange where a received pulse is");
       }
@@ -300,6 +301,9 @@ for (const [name, l] of Object.entries(webModel.WEB)) {
     assert.equal(u.pts.length, 48);
     assert.equal(u.pulses.length, 36);
     assert.equal(u.ripples.length, 8);
+    assert.equal(u.clicks.length, 4);
+    assert.equal(u.mask.length, 4);
+    assert.equal(u.mask2.length, 4);
     const rows2 = webLight.webRows(cols, rows);
     assert.equal(rows2.length, rows);
     assert.ok(rows2.every((r) => r.length === cols));
@@ -324,5 +328,85 @@ test("the web starts, recolours and disposes on the mock adapter", async () => {
     hero.setPalette({ ...palette, laneInk: [0.9, 0.9, 0.9] });
     hero.setPaused(true);
     hero.dispose();
+  }
+});
+
+// ---- round 4: bands, safe zones, the copy mask, click rings ----
+
+/** Realistic (hero aspect, hero height) pairs per band, from the hero's min-height rules and the band queries. */
+const CASES = {
+  P: [0.75, 1.0, 1.3].flatMap((a) => [920, 960, 1000].map((h) => [a, h])),
+  M: [1.25, 1.6, 1.9].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.2, 980], [2.6, 980]]),
+  W: [1.75, 2.06, 2.4, 2.65].flatMap((a) => [760, 870, 980].map((h) => [a, h])),
+  tall: [0.42, 0.45, 0.5].flatMap((a) => [860, 940].map((h) => [a, h])),
+};
+const HEADER = 88;
+const STRIP = { P: 116, M: 116, W: 116, tall: 124 };
+
+for (const band of ["P", "M", "W", "tall"]) {
+  const l = webModel.WEB[band];
+  test(`web ${band}: endpoints and the hub stay in safe zones of the real hero box`, () => {
+    for (const [aspect, h] of CASES[band]) {
+      const w = aspect * h;
+      const m = webModel.cover(l, w, h);
+      const px = (x, y) => [x * m.k + m.x, y * m.k + m.y];
+      for (const a of l.agents) {
+        const [x, y] = px(a.x, a.y);
+        assert.ok(x > 12 && x < w - 12, `${a.id} on screen at ${w.toFixed(0)}×${h}`);
+        assert.ok(y - 8 > HEADER && y + 8 < h - STRIP[band], `${a.id} clear of header and strip at ${w.toFixed(0)}×${h} (y ${y.toFixed(0)})`);
+      }
+      const legend = px(l.hub.cx, l.plate.y + l.plate.h + (band === "tall" ? 12 : 14) * 3.6)[1];
+      assert.ok(legend < h - STRIP[band], `hub legend clear of the strip at ${w.toFixed(0)}×${h}`);
+    }
+    const c = l.copy;
+    const pad = 24 / 0.9;
+    for (const a of l.agents) assert.ok(a.x < c[0] - pad || a.x > c[2] + pad || a.y < c[1] - pad || a.y > c[3] + pad, `${a.id} clear of the copy`);
+    assert.ok(l.plate.x > l.copy[2] || l.plate.y > l.copy[3], "the hub sits beside or below the copy");
+  });
+}
+
+test("the field yields around the copy, with a smooth feather and no edge", () => {
+  const m = [100, 100, 500, 300, webModel.FEATHER];
+  assert.equal(webLight.yieldAt(300, 200, m), 0, "inside: yields fully");
+  assert.equal(webLight.yieldAt(300, 300 + webModel.FEATHER + 1, m), 1, "beyond the feather: untouched");
+  let prev = 0;
+  for (let y = 300; y <= 300 + webModel.FEATHER; y += 5) {
+    const v = webLight.yieldAt(300, y, m);
+    assert.ok(v >= prev && v - prev < 0.06, "monotone, no step");
+    prev = v;
+  }
+  const l = webModel.WEB.M;
+  const lines = webModel.createWeb(l).live(POSTER_T);
+  const open = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [-1, -1, -1, -1] }));
+  const covered = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [0, 0, l.width, l.height] }));
+  for (let i = 0; i < open.length; i += 4) for (let c = 0; c < 3; c++) assert.ok(covered[i + c] <= open[i + c] * webLight.YIELD.floor + 1e-6);
+});
+
+test("click rings: neutral, at most four, oldest dropped, gone in about 1.5 s", () => {
+  const clicks = [0, 0.1, 0.2, 0.3, 0.4].map((t, i) => ({ x: 100 * i, y: 50, t }));
+  const rings = webModel.clickRings(clicks, 0.5);
+  assert.equal(rings.length, webModel.CLICKS);
+  assert.ok(!rings.some((r) => r[0] === 0 && r[3] > 0), "the oldest (x = 0) was dropped");
+  assert.deepEqual(rings.map((r) => r[0]), [100, 200, 300, 400]);
+  for (let i = 1; i < 4; i++) assert.ok(rings[i - 1][2] > rings[i][2], "older rings are wider");
+  assert.ok(webModel.clickRings([{ x: 0, y: 0, t: 0 }], 1.4)[0][3] < 0.07, "faded by 1.4 s");
+  assert.equal(webModel.clickRings([{ x: 0, y: 0, t: 0 }], 1.6)[0][3], 0, "gone by 1.6 s");
+  const l = webModel.WEB.W;
+  const frame = webModel.frameAt(l, [], 10, { copy: [-1, -1, -1, -1], clicks: webModel.clickRings([{ x: 1200, y: 600, t: 9.7 }], 10) });
+  const light = webLight.cellLight(l, frame);
+  let sent = 0, recv = 0, neutral = 0;
+  for (let i = 0; i < light.length; i += 4) { sent += light[i]; recv += light[i + 1]; neutral += light[i + 2]; }
+  assert.ok(neutral > 1 && sent === 0 && recv === 0, "a click is neither sent nor received");
+});
+
+test("cover mapping: client point → design → device pixel round-trips", () => {
+  const l = webModel.WEB.W;
+  for (const [w, h, dpr] of [[1879, 920, 1], [2545, 980, 1.5], [1265, 760, 1.5]]) {
+    const css = webModel.cover(l, w, h);
+    const dev = webModel.cover(l, w * dpr, h * dpr);
+    for (const [cx, cy] of [[w * 0.7, h * 0.8], [40, h - 30]]) {
+      const ux = (cx - css.x) / css.k, uy = (cy - css.y) / css.k;
+      assert.ok(Math.abs(ux * dev.k + dev.x - cx * dpr) < 1e-6 && Math.abs(uy * dev.k + dev.y - cy * dpr) < 1e-6);
+    }
   }
 });

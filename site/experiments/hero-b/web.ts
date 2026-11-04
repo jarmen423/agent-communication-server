@@ -3,23 +3,23 @@
 // both cover-mapped from the design space onto the full-bleed hero canvas.
 import { effect, init, sampler, surface, target, texture } from "vgpu";
 import type { Frame, Gpu, Target, Texture } from "vgpu";
-import type { HeroPalette } from "@/components/hero/gpu-stage";
+import type { HeroPalette, HeroRenderer } from "@/components/hero/gpu-stage";
 import { ATLAS_COLS, canvasAtlas, monoFamily, rgba, type AtlasMaker } from "./atlas";
 import { FONT, glyphTable } from "./field";
 import { run } from "./run";
 import { POSTER_T } from "./schedule";
 import cellsShader from "./web-cells.wgsl";
-import { WEB_LOOK, WEB_RAMP, lineSigma, webRows } from "./web-light";
-import { createWeb, frameAt, LINE_POINTS, PULSES_PER_LINE, RIPPLES, type WebFrame, type WebLayout } from "./web-model";
+import { WEB_LOOK, WEB_RAMP, YIELD, lineSigma, webRows } from "./web-light";
+import { clickRings, cover, createWeb, frameAt, LINE_POINTS, PULSES_PER_LINE, RIPPLES, type WebFrame, type WebLayout } from "./web-model";
 import fieldShader from "./web.wgsl";
 
-export type WebModule = { startWeb(canvas: HTMLCanvasElement, opts: { layout: WebLayout; palette: HeroPalette }): Promise<import("@/components/hero/gpu-stage").HeroRenderer> };
-
-/** Cover ("slice") mapping of the design space onto a canvas of `size` device px. */
-export function cover(l: WebLayout, size: readonly [number, number]) {
-  const k = Math.max(size[0] / l.width, size[1] / l.height);
-  return { k, x: (size[0] - l.width * k) / 2, y: (size[1] - l.height * k) / 2 };
-}
+export type WebRenderer = HeroRenderer & {
+  /** The copy block's rect in design units: the field yields around it. */
+  setCopy(rect: readonly number[]): void;
+  /** A visitor's click at a design-space point: one neutral ring. */
+  click(x: number, y: number): void;
+};
+export type WebModule = { startWeb(canvas: HTMLCanvasElement, opts: { layout: WebLayout; palette: HeroPalette }): Promise<WebRenderer> };
 
 /** The per-frame uniform for web-cells.wgsl. */
 export function webUniform(l: WebLayout, f: WebFrame) {
@@ -44,6 +44,9 @@ export function webUniform(l: WebLayout, f: WebFrame) {
     pts,
     pulses,
     ripples: f.ripples.slice(0, RIPPLES),
+    clicks: f.clicks,
+    mask: f.mask.slice(0, 4),
+    mask2: [f.mask[4], YIELD.floor, YIELD.radius, WEB_LOOK.click],
   };
 }
 
@@ -51,8 +54,11 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
   const [cols, rows] = l.grid;
   const web = createWeb(l);
   let t = POSTER_T;
+  let copy: readonly number[] = l.copy;
+  const clicks: { x: number; y: number; t: number }[] = [];
+  const frameNow = () => frameAt(l, web.live(t), t, { copy, clicks: clickRings(clicks, t) });
   const cells = target(gpu, { size: [cols, rows], format: "rgba16float", label: "hero-b.web-cells" });
-  const light = effect(gpu, cellsShader, { set: { web: webUniform(l, frameAt(l, web.live(t), t)) } });
+  const light = effect(gpu, cellsShader, { set: { web: webUniform(l, frameNow()) } });
   const { chars, index } = glyphTable(webRows(cols, rows));
   const text = texture(gpu, { kind: "2d", size: [cols, rows], format: "rgba8uint", usage: ["texture_binding", "copy_dst"], label: "hero-b.web-text" });
   gpu.gpu.queue.writeTexture({ texture: text.gpu }, rgba(index), { bytesPerRow: cols * 4 }, [cols, rows]);
@@ -62,7 +68,7 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
   let current = size;
   let pal = palette;
   const upload = () => {
-    const { k } = cover(l, current);
+    const { k } = cover(l, current[0], current[1]);
     const cell: [number, number] = [(l.width / cols) * k, (l.height / rows) * k];
     const made = makeAtlas(chars, cell, cell[1] * FONT.scale);
     atlas?.destroy();
@@ -72,7 +78,7 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
   };
   upload();
   const fieldUniform = () => {
-    const m = cover(l, current);
+    const m = cover(l, current[0], current[1]);
     return {
       grid: [cols, rows],
       cell: [l.width / cols, l.height / rows],
@@ -92,7 +98,7 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
   };
   const { plate } = l;
   const lampUniform = (f: WebFrame) => ({ plate: [plate.x, plate.y, plate.w, plate.h], glow: [f.glow, plate.r, 0.7, 0], events: f.events });
-  const first = frameAt(l, web.live(t), t);
+  const first = frameNow();
   const draw = effect(gpu, fieldShader, {
     set: { cells, text, atlas: atlas!, samp: sampler(gpu, { minFilter: "linear", magFilter: "linear" }), field: fieldUniform(), lamp: lampUniform(first) },
   });
@@ -105,11 +111,19 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
     compile: (out: Target) => Promise.all([light.compile(cells), draw.compile(out)]),
     encode(f: Frame, out: Target, dt: number) {
       t += dt;
-      const frame = frameAt(l, web.live(t), t);
+      while (clicks.length && t - clicks[0].t > 2) clicks.shift();
+      const frame = frameNow();
       light.set({ web: webUniform(l, frame) });
       draw.set({ lamp: lampUniform(frame) });
       f.pass(cells, light);
       f.pass({ target: out, clear: [0, 0, 0, 0] }, (p) => p.draw(draw));
+    },
+    setCopy(rect: readonly number[]) {
+      copy = rect;
+    },
+    click(x: number, y: number) {
+      clicks.push({ x, y, t });
+      if (clicks.length > 4) clicks.shift();
     },
     resize(w: number, h: number) {
       current = [w, h];
@@ -138,7 +152,8 @@ export const startWeb: WebModule["startWeb"] = async (canvas, { layout, palette 
     const layer = createWebLayer(gpu, layout, palette, out.size, canvasAtlas(family));
     out.onResize(({ width, height }) => layer.resize(width, height));
     await layer.compile(out);
-    return await run(gpu, canvas, { encode: (f, dt) => layer.encode(f, out, dt), setPalette: layer.setPalette, dispose: layer.dispose });
+    const renderer = await run(gpu, canvas, { encode: (f, dt) => layer.encode(f, out, dt), setPalette: layer.setPalette, dispose: layer.dispose });
+    return { ...renderer, setCopy: layer.setCopy, click: layer.click };
   } catch (err) {
     gpu.dispose();
     throw err;
