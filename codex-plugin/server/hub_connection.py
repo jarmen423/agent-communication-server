@@ -30,6 +30,8 @@ from typing import Any, Awaitable, Callable, Iterator
 import nats
 from nats.aio.client import Client as NATSClient
 
+import hub_origin
+
 NATS_URL = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
 API_TIMEOUT = float(os.environ.get("NATS_HUB_API_TIMEOUT", "10"))
 
@@ -175,19 +177,21 @@ def envelope(
     to: str | None = None,
     reply_to: str | None = None,
 ) -> dict:
-    """Build a nats-hub wire envelope with the env identity stamped."""
-    return {
-        "meta": {
-            "id": str(uuid.uuid4()),
-            "from": identity(),
-            "channel": channel,
-            "to": to,
-            "timestamp": now(),
-            "kind": kind,
-            "reply_to": reply_to,
-        },
-        "payload": payload,
+    """Build a nats-hub wire envelope with the env identity stamped and what
+    this client knows about itself in ``origin.reported`` (see hub_origin)."""
+    meta = {
+        "id": str(uuid.uuid4()),
+        "from": identity(),
+        "channel": channel,
+        "to": to,
+        "timestamp": now(),
+        "kind": kind,
+        "reply_to": reply_to,
     }
+    reported = hub_origin.call_reported() if is_bound() else hub_origin.process_reported()
+    if reported:
+        meta["origin"] = {"reported": reported}
+    return {"meta": meta, "payload": payload}
 
 
 async def publish(channel: str, env: dict) -> None:

@@ -15,6 +15,9 @@ or ``..`` (canonical dir).
 
 Never blocks: on failure the hook still emits JSON telling the agent the bus
 is down and MCP tools will fail until it is up.
+
+The hook input's ``session_id`` is also noted for the MCP server, which reports
+it in ``meta.origin.reported`` (``hub_origin.record_session``).
 """
 import json
 import os
@@ -41,7 +44,10 @@ DOWN_MSG = (
 
 def main() -> None:
     try:
-        json.load(sys.stdin)  # hook input on stdin; not needed
+        hook_input = json.load(sys.stdin)
+        from hub_origin import record_session
+
+        record_session(hook_input.get("session_id"))
     except Exception:
         pass
 

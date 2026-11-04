@@ -66,6 +66,7 @@ else:
 from mcp.server.stdio import stdio_server
 
 import hub_connection as conn
+import hub_origin
 from hub_app import build_server
 from hub_tools import TOOLS
 from hub_handlers import HANDLERS as _RAW_HANDLERS
@@ -92,7 +93,7 @@ async def _whoami(args: dict) -> dict:
 # also for the Hermes plugin, which calls HANDLERS directly.
 HANDLERS = validated_handlers(TOOLS, {**_RAW_HANDLERS, "whoami": _whoami})
 
-server = build_server("nats-hub", TOOLS, HANDLERS)
+server = build_server("nats-hub", TOOLS, HANDLERS, bind=hub_origin.client_info_bind)
 
 
 async def main() -> None:
