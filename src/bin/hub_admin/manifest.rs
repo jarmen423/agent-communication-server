@@ -1,6 +1,7 @@
 //! `hub-admin manifest`: drive a running hub's identity manifest through its
 //! API ops, for operators without a provisioning system. The caller must be a
-//! `--manifest-writer` or an `--api-admin` on that hub.
+//! `--manifest-writer` or an `--api-admin` on that hub. On a hub with a
+//! manifest writer, only the writer may change the manifest; admins can read.
 //!
 //! Output is the op's `data` as JSON. A refusal is an error, so the exit code
 //! is 1. Records are validated here first, so a typo fails before connecting.
