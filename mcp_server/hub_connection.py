@@ -30,7 +30,10 @@ from typing import Any, Awaitable, Callable, Iterator
 import nats
 from nats.aio.client import Client as NATSClient
 
-import hub_origin
+if __package__:  # imported as a package (e.g. mcp_server.hub_connection in tests)
+    from . import hub_origin
+else:
+    import hub_origin
 
 NATS_URL = os.environ.get("NATS_URL", "nats://127.0.0.1:4222")
 API_TIMEOUT = float(os.environ.get("NATS_HUB_API_TIMEOUT", "10"))
