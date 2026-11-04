@@ -41,6 +41,36 @@ Prefer `ACS_SERVICE_KEY` to avoid shell-history exposure. The key is exchanged
 for the usual short-lived access token and rotating refresh token; the CLI
 does not retain the service key. No NATS user seed is sent to the issuer.
 
+## Select a tenant
+
+One device login can hold identities in several tenants:
+
+```bash
+acs tenant list                          # TENANT ROLE HANDLE STATE; * marks current
+acs tenant use example                   # verify membership, then save the default
+acs agent add me --tenant example
+acs agent rm me --tenant example
+acs mcp install claude --identity me --tenant example
+acs worker run echo --identity me --tenant example
+acs env --tenant example me
+acs exec --tenant example me -- hub-agents
+acs status --tenant example
+acs up --tenant example --foreground
+acs down --tenant example
+```
+
+`--tenant` takes precedence over `ACS_TENANT`, then the saved `current` tenant,
+then the only available tenant. With several tenants and no selection, identity
+commands fail and list the choices. Login selects the personal tenant. Plain
+`acs status` groups all tenants; a flag or environment value filters it. The
+single device daemon renews every tenant even when `up` names one; `down`
+stops that device daemon. Removing an identity affects only its selected tenant.
+An identity name can be reused in different tenants.
+
+`acs login --device-name NAME` / `ACS_DEVICE_NAME` sends the device name in the
+device-code request. The default is the machine hostname, trimmed and limited
+to 64 characters. Empty names or names containing control characters are omitted.
+
 ## Run CLIs as an identity
 
 The `hub-*` CLIs and your own scripts need three variables: `NATS_URL`,
@@ -75,7 +105,19 @@ inside the private `0700` state directory. Complete files are synced and
 renamed over the old file; no partial seed/JWT pair is exposed. Separate
 operation and daemon locks serialize refresh-token rotation and identity edits.
 
-`creds/<identity>.creds` contains that identity's locally generated nkey seed
+`device.json` holds the server, device id/name and access-token cache. A single
+refresh token remains keyed by `ACS_HOME`, so upgrading retains the login.
+`current` stores the default tenant. `tenants/<tenant>/state.json` holds its
+NATS URL and identities. Tenant slugs must match `[A-Za-z0-9_-]{1,64}`.
+
+On upgrade, the old `state.json` and credentials are staged in `.migrate-<pid>`
+and renamed into place, with `device.json` committed last. `state.json.bak`
+retains the original. Interrupted upgrades can be retried; completed upgrades
+are a no-op. Compatibility symlinks at old credential paths let running clients
+reread renewed credentials. They stop resolving when that identity is removed.
+The refresh-token keychain entry is unchanged.
+
+`tenants/<tenant>/creds/<identity>.creds` contains that identity's locally generated nkey seed
 and short-lived NATS JWT. The public key is bound at registration. Renewal
 keeps the same seed/public key; only the signed JWT changes. The daemon
 refreshes with a randomized 15–25 second margin, retries failures with capped
@@ -105,7 +147,8 @@ remain valid until expiry. Production must push resolver revocations as in
 
 ## MCP clients
 
-The installer merges only `nats-hub`; unrelated client settings/servers remain.
+The installer merges `nats-hub` for the personal tenant and `nats-hub-<tenant>`
+for each other tenant. Reinstalling replaces that tenant’s entry; unrelated client settings/servers remain.
 It writes `command`, `args`, and the three environment variables `NATS_URL`,
 `NATS_CREDENTIALS_FILE`, `NATS_HUB_IDENTITY`. It never puts a token/seed into
 client configuration. Choose `--identity` when more than one exists.
@@ -190,10 +233,11 @@ The existing OAuth/MCP routes remain unchanged. Device endpoints are:
 - `GET|POST /device/verify`: auto-approve a user code; scripted POST accepts `user_code`.
 - `POST /device/token`: form-encoded device-code grant (public `client_id=acs`
   required), rotating `refresh_token`, or `service_key` exchange.
+- `GET /v1/tenants` and `GET /v1/tenants/<tenant>/members`: device memberships.
 - `GET|DELETE /v1/device`: inspect/revoke the authenticated device.
-- `POST /v1/device/identities`: register `{identity, public_key, role?}` in the token's tenant.
-- `DELETE /v1/device/identities/<id>`: revoke an owned identity.
-- `POST /v1/credentials/nats`: device bearer token plus `{identity, public_key}`;
+- `POST /v1/device/identities`: register `{identity, public_key, role?, tenant}` in the selected tenant.
+- `DELETE /v1/device/identities/<id>`: revoke an owned identity (`?tenant=<slug>`).
+- `POST /v1/credentials/nats`: device bearer token plus `{identity, public_key, tenant}`;
   no endpoint service key. Tenant, device, revocation and registered key are checked.
 - `POST /device/service-key`: DEV admin bootstrap with `X-ACS-Admin-Key` (from `--admin-key-file`, default `<service-key-file>.admin`; deliberately not the MCP endpoint's service key);
   returns a new device and its one-time displayed secret. `DELETE` with
@@ -208,6 +252,18 @@ within a tenant (including revoked names), and roles are worker/orchestrator.
 make setup && scripts/dev/install_nsc.sh && make build
 scripts/dev/operator_stack.sh .venv/bin/python -m pytest -q -s tests/python/test_acs_e2e.py
 ```
+
+The stub loads additional memberships from tenant key files or repeatable
+`--member-tenant` flags with `--nsc-home`. `--tenant-role tenant=role` overrides
+the default owner/member roles. The connector OAuth branch is unchanged.
+`GET /v1/device?tenant=*` lists identities across memberships; foreign tenants
+return `403 access_denied` with `foreign tenant`.
+
+The live test supplies manifest records as the stack's authorized API admin,
+using the device name returned by the stub's identity records. It then asserts
+that a message from the registered identity carries that name in `origin.device`.
+The stub itself does not publish manifests. It also verifies that credentials
+for identical names in separate tenant accounts cannot exchange routed messages.
 
 This CI test starts the stub, uses real RFC 8628 verification, registers `me`,
 installs Claude config, launches exactly that stdio MCP configuration, and gets

@@ -195,9 +195,9 @@ Manual commands (against a running stack):
 | Command | Description |
 |---|---|
 | *every `hub-*` CLI* | `--nats-url` defaults to `$NATS_URL`, then `nats://127.0.0.1:4222`. The sender identity (`--from`, or `--identity` on `hub-worker`/`hub-register`) defaults to `$NATS_HUB_IDENTITY`. On hosted ACS run them under `acs exec <id> --`. |
-| `acs login/logout/status/up/down` | Device login (default server: hosted ACS, `https://acs.agentmemorylabs.com`; `--server`/`ACS_SERVER` for self-host and dev), status and per-identity credential renewal |
-| `acs agent add/rm`, `acs mcp install claude\|codex\|hermes`, `acs worker run <backend> --identity ID -- ARGS` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
-| `acs env ID`, `acs exec ID -- CMD [ARGS…]` | Print `export` lines for, or run `CMD` with, that identity's `NATS_URL`, `NATS_CREDENTIALS_FILE` and `NATS_HUB_IDENTITY` (other `NATS_*` auth vars stripped) |
+| `acs login [--device-name NAME]`, `acs logout/status/up/down`, `acs tenant list/use <tenant>` | Device login (default server: hosted ACS, `https://acs.agentmemorylabs.com`; `--server`/`ACS_SERVER` for self-host and dev), status and per-identity credential renewal |
+| `acs agent add <id> --tenant <slug>`, `acs agent rm <id> [--tenant <slug>]`, `acs mcp install claude\|codex\|hermes`, `acs worker run <backend> --identity ID -- ARGS` | Manage device identities and connect local agents (docs/ACS_CONNECTOR.md) |
+| `acs env [--tenant SLUG] ID`, `acs exec [--tenant SLUG] ID -- CMD [ARGS…]` | Print `export` lines for, or run `CMD` with, that identity's `NATS_URL`, `NATS_CREDENTIALS_FILE` and `NATS_HUB_IDENTITY` (other `NATS_*` auth vars stripped) |
 | `hub-server [--db-path PATH] [--metrics-addr ADDR] [--ws-addr ADDR --static-dir DIR] [--tenant LABEL] [--manifest-writer ID]` | Router + query API; optional Prometheus `/metrics` and WS bridge/visualizer; `--tenant` is stamped as `origin.tenant`, `--manifest-writer` may write the identity manifest (needs `--db-path`) |
 | `hub-admin manifest put/remove/sync/get/list --as ID` | Drive the identity manifest as the writer. API admins can only `get`/`list` on a hub with a writer, and can use every subcommand on a hub without one (`--as` falls back to `NATS_HUB_IDENTITY`; `docs/PROVENANCE.md`) |
 | `hub-publish --channel CH [--to AGENT] [--kind KIND] [--from ID] --message MSG` | Send a message (broadcast or DM) |
