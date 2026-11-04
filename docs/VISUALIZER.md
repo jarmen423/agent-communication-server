@@ -89,6 +89,13 @@ Then open http://127.0.0.1:9191/ in your browser.
 - **Status indicators** — working (green), idle (ready), error (red), closed (gray)
 - **Progress events** — streaming thought/message/tool updates appear as they
   arrive from ACP-backed workers
+- **Message provenance** — chat bubbles, the event ticker and the agent popup
+  show a provenance label (`alice · claude-code · ~model`) from
+  `meta.origin`; `~` marks a self-reported, unverified value. The session
+  detail header shows the full label (with the shortened session) and a
+  self-reported note. Provenance text is inserted with text nodes only, and
+  envelopes without `origin` show nothing extra (see
+  [`PROVENANCE.md`](PROVENANCE.md))
 
 ### Browser commands
 

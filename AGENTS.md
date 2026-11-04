@@ -206,7 +206,7 @@ Manual commands (against a running stack):
 | `hub-register [--identity ID] --capabilities CAP1,CAP2` | Register an agent |
 | `hub-agents [--capability CAP] [--alive SECS] [--identity ID]` | List/search agents |
 | `hub-worker [--identity ID] --execute CMD` | Universal worker: prompt on stdin → CMD → result |
-| `hub-history [--channel CH] [--from ID] [--tail]` | Query history |
+| `hub-history [--channel CH] [--from ID] [--user U] [--agent A] [--model M] [--session S] [--json] [--verbose] [--tail]` | Query history. The provenance flags filter on `meta.origin` (`--model`/`--session` on self-reported values) and fail against a hub that does not apply them. The table's `ORIGIN` column shows the provenance label (`~` = self-reported) |
 | `hub-delegate --to AGENT (--prompt MSG \| --prompt-file PATH \| --prompt -) [--from ID] [--timeout SECS] [--verbose] [--no-wait]` | Delegate a task on an isolated task channel. `--from` falls back to `orchestrator` when `NATS_HUB_IDENTITY` is unset. Only the result goes to stdout; logs go to stderr. Ctrl-C sends a cancel (§4.2) and a second Ctrl-C exits. Exit codes: 0 done, 1 worker error, 2 timeout, 3 channel closed, 4 cancelled, 5 refused by accept policy, 130 interrupted. |
 | `hub-session create/send/close/list/status` | Stateful multi-turn sessions |
 | `hub-watch [--session\|--wave\|--agent\|--channel\|--all]` | Watch structured progress events |
