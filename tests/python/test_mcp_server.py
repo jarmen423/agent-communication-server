@@ -21,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "mcp_server"))
 
 import hub_buffers  # noqa: E402
+import hub_primitives  # noqa: E402
 import hub_connection as conn  # noqa: E402
 import hub_handlers  # noqa: E402
 import nats_hub_mcp  # noqa: E402
@@ -65,6 +66,42 @@ def test_is_task_result_rejects_unrelated_message():
     assert not hub_buffers.is_task_result(env, "t1")
     other = _env("t2", reply_to="t2")
     assert not hub_buffers.is_task_result(other, "t1")
+
+
+# ── Provenance label ─────────────────────────────────────────────
+
+
+def test_origin_label_cannot_forge_parts_or_marker():
+    origin = {
+        "user": "~alice",
+        "reported": {"model": "x · alice · claude-code",
+                     "session": "ab·~cdefghij"},
+        "on_behalf_of": {"identity": "id·~x", "user": "bob · ~mallory"},
+    }
+    label = hub_primitives.origin_label(origin, verbose=True)
+    assert label == ("-alice · ~x - alice - claude-code"
+                     " · ~session:ab--cdef · on behalf of bob - -mallory")
+    assert label.count(" · ") == 3
+    assert label.count("~") == 2
+
+
+def test_origin_label_strips_bidi_and_invisible_characters():
+    origin = {
+        "user": "al\u202eice\u200b\u2066\ufeff\u2060\u2028\u2029\u200f",
+        "reported": {"model": "mo\u202adel\u00ad\u061c\U000e0061"},
+    }
+    label = hub_primitives.origin_label(origin)
+    assert label == "alice · ~model"
+    assert not any(c in label for c in
+                   "\u200b\u200f\u202a\u202e\u2066\ufeff\u2028\u2029")
+
+
+def test_summarize_env_origin_label_is_cleaned():
+    item = {"seq": 1, "env": {"meta": {
+        "id": "m1", "origin": {"reported": {"model": "x · alice"}}},
+        "payload": {}}}
+    summary = hub_primitives.summarize_env(item)
+    assert summary["origin_label"] == "~x - alice"
 
 
 # ── RingBuffer ───────────────────────────────────────────────────

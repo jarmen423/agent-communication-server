@@ -17,6 +17,7 @@ import asyncio
 import json
 import sys
 import time
+import unicodedata
 from collections import deque
 from typing import Any, Callable
 
@@ -63,16 +64,26 @@ def is_task_completion(env: dict, task_id: str, worker: str,
 
 
 def _clean_origin_part(value: object) -> str:
+    # Mirrors the Rust/JS helpers exactly: drop control (Cc) and format
+    # (Cf) characters plus U+2028/U+2029, replace the label separator
+    # ``·`` and the self-reported marker ``~`` with ``-`` so a value can
+    # never forge extra parts or a fake marker, then cap at 64 chars.
     if not isinstance(value, str):
         return ""
-    return "".join(c for c in value if ord(c) >= 0x20 and not 0x7F <= ord(c) < 0xA0)[:64]
+    out: list[str] = []
+    for c in value:
+        if unicodedata.category(c) in ("Cc", "Cf") or c in ("\u2028", "\u2029"):
+            continue
+        out.append("-" if c in ("·", "~") else c)
+    return "".join(out)[:64]
 
 
 def origin_label(origin: object, verbose: bool = False) -> str:
     """One-line provenance label (``alice · claude-code · ~model``).
 
     ``~`` marks a self-reported, unverified value. Mirrors the Rust/JS
-    label helpers; control characters are stripped before display.
+    label helpers; values are cleaned before display (see
+    ``_clean_origin_part``).
     """
     if not isinstance(origin, dict):
         return ""

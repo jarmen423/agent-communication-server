@@ -134,6 +134,40 @@ fn test_origin_label_strips_control_characters() {
 }
 
 #[test]
+fn test_origin_label_cannot_forge_parts_or_marker() {
+    let origin = Origin {
+        user: Some("~alice".into()),
+        reported: Reported {
+            model: Some("x · alice · claude-code".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let label = origin_label(&origin, false);
+    assert_eq!(label, "-alice · ~x - alice - claude-code");
+    assert_eq!(label.matches(" · ").count(), 1, "{label}");
+    assert_eq!(label.matches('~').count(), 1, "{label}");
+}
+
+#[test]
+fn test_origin_label_strips_bidi_and_invisible_characters() {
+    let origin = Origin {
+        user: Some("al\u{202e}ice\u{200b}\u{2066}\u{feff}\u{2028}\u{2029}".into()),
+        reported: Reported {
+            model: Some("mo\u{202a}del".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let label = origin_label(&origin, false);
+    assert_eq!(label, "alice · ~model");
+    assert!(!label.chars().any(
+        |c| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' | '\u{feff}' | '\u{2028}' | '\u{2029}')
+    ));
+}
+
+#[test]
 fn test_format_event_line_appends_origin_label() {
     let mut env = sample_event("started", serde_json::json!({"prompt": "hi"}));
     env.meta.origin = Some(Origin {
