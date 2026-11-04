@@ -11,6 +11,7 @@ import cellsShader from "./web-cells.wgsl";
 import { WEB_LOOK, WEB_RAMP, YIELD, lineBox, lineSigma, webRows } from "./web-light";
 import { clickRings, cover, createWeb, frameAt, LINE_POINTS, PULSES_PER_LINE, RIPPLES, WEB, WEB_POSTER_T, type Band, type WebFrame, type WebLayout } from "./web-model";
 import fieldShader from "./web.wgsl";
+import { placeAlpha } from "./web-places";
 
 export type WebRenderer = HeroRenderer & {
   /** The copy block's rect in design units: the field yields around it. */
@@ -160,7 +161,25 @@ export const startWeb: WebModule["startWeb"] = async (canvas, { band, palette })
     const layer = createWebLayer(gpu, layout, palette, out.size, canvasAtlas(family));
     out.onResize(({ width, height }) => layer.resize(width, height));
     await layer.compile(out);
-    const renderer = await run(gpu, canvas, { encode: (f, dt) => layer.encode(f, out, dt), setPalette: layer.setPalette, dispose: layer.dispose });
+    // Places come and go: fade their cards in the overlay (DOM, a handful of elements) with the same schedule.
+    const cards = [...(canvas.closest?.("section")?.querySelectorAll<SVGGElement>(`[data-band="${band}"] [data-place]`) ?? [])].map((el) => {
+      const [i, j] = (el.dataset.place ?? "0:0").split(":").map(Number);
+      return { el, i, j, alpha: -1 };
+    });
+    const fadeCards = () => {
+      for (const c of cards) {
+        const a = Math.round(placeAlpha(c.i, layout.slots[c.i], c.j, layer.time) * 100) / 100;
+        if (a !== c.alpha) c.el.setAttribute("opacity", String((c.alpha = a)));
+      }
+    };
+    const renderer = await run(gpu, canvas, {
+      encode: (f, dt) => {
+        layer.encode(f, out, dt);
+        fadeCards();
+      },
+      setPalette: layer.setPalette,
+      dispose: layer.dispose,
+    });
     return { ...renderer, setCopy: layer.setCopy, click: layer.click };
   } catch (err) {
     gpu.dispose();

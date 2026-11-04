@@ -2,7 +2,7 @@
 // the stage's first-paint chunk does not pull in the model or the schedule):
 // the aspect-band queries, the design-space sizes and the cover mapping.
 
-/** Desktop aspect bands (P under 1.3, M to 1.9, W beyond) and the phone layout. */
+/** Desktop aspect bands (P under 1.45, M to 1.95, W beyond) and the phone layout. */
 export type Band = "P" | "M" | "W" | "tall";
 
 /**
@@ -10,7 +10,7 @@ export type Band = "P" | "M" | "W" | "tall";
  * with these exact strings and the live layer picks its layout with
  * matchMedia on them, so the poster and the first live frame always agree.
  */
-export const BAND_QUERY = { M: "(min-aspect-ratio: 13/10)", W: "(min-aspect-ratio: 19/10)" } as const;
+export const BAND_QUERY = { M: "(min-aspect-ratio: 29/20)", W: "(min-aspect-ratio: 39/20)" } as const;
 export const bandFor = (matches: (q: string) => boolean): "P" | "M" | "W" => (matches(BAND_QUERY.W) ? "W" : matches(BAND_QUERY.M) ? "M" : "P");
 
 /** Design-space size per variant: desktop bands share 2400 × 1000, phones 400 × 860. */

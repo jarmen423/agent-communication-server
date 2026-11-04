@@ -156,9 +156,9 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
 }
 
 /**
- * Safety net for agent labels (poster and live share the overlay, so this
- * covers both, with or without a GPU): any label that would touch the copy,
- * the header or the log strip (+12 px) is hidden at this viewport.
+ * Safety net for labels and place cards (poster and live share the overlay,
+ * so this covers both, with or without a GPU): anything that would touch the
+ * copy, the header or the log strip (+12 px) is hidden at this viewport.
  */
 export function useLabelGuard(ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
@@ -168,7 +168,7 @@ export function useLabelGuard(ref: React.RefObject<HTMLElement | null>) {
       const keep = ["[data-web-copy]", "[data-web-log]", "header"]
         .map((q) => document.querySelector(q)?.getBoundingClientRect())
         .filter((r): r is DOMRect => !!r);
-      section.querySelectorAll<SVGTextElement>("[data-agent-label]").forEach((label) => {
+      section.querySelectorAll<SVGGraphicsElement>("[data-agent-label], [data-place]").forEach((label) => {
         label.style.visibility = "";
         const r = label.getBoundingClientRect();
         if (!r.width) return;

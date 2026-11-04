@@ -5,6 +5,7 @@
 // (use-element clones inherit from the <use>; an SVG <img> could not).
 //   #field-wide, #field-tall   the quiet text fields (desktop grid, coarser phone grid)
 //   #lit-<band>                the cells lit at the poster moment (the first live frame)
+//   #card-<band>-<slot>-<j>    a place card (name, ports, agent names), faded by the page
 // One document, one request: browsers fetch <use> targets even when hidden, so
 // splitting by variant would not save bytes.
 // Colours are literal: the hero is dark in both themes, and paint inside an
@@ -12,9 +13,10 @@
 import { FONT } from "./glyphs";
 import { cellLight, cellLook, rampAt, WEB_LOOK, webRows } from "./web-light";
 import { createWeb, frameAt, WEB, WEB_POSTER_T, type Band, type WebLayout } from "./web-model";
+import { CARD, PLACES } from "./web-places";
 
 /** Dark-island brand colours (tokens.css, dark): identical in both themes. */
-const INK = { muted: "#a3a9b0", ink: "#eef0ea", teal: "#3cb8ab", orange: "#f5a742" };
+const INK = { muted: "#a3a9b0", ink: "#eef0ea", teal: "#3cb8ab", orange: "#f5a742", paper: "#101317" };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -68,11 +70,34 @@ function lit(l: WebLayout) {
 
 const BANDS: Band[] = ["P", "M", "W", "tall"];
 
+/** Place cards for a band: names on the side away from the hub, a knockout halo in the ground colour. */
+function cards(l: WebLayout) {
+  const card = CARD[l.variant];
+  const halo = `stroke="${INK.paper}" stroke-width="${l.variant === "tall" ? 5 : 6}" stroke-linejoin="round" paint-order="stroke"`;
+  const r = l.variant === "tall" ? 3.5 : 4.5;
+  return l.slots
+    .flatMap((slot, i) =>
+      slot.places.map((pid, j) => {
+        const start = slot.align === "start";
+        const anchor = start ? "start" : "end";
+        const rows = PLACES[pid].agents.slice(0, card.rows).map(([id, role], k) => {
+          const y = slot.y + card.first + k * card.row;
+          return (
+            `<circle cx="${slot.x}" cy="${y}" r="${r}" fill="${INK.paper}" stroke="${role === "orchestrator" ? INK.ink : INK.muted}" stroke-width="1.5"/>` +
+            `<text x="${start ? slot.x + 11 : slot.x - 11}" y="${r2(y + card.name * 0.34)}" text-anchor="${anchor}" font-size="${card.name}" fill="${INK.muted}" ${halo}>${esc(id)}</text>`
+          );
+        });
+        return `<g id="card-${l.band}-${i}-${j}"><text x="${start ? slot.x - 5 : slot.x + 5}" y="${slot.y}" text-anchor="${anchor}" font-size="${card.title}" fill="${INK.ink}" ${halo}>${esc(pid)}</text>${rows.join("")}</g>`;
+      }),
+    )
+    .join("\n");
+}
+
 /** The whole document. Deterministic: the drift test rebuilds it and compares. */
 export function posterSvg() {
   return (
     // Never drawn directly (only <use>d); the nominal size is for Next's static-asset import.
     `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1000" viewBox="0 0 2400 1000">\n` +
-    `${field(WEB.M, "field-wide")}\n${field(WEB.tall, "field-tall")}\n${BANDS.map((b) => lit(WEB[b])).join("\n")}\n</svg>\n`
+    `${field(WEB.M, "field-wide")}\n${field(WEB.tall, "field-tall")}\n${BANDS.map((b) => lit(WEB[b])).join("\n")}\n${BANDS.map((b) => cards(WEB[b])).join("\n")}\n</svg>\n`
   );
 }

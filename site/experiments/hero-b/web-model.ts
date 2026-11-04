@@ -9,9 +9,10 @@
 import { rng } from "./prng";
 
 import type { Band } from "./web-bands";
+import { CARD, PLACES, placeSteady, SLOTS, type Role, type Slot } from "./web-places";
 
 export { BAND_QUERY, bandFor, cover, type Band } from "./web-bands";
-export type WebAgent = { id: string; role: "orchestrator" | "worker"; x: number; y: number; label?: "left" | "right" };
+export type WebAgent = { id: string; role: Role; x: number; y: number; place: string; slot: number; j: number };
 export type WebLayout = {
   band: Band;
   variant: "wide" | "tall";
@@ -27,6 +28,8 @@ export type WebLayout = {
   plate: { x: number; y: number; w: number; h: number; r: number };
   grid: readonly [number, number];
   agents: WebAgent[];
+  /** Location slots around the hub (see web-places.ts). */
+  slots: Slot[];
   /** Seconds between new lines, and the line count cap. */
   every: readonly [number, number];
   maxLines: number;
@@ -44,10 +47,16 @@ const plateOf = (cx: number, cy: number, size: number, r: number) => {
   return { x: cx - half, y: cy - half, w: half * 2, h: half * 2, r };
 };
 
-const O = "orchestrator" as const;
-const W = "worker" as const;
+/** Every agent of every place a band's slots can show, at its port (card rows run down from the title). */
+function agentsOf(slots: Slot[], card: (typeof CARD)["wide" | "tall"]): WebAgent[] {
+  return slots.flatMap((slot, i) =>
+    slot.places.flatMap((pid, j) =>
+      PLACES[pid].agents.slice(0, card.rows).map(([id, role], k) => ({ id, role, x: slot.x, y: slot.y + card.first + k * card.row, place: pid, slot: i, j })),
+    ),
+  );
+}
 
-const desktop = (band: "P" | "M" | "W", hub: [number, number, number], agents: WebAgent[], maxLines: number, copy: WebLayout["copy"]): WebLayout => ({
+const desktop = (band: "P" | "M" | "W", hub: [number, number, number], maxLines: number, copy: WebLayout["copy"]): WebLayout => ({
   band,
   variant: "wide",
   width: 2400,
@@ -58,47 +67,18 @@ const desktop = (band: "P" | "M" | "W", hub: [number, number, number], agents: W
   every: maxLines > 4 ? [1.5, 2.2] : [2.2, 3],
   maxLines,
   speed: 1,
-  agents,
+  agents: agentsOf(SLOTS[band], CARD.wide),
+  slots: SLOTS[band],
   copy,
 });
 
 export const WEB: Record<Band, WebLayout> = {
-  // 768–1023 px and other near-portrait screens: copy stacked on top, the web below it.
-  P: desktop("P", [1200, 740, 92], [
-    { id: "me", role: O, x: 880, y: 700, label: "right" },
-    { id: "claude-web-1", role: O, x: 900, y: 835 },
-    { id: "claude-1", role: W, x: 1520, y: 690, label: "left" },
-    { id: "codex-1", role: W, x: 1520, y: 830, label: "left" },
-    { id: "hermes-1", role: W, x: 1360, y: 850 },
-  ], 4, [840, 120, 1332, 558]),
-  // Laptops (1280 × 720 to 1440 × 900): copy upper left, hub right of centre.
-  M: desktop("M", [1700, 700, 96], [
-    { id: "me", role: O, x: 640, y: 790, label: "right" },
-    { id: "claude-web-1", role: O, x: 900, y: 745, label: "right" },
-    { id: "codex-2", role: O, x: 1150, y: 830 },
-    { id: "claude-1", role: W, x: 1800, y: 470, label: "left" },
-    { id: "codex-1", role: W, x: 1800, y: 565, label: "left" },
-    { id: "hermes-1", role: W, x: 1490, y: 830, label: "right" },
-    { id: "cursor-1", role: W, x: 1780, y: 190 },
-    { id: "opencode-1", role: W, x: 1645, y: 330 },
-    { id: "ci-1", role: W, x: 1350, y: 760 },
-    { id: "claude-3", role: W, x: 1570, y: 210 },
-  ], 5, [551, 133, 1442, 583]),
-  // Wide and short (1894 × 920, 2560 × 1080): the web also reaches the far left.
-  W: desktop("W", [1760, 680, 100], [
-    { id: "me", role: O, x: 380, y: 610, label: "right" },
-    { id: "claude-web-1", role: O, x: 660, y: 785, label: "right" },
-    { id: "codex-2", role: O, x: 400, y: 790 },
-    { id: "claude-web-2", role: O, x: 420, y: 330 },
-    { id: "claude-1", role: W, x: 2020, y: 430, label: "left" },
-    { id: "codex-1", role: W, x: 2040, y: 700, label: "left" },
-    { id: "hermes-1", role: W, x: 1400, y: 790, label: "right" },
-    { id: "cursor-1", role: W, x: 1960, y: 200 },
-    { id: "opencode-1", role: W, x: 2050, y: 560 },
-    { id: "ci-1", role: W, x: 1100, y: 775 },
-    { id: "grok-1", role: W, x: 2040, y: 790 },
-    { id: "claude-3", role: W, x: 1650, y: 260 },
-  ], 6, [565, 130, 1437, 570]),
+  // Near-portrait screens (tablets, squarish windows): copy on top, the hub and its places below.
+  P: desktop("P", [1200, 730, 84], 4, [840, 120, 1332, 558]),
+  // Laptops: copy upper left, the hub upper right (about 78% across, 43% down), places around it.
+  M: desktop("M", [1640, 430, 96], 5, [551, 133, 1442, 583]),
+  // Wide and short screens: the same, with places also on the far left.
+  W: desktop("W", [1780, 430, 100], 6, [565, 130, 1437, 570]),
   tall: {
     band: "tall",
     variant: "tall",
@@ -110,13 +90,8 @@ export const WEB: Record<Band, WebLayout> = {
     every: [2.6, 3.4],
     maxLines: 3,
     speed: 0.5,
-    agents: [
-      { id: "me", role: O, x: 40, y: 560, label: "right" },
-      { id: "claude-web-1", role: O, x: 56, y: 672 },
-      { id: "claude-1", role: W, x: 360, y: 556, label: "left" },
-      { id: "codex-1", role: W, x: 352, y: 672, label: "left" },
-      { id: "hermes-1", role: W, x: 290, y: 690 },
-    ],
+    agents: agentsOf(SLOTS.tall, CARD.tall),
+    slots: SLOTS.tall,
     copy: [17, 80, 384, 495],
   },
 };
@@ -163,21 +138,36 @@ export function linePath(l: WebLayout, a: WebAgent, b: WebAgent) {
 /** A deterministic stream of lines (one task each), planned in time order. */
 export function createWeb(l: WebLayout, seed = 11) {
   const rand = rng(seed);
-  const orch = l.agents.filter((a) => a.role === O);
-  const work = l.agents.filter((a) => a.role === W);
+  const orch = l.agents.filter((a) => a.role === "orchestrator");
+  const work = l.agents.filter((a) => a.role === "worker");
   const lines: Line[] = [];
   let clock = 0.2;
   let id = 0;
   let last = "";
+  /** Both ends' places must be fully on screen for the line's whole life. */
+  const steady = (a: WebAgent, t0: number, t1: number) => placeSteady(a.slot, l.slots[a.slot], a.j, t0, t1);
 
-  function plan(t: number) {
+  /** Try to start a line at `t`; false if no pair of places can carry one for its whole life. */
+  function plan(t: number): boolean {
     const busy = new Set(lines.filter((x) => x.dies + FADE_OUT > t).flatMap((x) => [x.to]));
-    const free = work.filter((w) => !busy.has(w.id));
-    if (!free.length) return;
-    let a = orch[Math.floor(rand() * orch.length)];
-    let b = free[Math.floor(rand() * free.length)];
-    if (`${a.id}>${b.id}` === last) [a, b] = [orch[(orch.indexOf(a) + 1) % orch.length], b];
-    last = `${a.id}>${b.id}`;
+    const from = orch.filter((a) => steady(a, t, t + 2));
+    const to = work.filter((w) => !busy.has(w.id) && steady(w, t, t + 2));
+    if (!from.length || !to.length) return false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let a = from[Math.floor(rand() * from.length)];
+      const b = to[Math.floor(rand() * to.length)];
+      if (`${a.id}>${b.id}` === last) a = from[(from.indexOf(a) + 1) % from.length];
+      const line = build(t, a, b);
+      if (steady(a, t, line.dies + FADE_OUT) && steady(b, t, line.dies + FADE_OUT)) {
+        last = `${a.id}>${b.id}`;
+        lines.push(line);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function build(t: number, a: WebAgent, b: WebAgent): Line {
     const path = linePath(l, a, b);
     const v = l.speed;
     const task = { kind: "task" as const, t0: t + FADE_IN * 0.6, dir: 1 as const, speed: 360 * v, amp: 0.95, tail: 70 };
@@ -189,13 +179,13 @@ export function createWeb(l: WebLayout, seed = 11) {
     pulses.push(result);
     const dies = result.t0 + path.length / result.speed;
     const hex = Math.floor(rand() * 0xffffffff).toString(16).padStart(8, "0");
-    lines.push({ id: id++, from: a.id, to: b.id, task: `task.${hex}`, ...path, born: t, dies, pulses });
+    return { id: id++, from: a.id, to: b.id, task: `task.${hex}`, ...path, born: t, dies, pulses };
   }
 
   function advance(t: number) {
     while (clock <= t) {
-      plan(clock);
-      clock += l.every[0] + rand() * (l.every[1] - l.every[0]);
+      // A miss (places mid-swap, everyone busy) retries shortly, so the web never sits empty for long.
+      clock += plan(clock) ? l.every[0] + rand() * (l.every[1] - l.every[0]) : 0.4;
     }
   }
 

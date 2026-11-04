@@ -335,32 +335,61 @@ test("the web starts, recolours and disposes on the mock adapter", async () => {
 
 /** Realistic (hero aspect, hero height) pairs per band, from the hero's min-height rules and the band queries. */
 const CASES = {
-  P: [0.75, 1.0, 1.3].flatMap((a) => [920, 960, 1000].map((h) => [a, h])),
-  M: [1.25, 1.6, 1.9].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.2, 980], [2.6, 980]]),
-  W: [1.75, 2.06, 2.4, 2.65].flatMap((a) => [760, 870, 980].map((h) => [a, h])),
+  P: [0.75, 1.1, 1.45].flatMap((a) => [920, 960, 1000].map((h) => [a, h])),
+  M: [1.38, 1.6, 1.95].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.3, 980], [2.6, 980]]),
+  W: [1.85, 2.06, 2.4, 2.65].flatMap((a) => [760, 870, 980].map((h) => [a, h])),
   tall: [0.42, 0.45, 0.5].flatMap((a) => [860, 940].map((h) => [a, h])),
 };
 const HEADER = 88;
 const STRIP = { P: 116, M: 116, W: 116, tall: 124 };
+const { CARD, PLACES } = await import("./web-places.ts");
+
+/** A place card's box in design units: its name above, one row per agent, names on the align side. */
+function cardBox(l, slot, pid) {
+  const card = CARD[l.variant];
+  const agents = PLACES[pid].agents.slice(0, card.rows);
+  const nameW = Math.max(...agents.map(([id]) => id.length)) * card.name * 0.6;
+  const titleW = pid.length * card.title * 0.6;
+  const start = slot.align === "start";
+  const x0 = start ? slot.x - 6 : Math.min(slot.x - 11 - nameW, slot.x + 5 - titleW);
+  const x1 = start ? Math.max(slot.x + 11 + nameW, slot.x - 5 + titleW) : slot.x + 6;
+  return [x0, slot.y - card.title * 0.8, x1, slot.y + card.first + (agents.length - 1) * card.row + card.name * 0.45];
+}
+const overlaps = (a, b, pad = 0) => a[0] < b[2] + pad && a[2] > b[0] - pad && a[1] < b[3] + pad && a[3] > b[1] - pad;
 
 for (const band of ["P", "M", "W", "tall"]) {
   const l = webModel.WEB[band];
-  test(`web ${band}: endpoints and the hub stay in safe zones of the real hero box`, () => {
+  const boxes = l.slots.flatMap((slot) => slot.places.map((pid) => ({ pid, slot, box: cardBox(l, slot, pid) })));
+  const size = band === "tall" ? 12 : 14;
+  const hubBox = [l.plate.x - 6, l.plate.y - 6, l.plate.x + l.plate.w + 6, l.plate.y + l.plate.h + size * 3.8];
+  const legendHalf = 10.5 * size * 0.9 * 0.6;
+  hubBox[0] = Math.min(hubBox[0], l.hub.cx - legendHalf);
+  hubBox[2] = Math.max(hubBox[2], l.hub.cx + legendHalf);
+
+  test(`web ${band}: place cards and the hub stay in safe zones of the real hero box`, () => {
     for (const [aspect, h] of CASES[band]) {
       const w = aspect * h;
       const m = webModel.cover(l, w, h);
       const px = (x, y) => [x * m.k + m.x, y * m.k + m.y];
-      for (const a of l.agents) {
-        const [x, y] = px(a.x, a.y);
-        assert.ok(x > 12 && x < w - 12, `${a.id} on screen at ${w.toFixed(0)}×${h}`);
-        assert.ok(y - 8 > HEADER && y + 8 < h - STRIP[band], `${a.id} clear of header and strip at ${w.toFixed(0)}×${h} (y ${y.toFixed(0)})`);
+      for (const { pid, box } of boxes) {
+        const [x0, y0] = px(box[0], box[1]);
+        const [x1, y1] = px(box[2], box[3]);
+        const at = `${pid} at ${w.toFixed(0)}×${h}`;
+        assert.ok(x0 > 8 && x1 < w - 8, `${at}: on screen (${x0.toFixed(0)}..${x1.toFixed(0)} of ${w.toFixed(0)})`);
+        assert.ok(y0 > HEADER && y1 < h - STRIP[band], `${at}: clear of header and strip (${y0.toFixed(0)}..${y1.toFixed(0)})`);
       }
-      const legend = px(l.hub.cx, l.plate.y + l.plate.h + (band === "tall" ? 12 : 14) * 3.6)[1];
-      assert.ok(legend < h - STRIP[band], `hub legend clear of the strip at ${w.toFixed(0)}×${h}`);
+      assert.ok(px(0, hubBox[3])[1] < h - STRIP[band], `hub legend clear of the strip at ${w.toFixed(0)}×${h}`);
     }
-    const c = l.copy;
-    const pad = 24 / 0.9;
-    for (const a of l.agents) assert.ok(a.x < c[0] - pad || a.x > c[2] + pad || a.y < c[1] - pad || a.y > c[3] + pad, `${a.id} clear of the copy`);
+  });
+
+  test(`web ${band}: cards keep clear of the copy, the hub and each other`, () => {
+    const copy = l.copy;
+    for (const { pid, box } of boxes) {
+      assert.ok(!overlaps(box, copy, 24 / 0.9), `${pid} clear of the copy`);
+      assert.ok(!overlaps(box, hubBox, 8), `${pid} clear of the hub and its labels`);
+    }
+    // Cards in the same slot take turns; cards in different slots must not touch.
+    for (const a of boxes) for (const b of boxes) if (a.slot !== b.slot) assert.ok(!overlaps(a.box, b.box, 6), `${a.pid} vs ${b.pid}`);
     assert.ok(l.plate.x > l.copy[2] || l.plate.y > l.copy[3], "the hub sits beside or below the copy");
   });
 }
@@ -378,8 +407,8 @@ test("the field yields around the copy, with a smooth feather and no edge", () =
   const l = webModel.WEB.M;
   const lines = webModel.createWeb(l).live(POSTER_T);
   const open = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [-1, -1, -1, -1] }));
-  const covered = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [0, 0, l.width, l.height] }));
-  for (let i = 0; i < open.length; i += 4) for (let c = 0; c < 3; c++) assert.ok(covered[i + c] <= open[i + c] * webLight.YIELD.floor + 1e-6);
+  const covered = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [-100, -100, l.width + 100, l.height + 100] }));
+  for (let i = 0; i < open.length; i += 4) for (let c = 0; c < 3; c++) assert.ok(covered[i + c] <= open[i + c] * webLight.YIELD.floor * (1 + 1e-5) + 1e-6);
 });
 
 test("click rings: neutral, at most four, oldest dropped, gone in about 1.5 s", () => {

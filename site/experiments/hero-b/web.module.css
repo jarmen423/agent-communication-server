@@ -46,7 +46,7 @@
   /* Near-portrait (band P): stacked copy, hub and strip need a taller hero; it may scroll. */
   .hero { padding-top: calc(64px + 72px); min-height: clamp(920px, 100svh, 1000px); }
 }
-@media (min-width: 768px) and (min-aspect-ratio: 13/10) {
+@media (min-width: 768px) and (min-aspect-ratio: 29/20) {
   .hero { min-height: clamp(760px, 100svh, 980px); }
 }
 
@@ -91,11 +91,11 @@
 /* Aspect bands: these query strings match BAND_QUERY in web-model.ts (the live layer uses matchMedia on them). */
 .bandP, .bandM, .bandW { position: absolute; inset: 0; }
 .bandM, .bandW { display: none; }
-@media (min-aspect-ratio: 13/10) {
+@media (min-aspect-ratio: 29/20) {
   .bandP { display: none; }
   .bandM { display: block; }
 }
-@media (min-aspect-ratio: 19/10) {
+@media (min-aspect-ratio: 39/20) {
   .bandM { display: none; }
   .bandW { display: block; }
 }

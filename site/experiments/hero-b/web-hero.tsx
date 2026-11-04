@@ -34,7 +34,7 @@ export function WebHero() {
             }
           />
           {BANDS.map((b) => (
-            <div key={b} className={bandClass[b]}>
+            <div key={b} className={bandClass[b]} data-band={b}>
               <WebOverlay layout={WEB[b]} className={css.fill} />
             </div>
           ))}
@@ -49,7 +49,9 @@ export function WebHero() {
               </>
             }
           />
-          <WebOverlay layout={WEB.tall} className={css.fill} />
+          <div className={css.fill} data-band="tall">
+            <WebOverlay layout={WEB.tall} className={css.fill} />
+          </div>
         </div>
       </div>
 

@@ -6,7 +6,8 @@
 //  - WebOverlay: the hub (glass plate and the lens of the mark), agent ports,
 //    a few haloed names and direction in words, per band.
 import { lensPath } from "@/components/hero/geometry";
-import { WEB, type Band, type WebLayout } from "./web-model";
+import { WEB, WEB_POSTER_T, type Band, type WebLayout } from "./web-model";
+import { placeAlpha } from "./web-places";
 import poster from "./posters/web.svg";
 
 const box = (l: WebLayout) => `0 0 ${l.width} ${l.height}`;
@@ -25,7 +26,8 @@ export function WebPoster({ variant, layer, className }: { variant: "wide" | "ta
 export function webLabel() {
   return (
     "Agent Communication Server at work: a quiet field of the hub's own traffic log fills the background. " +
-    "Lines of brighter text join agents such as me, claude-web-1, claude-1, codex-1 and hermes-1, always through hub-server at the centre. " +
+    "Around hub-server sit places such as laptop-1, website-2, teammate-2, cloud-1, office-3 and home-1, each with different agents (Claude Code, Codex, Hermes, Cursor, Grok, OpenCode, Kilo, Antigravity, chat apps), and places come and go. " +
+    "Lines of brighter text join two agents, always through hub-server. " +
     "Each task is a teal pulse sent out to a worker, then small orange progress pulses and one bigger orange result received back; then the line fades and another lights up."
   );
 }
@@ -39,17 +41,15 @@ export function WebOverlay({ layout: l, className }: { layout: WebLayout; classN
     <svg viewBox={box(l)} className={className} role="img" aria-label={webLabel()} preserveAspectRatio="xMidYMid slice">
       <rect x={plate.x} y={plate.y} width={plate.w} height={plate.h} rx={plate.r} fill="var(--lane-raised)" fillOpacity={0.45} stroke="var(--lane-line)" strokeWidth={1.5} />
       <path d={lensPath(hub.cx, hub.cy, hub.size)} fill="var(--lane-ink)" />
-      {l.agents.map((a) => (
-        <circle key={a.id} cx={a.x} cy={a.y} r={compact ? 3.5 : 4.5} fill="var(--paper)" stroke={a.role === "orchestrator" ? "var(--lane-ink)" : "var(--lane-muted)"} strokeWidth={1.5} />
-      ))}
+      {/* Place cards live in the cached poster document; the live layer fades them via opacity. */}
+      <g className="dg-mono">
+        {l.slots.map((slot, i) =>
+          slot.places.map((pid, j) => (
+            <use key={pid} data-place={`${i}:${j}`} href={`${DOC.src}#card-${l.band}-${i}-${j}`} opacity={Math.round(placeAlpha(i, slot, j, WEB_POSTER_T) * 100) / 100} />
+          )),
+        )}
+      </g>
       <g className="dg-mono" fontSize={size} {...halo}>
-        {l.agents
-          .filter((a) => a.label)
-          .map((a) => (
-            <text key={a.id} data-agent-label="" x={a.label === "left" ? a.x - 12 : a.x + 12} y={a.y + size * 0.34} textAnchor={a.label === "left" ? "end" : "start"} fill="var(--lane-ink)">
-              {a.id}
-            </text>
-          ))}
         <text x={hub.cx} y={plate.y + plate.h + size * 1.9} textAnchor="middle" fill="var(--lane-ink)">
           hub-server
         </text>
