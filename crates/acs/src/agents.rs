@@ -49,20 +49,25 @@ pub async fn add(root: &Path, id: &str, role: &str) -> Result<()> {
     // Persist the local key before sending the public half. A retry can refresh
     // a successfully registered identity even after an interrupted JWT request.
     local::write_creds(root, id, "PENDING", &seed)?;
-    if let Err(e) = api
+    let registration = api
         .request(
             Method::POST,
             "/v1/device/identities",
             Some(&state.access_token),
             json!({"identity": id, "role": role, "public_key": public, "tenant":state.tenant}),
         )
-        .await
-    {
+        .await;
+    if let Err(e) = &registration {
         std::fs::remove_file(local::creds_path(root, id))?;
         if e.to_string().ends_with("access_denied") {
             bail!("cannot add an identity in this tenant; check your tenant access and whether the tenant is ready");
         }
-        return Err(e);
+        bail!("{e}");
+    }
+    let registered = registration?;
+    if registered.get("tenant").is_some() && registered["tenant"].as_str() != Some(&state.tenant) {
+        std::fs::remove_file(local::creds_path(root, id))?;
+        bail!("registration tenant mismatch");
     }
     state.agents.insert(
         id.to_owned(),
@@ -103,6 +108,14 @@ pub async fn refresh(root: &Path, state: &mut State, id: &str) -> Result<()> {
         bail!("credential tenant mismatch");
     }
     let jwt = api::string(&value, "jwt")?;
+    use base64::Engine;
+    let claims: serde_json::Value = serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(jwt.split('.').nth(1).context("invalid credential JWT")?)?,
+    )?;
+    if claims["sub"].as_str() != Some(agent.public_key.as_str()) {
+        bail!("credential public key mismatch");
+    }
     let expiry = value["expires_at"]
         .as_u64()
         .context("missing NATS expiry")?;
@@ -115,18 +128,32 @@ pub async fn refresh(root: &Path, state: &mut State, id: &str) -> Result<()> {
 
 pub async fn remove(root: &Path, id: &str) -> Result<()> {
     check_id(id)?;
-    let mut state = local::load(root)?;
+    let mut state = crate::tenants::load_local(root, false)?;
     if !state.agents.contains_key(id) {
         bail!("identity is not configured on this device");
     }
-    let api = api::authorized(root, &mut state).await?;
-    api.request(
-        Method::DELETE,
-        &format!("/v1/device/identities/{id}?tenant={}", state.tenant),
-        Some(&state.access_token),
-        json!({}),
-    )
-    .await?;
+    let mut member = crate::tenants::names(root)?.contains(&state.tenant);
+    if member {
+        let api = api::authorized(root, &mut state).await?;
+        let result = api
+            .request(
+                Method::DELETE,
+                &format!("/v1/device/identities/{id}?tenant={}", state.tenant),
+                Some(&state.access_token),
+                json!({}),
+            )
+            .await;
+        if let Err(e) = result {
+            if !e.to_string().starts_with("HTTP 403 ") {
+                return Err(e);
+            }
+            crate::tenants::refresh_membership(crate::tenants::device_root(root)).await?;
+            member = crate::tenants::names(root)?.contains(&state.tenant);
+            if member {
+                return Err(e);
+            }
+        }
+    }
     // The daemon reloads state under the same operation lock before every refresh.
     state.agents.remove(id);
     local::save(root, &state)?;
@@ -134,7 +161,13 @@ pub async fn remove(root: &Path, id: &str) -> Result<()> {
     if path.exists() {
         std::fs::remove_file(path)?;
     }
-    println!("Revoked {id}; local credential removed");
+    if member {
+        println!("Revoked {id}; local credential removed");
+    } else {
+        println!(
+            "Removed {id} locally; tenant access is unavailable, remote identity was not revoked"
+        );
+    }
     Ok(())
 }
 

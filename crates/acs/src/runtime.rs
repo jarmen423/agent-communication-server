@@ -61,7 +61,7 @@ async fn venv(base: &Path, deps: &[&str], marker: &str, what: &str) -> Result<Pa
         {
             bail!("{what} dependency installation failed; check network access and retry");
         }
-        local::atomic(&base.join(marker), b"ready")?;
+        local::atomic_private(&base.join(marker), b"ready")?;
     }
     Ok(python)
 }
@@ -70,7 +70,7 @@ pub async fn install(root: &Path, external_python: Option<PathBuf>) -> Result<(P
     let base = root.join("mcp");
     let server = base.join("server");
     for (name, bytes) in SOURCES {
-        local::atomic(&server.join(name), bytes)?;
+        local::atomic_private(&server.join(name), bytes)?;
     }
     if let Some(python) = external_python {
         let python = if python.is_file() && !python.is_absolute() {
@@ -126,7 +126,7 @@ pub async fn worker(
         let path = dir.join(rel);
         // Rewrite anything that differs from the binary's copy.
         if std::fs::read(&path).ok().as_deref() != Some(*bytes) {
-            local::atomic(&path, bytes)?;
+            local::atomic_private(&path, bytes)?;
         }
     }
     let python = match external_python {

@@ -23,7 +23,11 @@ def test_device_name_and_tenant_api(device_stack):
     headers = {'authorization': 'Bearer ' + device['access_token']}
     acs(env, 'agent', 'add', 'me', '--tenant', 'T_A')
     records = httpx.get(url + '/v1/device?tenant=*', headers=headers).json()
+    assert set(records) == {'tenants'}
     assert records['tenants'][0]['identities'][0]['device'] == 'test laptop'
+    selected = httpx.get(url + '/v1/device?tenant=T_A', headers=headers).json()
+    assert set(selected) == {'tenant', 'device', 'identities'}
+    assert selected['tenant'] == 'T_A' and selected['identities'][0]['identity'] == 'me'
     assert '*T_A' in acs(env, 'tenant', 'list').stdout
     acs(env, 'tenant', 'use', 'T_A')
     assert httpx.get(url + '/v1/tenants/T_A/members', headers=headers).json()['members']
@@ -100,7 +104,7 @@ def test_device_hostname_is_sent_by_default(device_stack):
     device = json.loads((Path(env['ACS_HOME']) / 'device.json').read_text())
     result = httpx.get(url + '/v1/device?tenant=T_A',
                       headers={'Authorization': 'Bearer ' + device['access_token']}).json()
-    assert result['tenants'][0]['identities'][0]['device'] == socket.gethostname().strip()[:64]
+    assert result['identities'][0]['device'] == socket.gethostname().strip()[:64]
     acs({**env, 'ACS_TENANT': 'not-selected-yet'}, 'logout')
 
 

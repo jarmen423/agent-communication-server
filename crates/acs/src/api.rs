@@ -115,9 +115,8 @@ impl Api {
                 .await
                 .map_err(|_| anyhow::anyhow!("control-plane request timed out"))?
                 .context("cannot read control-plane response")?;
-            let value: Value =
-                serde_json::from_slice(&bytes).context("invalid control-plane response")?;
             if !status.is_success() {
+                let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 // Error names are a fixed protocol vocabulary; don't reflect server text.
                 let code = value["error"].as_str().unwrap_or("request_failed");
                 let safe = match code {
@@ -140,7 +139,7 @@ impl Api {
                 };
                 bail!("HTTP {} {safe}", status.as_u16());
             }
-            return Ok(value);
+            return serde_json::from_slice(&bytes).context("invalid control-plane response");
         }
     }
 }
@@ -153,16 +152,20 @@ pub fn string(value: &Value, name: &str) -> Result<String> {
 }
 
 pub fn accept(root: &Path, state: &mut State, value: &Value) -> Result<()> {
-    if let Some(ts) = value.get("tenants") {
-        crate::tenants::normalize(ts, &state.tenant)?;
-    }
     local::store_refresh(root, &string(value, "refresh_token")?)?;
     state.access_token = string(value, "access_token")?;
     state.access_expires_at = local::now()
         + value["expires_in"]
             .as_u64()
             .context("missing token expiry")?;
-    local::save(root, state)?;
+    if root == crate::tenants::device_root(root) && root.join("device.json").exists() {
+        let mut d = crate::tenants::device(root)?;
+        d["access_token"] = json!(state.access_token);
+        d["access_expires_at"] = json!(state.access_expires_at);
+        local::atomic_private(&root.join("device.json"), &serde_json::to_vec_pretty(&d)?)?;
+    } else {
+        local::save(root, state)?;
+    }
     crate::tenants::membership(root, value)
 }
 
@@ -194,20 +197,31 @@ pub async fn login(
     }
     let name = match device_name {
         Some(name) => name,
-        None => String::from_utf8(
-            tokio::process::Command::new("hostname")
+        None => match std::fs::read_to_string("/proc/sys/kernel/hostname") {
+            Ok(name) => name,
+            Err(_) => tokio::process::Command::new("/bin/hostname")
                 .output()
                 .await
-                .map(|o| o.stdout)
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
                 .unwrap_or_default(),
-        )
-        .unwrap_or_default(),
+        },
     };
-    let name: String = name.trim().chars().take(64).collect();
+    let name = name
+        .trim()
+        .chars()
+        .take(64)
+        .collect::<String>()
+        .trim()
+        .to_owned();
     let mut code_body = json!({"client_id":"acs"});
     if !name.is_empty() && !name.chars().any(char::is_control) {
         code_body["device_name"] = json!(name);
     }
+    let sent_name = key
+        .is_none()
+        .then(|| code_body["device_name"].as_str().map(str::to_owned))
+        .flatten();
     let api = Api::new(server)?;
     let value = if let Some(key) = key {
         api.request(
@@ -278,11 +292,7 @@ pub async fn login(
         server: api.server,
         tenant: string(&value, "tenant")?,
         device: string(&value, "device")?,
-        device_name: if name.is_empty() || name.chars().any(char::is_control) {
-            None
-        } else {
-            Some(name)
-        },
+        device_name: sent_name,
         nats_url: string(&value, "nats_url")?,
         access_token: String::new(),
         access_expires_at: 0,
@@ -290,7 +300,15 @@ pub async fn login(
     };
     crate::tenants::validate(&state.tenant)?;
     accept(root, &mut state, &value)?;
-    local::atomic(&root.join("current"), state.tenant.as_bytes())?;
+    let d = crate::tenants::device(root)?;
+    let ts = d["tenants"].as_array().context("missing tenants")?;
+    if let Some(t) = ts
+        .iter()
+        .find(|t| t["personal"] == true || t["kind"] == "personal")
+        .or_else(|| (ts.len() == 1).then(|| &ts[0]))
+    {
+        local::atomic_private(&root.join("current"), string(t, "tenant")?.as_bytes())?;
+    }
     println!("Logged in: tenant {} device {}", state.tenant, state.device);
     println!("Next: acs agent add <id> [--role worker], then acs up");
     Ok(())

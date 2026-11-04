@@ -90,7 +90,7 @@ auth variables (`NATS_USER`, `NATS_PASSWORD`, `NATS_TOKEN`, `NATS_NKEY`,
 `NATS_NKEYS_SEED`) and `ACS_SERVICE_KEY` from the command's environment: a
 token left over from a self-hosted setup would otherwise be sent along with
 the identity's credentials. `acs env <id>` prints an `unset` line for the same
-NATS variables, then the three `export` lines, POSIX-quoted. Both warn on
+NATS variables, then the four `export` lines, POSIX-quoted. Both warn on
 stderr when the credential has expired or hasn't been issued yet; `acs up`
 starts the daemon that renews it.
 
@@ -149,8 +149,8 @@ remain valid until expiry. Production must push resolver revocations as in
 
 The installer merges `nats-hub` for the personal tenant and `nats-hub-<tenant>`
 for each other tenant. Reinstalling replaces that tenant’s entry; unrelated client settings/servers remain.
-It writes `command`, `args`, and the three environment variables `NATS_URL`,
-`NATS_CREDENTIALS_FILE`, `NATS_HUB_IDENTITY`. It never puts a token/seed into
+It writes `command`, `args`, and the environment variables `NATS_URL`,
+`NATS_CREDENTIALS_FILE`, `NATS_HUB_IDENTITY` and `ACS_TENANT`. It never puts a token/seed into
 client configuration. Choose `--identity` when more than one exists.
 
 - Claude Code: `~/.claude.json`, `mcpServers.nats-hub` ([user scope](https://code.claude.com/docs/en/mcp)).
@@ -216,7 +216,7 @@ checkout must not run its code.
 
 `hub-worker` uses the sibling binary or PATH and accepts its usual extra
 flags. Every backend gets `--identity` and `--nats-url` (the tenant URL) ahead
-of your extra args, the same three environment variables as MCP, and the same
+of your extra args, the same four environment variables as MCP, and the same
 auth stripping as `acs exec`. `acs` then execs the worker, so signals and the
 exit status pass straight through.
 
@@ -299,3 +299,17 @@ rotation/replay and preservation of all three clients' unrelated settings.
   user codes are short and unthrottled, and identity names are never
   reusable. Production needs an authenticated, CSRF-protected approval page,
   rate limits and quotas.
+
+Device commands (`logout`, `tenant list`, `tenant use`, `up`, `down`) do not
+resolve a default tenant. `up` and `down` validate only a supplied `--tenant`;
+the daemon always renews all configured tenants. `tenant list` refreshes
+membership and clears a default that is no longer available. An explicit tenant
+selection refreshes membership once on a cache miss. After losing tenant access,
+`agent rm --tenant <slug> <id>` removes the local credential and reports that
+remote revocation was unavailable.
+
+Child commands and MCP entries include `ACS_TENANT`, keeping nested `acs`
+commands in the selected tenant. Login selects a default only for a personal
+or sole tenant. Migration detects a running older daemon and restarts an
+installed user service; otherwise it warns to run `acs up`. An incomplete
+restored tenant tree aborts migration while preserving the legacy credentials.

@@ -98,7 +98,9 @@ pub fn root() -> Result<PathBuf> {
 pub fn private_dir(path: &Path) -> Result<()> {
     if !path.exists() {
         if let Some(parent) = path.parent() {
-            private_dir(parent)?;
+            if !parent.exists() {
+                private_dir(parent)?;
+            }
         }
         fs::create_dir(path)?;
     }
@@ -111,8 +113,12 @@ pub fn private_dir(path: &Path) -> Result<()> {
 }
 
 pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    replace(path, bytes, false)
+}
+
+fn replace(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     let parent = path.parent().context("file must have a parent")?;
-    private_dir(parent)?;
+    fs::create_dir_all(parent)?;
     let temp = parent.join(format!(
         ".acs-{}-{:016x}.tmp",
         std::process::id(),
@@ -127,6 +133,11 @@ pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
             opts.mode(0o600);
         }
         let mut file = opts.open(&temp)?;
+        if !private {
+            if let Ok(meta) = fs::metadata(path) {
+                file.set_permissions(meta.permissions())?;
+            }
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&temp, path)?;
@@ -137,6 +148,11 @@ pub fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temp);
     }
     result
+}
+
+pub fn atomic_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    private_dir(path.parent().context("file must have a parent")?)?;
+    replace(path, bytes, true)
 }
 
 pub fn lock(root: &Path, name: &str) -> Result<File> {
@@ -169,11 +185,11 @@ fn entry(root: &Path) -> Result<keyring::Entry> {
 pub fn store_refresh(root: &Path, token: &str) -> Result<()> {
     let root = crate::tenants::device_root(root);
     // Write the crash-safe fallback first; remove it only after keychain success.
-    atomic(&root.join("refresh.token"), token.as_bytes())?;
+    atomic_private(&root.join("refresh.token"), token.as_bytes())?;
     if std::env::var_os("ACS_NO_KEYRING").is_none() {
         if let Ok(entry) = entry(root) {
             if entry.set_password(token).is_ok() {
-                atomic(&root.join("keychain.used"), b"keychain")?;
+                atomic_private(&root.join("keychain.used"), b"keychain")?;
                 fs::remove_file(root.join("refresh.token"))?;
                 return Ok(());
             }
@@ -195,6 +211,7 @@ pub fn refresh(root: &Path) -> Result<String> {
 }
 
 pub fn clear(root: &Path) -> Result<()> {
+    crate::migration::sweep(root)?;
     if root.join("keychain.used").exists() {
         let entry = entry(root)?;
         match entry.delete_credential() {
@@ -236,7 +253,7 @@ pub fn creds_path(root: &Path, id: &str) -> PathBuf {
 }
 
 pub fn write_creds(root: &Path, id: &str, jwt: &str, seed: &str) -> Result<()> {
-    atomic(&creds_path(root, id), format!("-----BEGIN NATS USER JWT-----\n{jwt}\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n{seed}\n------END USER NKEY SEED------\n").as_bytes())
+    atomic_private(&creds_path(root, id), format!("-----BEGIN NATS USER JWT-----\n{jwt}\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n{seed}\n------END USER NKEY SEED------\n").as_bytes())
 }
 
 pub fn seed(root: &Path, id: &str) -> Result<String> {
@@ -251,6 +268,20 @@ pub fn seed(root: &Path, id: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logout_clears_interrupted_migration_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join(".migrate-123")).unwrap();
+        fs::write(root.join(".migrate-123/seed"), "secret").unwrap();
+        fs::write(root.join("state.json"), "obsolete").unwrap();
+        fs::write(root.join("state.json.bak"), "backup").unwrap();
+        clear(root).unwrap();
+        assert!(!root.join(".migrate-123").exists());
+        assert!(!root.join("state.json").exists());
+        assert!(!root.join("state.json.bak").exists());
+    }
 
     #[test]
     fn formats_expiry_as_rfc3339_and_relative_time() {

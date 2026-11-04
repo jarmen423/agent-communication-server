@@ -9,6 +9,7 @@ repository = "https://github.com/jarmen423/agent-communication-server"
 [dependencies]
 nats-hub-client = { path = "../client", version = "0.0.3" }
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

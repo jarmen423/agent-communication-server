@@ -66,7 +66,11 @@ pub async fn mcp(
     let state = local::load(root)?;
     let id = agents::select(&state, identity)?;
     let d = crate::tenants::device(root)?;
-    let name = if d["tenant"] == state.tenant {
+    let name = if d["tenants"].as_array().is_some_and(|ts| {
+        ts.iter().any(|t| {
+            t["tenant"] == state.tenant && (t["personal"] == true || t["kind"] == "personal")
+        })
+    }) {
         "nats-hub".to_owned()
     } else {
         format!("nats-hub-{}", state.tenant)

@@ -13,6 +13,7 @@ name = "acs"
 version = "0.0.3"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "fs2",
  "httpdate",

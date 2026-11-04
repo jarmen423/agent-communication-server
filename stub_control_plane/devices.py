@@ -227,9 +227,8 @@ class Devices:
                     for i in self.store.identities.values() if i.kind == "device"
                     and i.client_id == device["id"] and i.tenant == t and not i.revoked]}
                    for t in names]
-        result = {"tenants": records}
-        if "tenant" not in request.query_params:
-            result.update(tenant=device["tenant"], device=device["id"], identities=records[0]["identities"])
+        result = {"tenants": records} if request.query_params.get("tenant") == "*" else {
+            "tenant": tenant, "device": device["id"], "identities": records[0]["identities"]}
         return JSONResponse(result, headers=HEADERS)
 
     async def identity(self, request):

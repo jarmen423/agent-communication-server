@@ -21,7 +21,7 @@ use std::path::PathBuf;
     about = "ACS device login, credential manager and agent connector"
 )]
 struct Cli {
-    #[arg(long, global = true, env = "ACS_TENANT")]
+    #[arg(long, global = true)]
     tenant: Option<String>,
     #[command(subcommand)]
     command: Command,
@@ -133,8 +133,12 @@ enum WorkerCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let selected = cli
+        .tenant
+        .clone()
+        .or_else(|| std::env::var("ACS_TENANT").ok());
     let root = local::root()?;
-    migration::run(&root)?;
+    migration::run(&root).await?;
     let scoped = matches!(
         cli.command,
         Command::Env { .. }
@@ -145,14 +149,26 @@ async fn main() -> Result<()> {
     );
     let device_root = root.clone();
     let root = if scoped {
-        tenants::select(&root, cli.tenant.as_deref())?
+        tenants::resolve(
+            &root,
+            selected.as_deref(),
+            matches!(
+                cli.command,
+                Command::Agent {
+                    command: AgentCommand::Rm { .. }
+                }
+            ),
+        )
+        .await?
     } else {
         root
     };
-    if matches!(cli.command, Command::Up { .. } | Command::Down)
-        || (matches!(cli.command, Command::Status) && cli.tenant.is_some())
-    {
-        tenants::select(&root, cli.tenant.as_deref())?;
+    if matches!(cli.command, Command::Up { .. } | Command::Down) {
+        if let Some(t) = cli.tenant.as_deref() {
+            tenants::select(&root, Some(t))?;
+        }
+    } else if matches!(cli.command, Command::Status) && selected.is_some() {
+        tenants::select(&root, selected.as_deref())?;
     }
     match cli.command {
         Command::Up { foreground: true } => daemon::foreground(&root).await?,
@@ -190,7 +206,7 @@ async fn main() -> Result<()> {
                 Command::Logout => {
                     daemon::down(&root).await?;
                     if !root.join("logout.revoked").exists() {
-                        let mut state = local::load(&root)?;
+                        let mut state = tenants::device_state(&root)?;
                         let api = api::authorized(&root, &mut state).await?;
                         api.request(
                             Method::DELETE,
@@ -201,14 +217,14 @@ async fn main() -> Result<()> {
                         .await?;
                         // If a locked keychain prevents cleanup, the next logout
                         // retries local removal without needing the revoked token.
-                        local::atomic(&root.join("logout.revoked"), b"revoked")?;
+                        local::atomic_private(&root.join("logout.revoked"), b"revoked")?;
                     }
                     local::clear(&root)?;
                     println!("Logged out; device revoked and local state removed");
                 }
                 Command::Status => {
                     for tenant in tenants::names(&root)? {
-                        if cli.tenant.as_ref().is_some_and(|t| t != &tenant) {
+                        if selected.as_ref().is_some_and(|t| t != &tenant) {
                             continue;
                         }
                         let s = local::load(&tenants::path(&root, &tenant)?)?;

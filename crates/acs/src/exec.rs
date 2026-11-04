@@ -19,8 +19,9 @@ const STRIPPED_NATS: &[&str] = &[
 ];
 
 /// The three variables every client reads: URL, credential and identity.
-pub fn vars(root: &Path, state: &State, id: &str) -> [(&'static str, String); 3] {
+pub fn vars(root: &Path, state: &State, id: &str) -> [(&'static str, String); 4] {
     [
+        ("ACS_TENANT", state.tenant.clone()),
         ("NATS_URL", state.nats_url.clone()),
         (
             "NATS_CREDENTIALS_FILE",

@@ -124,7 +124,7 @@ def test_headless_login_agents_install_preserves_config_and_logout(device_stack)
     assert claude['mcpServers']['nats-hub']['command'].endswith('/.venv/bin/python')
     assert claude['unrelated'] == 42 and claude['mcpServers']['other']['command'] == 'other'
     assert claude['mcpServers']['nats-hub']['env'] == {
-        'NATS_URL': state['nats_url'], 'NATS_HUB_IDENTITY': 'me', 'NATS_CREDENTIALS_FILE': str(creds)}
+        'ACS_TENANT': 'T_A', 'NATS_URL': state['nats_url'], 'NATS_HUB_IDENTITY': 'me', 'NATS_CREDENTIALS_FILE': str(creds)}
     import tomllib
     codex = tomllib.loads((home / '.codex/config.toml').read_text())
     assert codex['model'] == 'existing' and codex['mcp_servers']['other']['command'] == 'other'
@@ -231,7 +231,7 @@ def test_native_worker_receives_url_and_excludes_login_secrets(device_stack):
     worker = bindir / 'hub-worker'
     worker.write_text('#!' + sys.executable + '\nimport os,sys,json\n'
         'print(json.dumps({"args":sys.argv[1:],"url":os.environ["NATS_URL"],'
-        '"identity":os.environ["NATS_HUB_IDENTITY"],"secret_present":'
+        '"identity":os.environ["NATS_HUB_IDENTITY"],"tenant":os.environ["ACS_TENANT"],"secret_present":'
         'any(k in os.environ for k in ("ACS_SERVICE_KEY","NATS_NKEYS_SEED","NATS_TOKEN"))}))\n')
     worker.chmod(0o700)
     p = subprocess.run([str(connector), 'worker', 'run', 'hub-worker', '--identity', 'native',
@@ -241,7 +241,7 @@ def test_native_worker_receives_url_and_excludes_login_secrets(device_stack):
     assert p.returncode == 0, p.stderr
     data = json.loads(p.stdout)
     assert data['args'] == ['--identity', 'native', '--nats-url', data['url'], '--execute', 'cat']
-    assert data['identity'] == 'native' and data['secret_present'] is False
+    assert data['identity'] == 'native' and data['tenant'] == 'T_A' and data['secret_present'] is False
     acs(env, 'logout')
 
 

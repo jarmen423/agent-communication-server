@@ -147,7 +147,7 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
             d = json.loads((root / 'device.json').read_text())
             response = await asyncio.to_thread(httpx.get, server + '/v1/device?tenant=T_A',
                 headers={'Authorization': 'Bearer ' + d['access_token']})
-            records = response.json()['tenants'][0]['identities']
+            records = response.json()['identities']
             record = next(r for r in records if r['identity'] == 'me')
             assert record['device'] == 'integration laptop'
             # The test acts as the provisioning writer; the dev stub does not

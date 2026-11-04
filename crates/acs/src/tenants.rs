@@ -37,7 +37,17 @@ pub fn device_root(root: &Path) -> &Path {
 }
 pub fn path(root: &Path, tenant: &str) -> Result<PathBuf> {
     validate(tenant)?;
-    Ok(device_root(root).join("tenants").join(tenant))
+    let dir = device_root(root).join("tenants");
+    if dir.exists() {
+        for entry in fs::read_dir(&dir)? {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            if name != tenant && name.eq_ignore_ascii_case(tenant) {
+                bail!("tenant slug conflicts with an existing directory");
+            }
+        }
+    }
+    Ok(dir.join(tenant))
 }
 pub fn device(root: &Path) -> Result<Value> {
     Ok(serde_json::from_slice(
@@ -67,14 +77,28 @@ pub fn select(root: &Path, explicit: Option<&str>) -> Result<PathBuf> {
             None
         }
     });
-    let chosen = chosen.with_context(|| format!("choose --tenant from: {}", names.join(", ")))?;
+    let chosen = chosen.with_context(|| {
+        format!(
+            "choose --tenant from: {}; run acs tenant list to refresh",
+            names.join(", ")
+        )
+    })?;
     validate(chosen)?;
     if !names.iter().any(|n| n == chosen) {
-        bail!("tenant is not available to this device");
+        bail!("tenant is not available to this device; run acs tenant list");
     }
     path(root, chosen)
 }
+pub fn device_state(root: &Path) -> Result<State> {
+    let mut d = device(root)?;
+    d["agents"] = json!({});
+    Ok(serde_json::from_value(d)?)
+}
+
 pub fn load(root: &Path) -> Result<State> {
+    load_local(root, true)
+}
+pub fn load_local(root: &Path, require_member: bool) -> Result<State> {
     let root = if root == device_root(root) {
         select(root, None)?
     } else {
@@ -87,7 +111,7 @@ pub fn load(root: &Path) -> Result<State> {
         .to_str()
         .context("invalid tenant")?;
     validate(tenant)?;
-    if !names(&root)?.iter().any(|n| n == tenant) {
+    if require_member && !names(&root)?.iter().any(|n| n == tenant) {
         bail!("tenant is not available to this device");
     }
     let t: Value = match fs::read(root.join("state.json")) {
@@ -108,7 +132,7 @@ pub fn save(root: &Path, state: &State) -> Result<()> {
     if root != base && root != tenant {
         bail!("tenant state mismatch");
     }
-    local::atomic(
+    local::atomic_private(
         &tenant.join("state.json"),
         &serde_json::to_vec_pretty(&json!({"nats_url":state.nats_url,"agents":state.agents}))?,
     )?;
@@ -123,7 +147,7 @@ pub fn save(root: &Path, state: &State) -> Result<()> {
     if let Some(p) = previous {
         d["nats_url"] = p["nats_url"].clone();
     }
-    local::atomic(&base.join("device.json"), &serde_json::to_vec_pretty(&d)?)
+    local::atomic_private(&base.join("device.json"), &serde_json::to_vec_pretty(&d)?)
 }
 pub fn normalize(value: &Value, personal: &str) -> Result<Value> {
     let mut result = vec![];
@@ -133,34 +157,45 @@ pub fn normalize(value: &Value, personal: &str) -> Result<Value> {
             .or_else(|| t["tenant"].as_str())
             .context("missing tenant")?;
         validate(slug)?;
+        if result.iter().any(|t: &Value| {
+            t["tenant"]
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case(slug))
+        }) {
+            bail!("duplicate tenant slug");
+        }
         result.push(if t.is_string() {
             json!({"tenant":slug,"personal":slug == personal})
         } else {
             t.clone()
         });
     }
-    if result.is_empty() {
-        bail!("device has no tenants");
-    }
+
     Ok(json!(result))
 }
 pub fn membership(root: &Path, value: &Value) -> Result<()> {
     if let Some(ts) = value.get("tenants") {
         let mut d = device(root)?;
         d["tenants"] = normalize(ts, d["tenant"].as_str().context("missing personal tenant")?)?;
-        local::atomic(
+        if let Ok(current) = fs::read_to_string(device_root(root).join("current")) {
+            if !d["tenants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["tenant"] == current)
+            {
+                fs::remove_file(device_root(root).join("current"))?;
+            }
+        }
+        local::atomic_private(
             &device_root(root).join("device.json"),
             &serde_json::to_vec_pretty(&d)?,
         )?;
     }
     Ok(())
 }
-pub async fn command(root: &Path, use_tenant: Option<&str>) -> Result<()> {
-    let personal = device(root)?["tenant"]
-        .as_str()
-        .context("missing default tenant")?
-        .to_owned();
-    let mut state = load(&path(root, &personal)?)?;
+pub async fn refresh_membership(root: &Path) -> Result<Value> {
+    let mut state = device_state(root)?;
     let api = api::authorized(root, &mut state).await?;
     let value = api
         .request(
@@ -178,9 +213,14 @@ pub async fn command(root: &Path, use_tenant: Option<&str>) -> Result<()> {
         Err(e) => return Err(e),
     };
     membership(root, &value)?;
+    Ok(value)
+}
+
+pub async fn command(root: &Path, use_tenant: Option<&str>) -> Result<()> {
+    let value = refresh_membership(root).await?;
     if let Some(t) = use_tenant {
         select(root, Some(t))?;
-        local::atomic(&root.join("current"), t.as_bytes())?;
+        local::atomic_private(&root.join("current"), t.as_bytes())?;
         println!("Using tenant {t}");
     } else {
         let current = fs::read_to_string(root.join("current")).unwrap_or_default();
@@ -195,11 +235,37 @@ pub async fn command(root: &Path, use_tenant: Option<&str>) -> Result<()> {
                 "{}{}  {}  {}  {}",
                 if t["tenant"] == current { "*" } else { " " },
                 t["tenant"].as_str().unwrap_or(""),
-                t["role"].as_str().unwrap_or(""),
-                t["handle"].as_str().unwrap_or(""),
-                t["state"].as_str().unwrap_or("")
+                clean(&t["role"]),
+                clean(&t["handle"]),
+                clean(&t["state"])
             );
         }
     }
     Ok(())
+}
+
+fn clean(value: &Value) -> String {
+    value
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect()
+}
+
+pub async fn resolve(root: &Path, explicit: Option<&str>, local_only: bool) -> Result<PathBuf> {
+    if let Some(t) = explicit {
+        validate(t)?;
+        if !names(root)?.iter().any(|n| n == t) {
+            let _operation = local::lock(root, "operation.lock")?;
+            refresh_membership(root).await?;
+            if local_only && !names(root)?.iter().any(|n| n == t) {
+                let path = path(root, t)?;
+                if path.join("state.json").is_file() {
+                    return Ok(path);
+                }
+            }
+        }
+    }
+    select(root, explicit)
 }

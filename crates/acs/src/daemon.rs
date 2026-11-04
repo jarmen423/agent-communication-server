@@ -8,29 +8,33 @@ pub fn running(root: &Path) -> bool {
     local::lock(root, "daemon.lock").is_err()
 }
 
-async fn stopped() {
+fn stopped() -> impl std::future::Future<Output = ()> {
     #[cfg(unix)]
     {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("SIGTERM handler");
-        tokio::select! { _ = term.recv() => (), _ = tokio::signal::ctrl_c() => () }
+        async move {
+            tokio::select! { _ = term.recv() => (), _ = tokio::signal::ctrl_c() => () }
+        }
     }
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
+        async {
+            let _ = tokio::signal::ctrl_c().await;
+        }
     }
 }
 
 pub async fn foreground(root: &Path) -> Result<()> {
     let _daemon = local::lock(root, "daemon.lock").context("daemon already running")?;
     crate::tenants::device(root)?;
-    local::atomic(
+    let stop = stopped();
+    local::atomic_private(
         &root.join("daemon.pid"),
         std::process::id().to_string().as_bytes(),
     )?;
     eprintln!("acs credential daemon started");
     let mut retries: HashMap<String, (u64, u32)> = HashMap::new();
-    let stop = stopped();
     tokio::pin!(stop);
     loop {
         tokio::select! {
@@ -171,4 +175,42 @@ pub async fn up(root: &Path) -> Result<()> {
         bail!("user service installation supports Linux and macOS; use --foreground");
     }
     Ok(())
+}
+
+/// An older daemon exits successfully when its legacy login file disappears.
+pub async fn restart_after_upgrade() {
+    let result: Result<()> = async {
+        let home = local::home()?;
+        let status = if cfg!(target_os = "linux")
+            && home.join(".config/systemd/user/acs.service").is_file()
+        {
+            tokio::process::Command::new("systemctl")
+                .args(["--user", "restart", "acs.service"])
+                .status()
+                .await?
+        } else if cfg!(target_os = "macos")
+            && home
+                .join("Library/LaunchAgents/com.agentmemorylabs.acs.plist")
+                .is_file()
+        {
+            tokio::process::Command::new("launchctl")
+                .args([
+                    "kickstart",
+                    "-k",
+                    &format!("gui/{}/com.agentmemorylabs.acs", unsafe { libc::getuid() }),
+                ])
+                .status()
+                .await?
+        } else {
+            bail!("no installed user service");
+        };
+        if !status.success() {
+            bail!("service restart failed");
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(e) = result {
+        eprintln!("WARNING: a running older credential daemon needs restarting ({e}); run acs up now to renew credentials");
+    }
 }
