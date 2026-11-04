@@ -113,6 +113,31 @@ task. Two concurrent session turns on one worker therefore never publish each
 other's progress. `set_progress_handler()` still exists as a fallback for direct
 callers and tests.
 
+## Reporting session and model
+
+Workers fill `meta.origin.reported` with what they actually know, and leave out
+what they don't ([`PROVENANCE.md`](PROVENANCE.md#who-reports-what) has the table).
+A backend reports through the turn's progress handler:
+
+```python
+from worker_backends.origin_report import report_status
+from worker_backends.progress import current_progress_handler
+
+await report_status(current_progress_handler(), session=sid, model=model)
+```
+
+That sends a `status` event with no message: the runtime records it and publishes
+nothing for it. A `status` event that has a message and `session_id`, `thread_id`,
+`model` or `model_provider` keys is recorded the same way and also published as
+progress. Reporting never fails a turn.
+
+The values apply to the rest of the turn on its task or session channel and its
+wave channel, overriding the `NATS_HUB_REPORTED_*` environment key by key, and are
+dropped once the terminal result has been published. `HeadlessCliBackend` already
+reports its parsed session id and the `--model`/`-m`/`--provider` in its
+`base_argv`. A subclass that passes the model some other way overrides
+`_configured_model()`. `SdkAgentBackend` takes `model=` and `model_provider=`.
+
 ## Session resume (stub until T2)
 
 `worker_backends/session_resume.py`, off unless `NATS_HUB_SESSION_RESUME=1`:

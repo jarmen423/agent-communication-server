@@ -80,6 +80,53 @@ keys matching `[a-z0-9_]{1,32}` in key order. Each value must be a string of 1
 to 256 bytes with no control characters. Anything else is dropped, key by key,
 rather than truncated: a truncated session id would point at the wrong session.
 
+### Who reports what
+
+Every client reports only what it actually knows and leaves the rest out. All of
+them read the same environment variables, so a wrapper can supply values with no
+code change:
+
+| Variable | Key |
+|---|---|
+| `NATS_HUB_REPORTED_SESSION` | `session` |
+| `NATS_HUB_REPORTED_MODEL` | `model` |
+| `NATS_HUB_REPORTED_MODEL_PROVIDER` | `model_provider` |
+
+Values are trimmed, and an empty variable counts as unset. Clients don't apply the
+caps: the hub drops what doesn't fit.
+
+| Client | `session` | `model` | `model_provider` | Extra keys |
+|---|---|---|---|---|
+| Rust clients (`HubClient`: `hub-delegate`, `hub-publish`, `hub-session`, `hub-worker`, …) | env | env | env | none |
+| Claude Code worker | `session_id` from the stream | `model` from the stream's init event, else the configured one | env | none |
+| Codex worker | `thread_id` | configured model | env | none |
+| ACP-over-stdio workers (Hermes, Grok, OpenCode) | ACP `sessionId` | configured model | configured provider, where the backend has one | none |
+| Kilo ACP-over-HTTP worker | env | env | env | none |
+| Other headless CLI workers | session id parsed from the output | `--model`/`-m` in the backend's arguments | `--provider` in the backend's arguments | none |
+| SDK workers | `session_id` or `agent_id` from the returned context | what the entrypoint configured | what the entrypoint configured | none |
+| MCP server (stdio) | env, else the host's session (below) | env | env | `client`: `clientInfo` name and version |
+| Remote MCP endpoint | a per-connection id | never | never | `client`: `clientInfo` name and version |
+| Bridges, email plugin | never | never | never | none |
+
+- **Workers.** A worker's environment applies until its backend knows better, and
+  the backend's values then override it key by key, for that turn. The values are
+  dropped when the turn's terminal result has been published, so a status between
+  turns reports only the environment. Events published before the backend reports
+  anything, such as `started`, carry only the environment.
+- **The MCP server's host session.** The plugin's SessionStart hook writes the
+  session id to `$XDG_RUNTIME_DIR/nats-hub/session-<host pid>.json` (or
+  `/tmp/nats-hub-$UID/` without `XDG_RUNTIME_DIR`; directory `0700`, file `0600`),
+  and the server reads it for each envelope, so it follows `/clear`. If there is
+  no file, as with a server installed without the plugin, a Claude Code client's
+  `CLAUDE_CODE_SESSION_ID` is used. That value is fixed when the server starts, so
+  it doesn't follow `/clear`. The host's model isn't visible to an MCP server, so
+  it is reported only if the environment sets it.
+- **The remote endpoint** ignores its process environment: one process serves many
+  identities. Its `initialize` response issues an `Mcp-Session-Id` that is random,
+  unrelated to the access token or the user, and holds the client label. Clients
+  echo it on later requests, and the endpoint keeps no state for it. A client that
+  doesn't echo it reports nothing.
+
 ## Stamping rules
 
 | Send | `tenant` | `identity` | Owner fields | `reported` |
