@@ -57,6 +57,16 @@ pub fn render_feed(frame: &mut ratatui::Frame, area: Rect, app: &App) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
+                    if line.origin.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{:<24}", crate::tui::model::truncate_str(&line.origin, 24))
+                    },
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
                     format!("{:<18}", crate::tui::model::truncate_str(&line.channel, 18)),
                     Style::default().fg(Color::DarkGray),
                 ),

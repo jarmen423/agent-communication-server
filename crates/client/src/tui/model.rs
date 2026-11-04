@@ -145,6 +145,8 @@ pub struct FeedLine {
     pub from: String,
     pub channel: String,
     pub summary: String,
+    /// Provenance label (`meta.origin`); empty when the envelope has none.
+    pub origin: String,
 }
 
 impl FeedLine {
@@ -166,6 +168,11 @@ impl FeedLine {
             from: env.meta.from.clone(),
             channel: env.meta.channel.clone(),
             summary,
+            origin: env
+                .meta
+                .origin
+                .as_ref()
+                .map_or_else(String::new, |o| crate::events::origin_label(o, false)),
         }
     }
 
@@ -179,6 +186,7 @@ impl FeedLine {
             || self.channel.to_lowercase().contains(&f)
             || self.summary.to_lowercase().contains(&f)
             || self.kind.to_lowercase().contains(&f)
+            || self.origin.to_lowercase().contains(&f)
     }
 }
 
@@ -350,12 +358,35 @@ mod tests {
             from: "worker-1".to_string(),
             channel: "session.abc".to_string(),
             summary: "implement handler".to_string(),
+            origin: "alice · claude-code · ~some-model".to_string(),
         };
         assert!(line.matches_filter(""));
         assert!(line.matches_filter("worker"));
         assert!(line.matches_filter("session"));
         assert!(line.matches_filter("handler"));
+        assert!(line.matches_filter("alice"));
+        assert!(line.matches_filter("some-model"));
         assert!(!line.matches_filter("zzz"));
+    }
+
+    #[test]
+    fn test_feed_line_from_envelope_carries_origin_label() {
+        let mut env = Envelope::new(
+            "worker-1",
+            "chat",
+            MessageKind::Message,
+            serde_json::json!({"text": "hi"}),
+        );
+        env.meta.origin = Some(crate::protocol::Origin::from_value_lossy(
+            &serde_json::json!({"user": "alice", "agent": "claude-code",
+                "reported": {"model": "some-model"}}),
+        ));
+        assert_eq!(
+            FeedLine::from_envelope(&env).origin,
+            "alice · claude-code · ~some-model"
+        );
+        env.meta.origin = None;
+        assert_eq!(FeedLine::from_envelope(&env).origin, "");
     }
 
     #[test]
