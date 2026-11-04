@@ -258,7 +258,10 @@ class Devices:
                 return error(403, "access_denied", "foreign tenant")
         except (ValueError, TypeError):
             return error(400, "invalid_request", "valid identity, role, provider and public user key required")
-        if self.store.identity(tenant, name):
+        existing = self.store.identity(tenant, name)
+        # Like the control plane, a name is unique among live identities only:
+        # a revoked one can be registered again (with a new key).
+        if existing and not existing.revoked:
             return error(409, "identity_exists", "identity name already registered")
         ident = Identity(tenant, name, device["owner"], "device", role,
                          client_id=device["id"], nats_public_keys=[public], provider=provider)

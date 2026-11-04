@@ -192,4 +192,16 @@ def test_registration_records_the_agent_client(tmp_path):
             assert records['with-client']['provider'] == 'claude-code'
             assert records['without']['provider'] is None
             assert Store(store.path).identity('T_A', 'with-client').provider == 'claude-code'
+            # A revoked name can be registered again, now with a client (the
+            # way to record one: there is no in-place update).
+            assert (await http.delete('/v1/device/identities/without', headers=headers(t))).status_code == 200
+            again = await http.post('/v1/device/identities', headers=headers(t),
+                                    json={'identity': 'without', 'public_key': public(), 'provider': 'codex'})
+            assert again.status_code == 201, again.text
+            records = {i['identity']: i for i in
+                       (await http.get('/v1/device', headers=headers(t))).json()['identities']}
+            assert records['without']['provider'] == 'codex'
+            other = await login(http)
+            assert (await http.post('/v1/device/identities', headers=headers(other),
+                                    json={'identity': 'without', 'public_key': public()})).status_code == 409
     asyncio.run(go())

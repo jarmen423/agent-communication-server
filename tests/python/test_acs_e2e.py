@@ -174,12 +174,18 @@ def test_login_mcp_delegate_daemon_refresh_and_revoke(tmp_path):
             bad = await asyncio.to_thread(acs, env, 'agent', 'add', 'bad-client', '--provider', 'Claude Code', ok=False)
             assert 'invalid provider' in bad.stderr
             assert not (root / 'tenants/T_A/creds/bad-client.creds').exists()
-            await asyncio.to_thread(acs, env, 'agent', 'add', 'codex-agent', '--role', 'worker', '--provider', 'codex')
             await asyncio.to_thread(acs, env, 'mcp', 'install', 'claude', '--identity', 'claude-mcp',
                                     '--home', str(tmp_path / 'agent-client-home'))
-            hint = await asyncio.to_thread(acs, env, 'mcp', 'install', 'codex', '--identity', 'me',
+            await asyncio.to_thread(acs, env, 'agent', 'add', 'codex-agent', '--role', 'worker')
+            hint = await asyncio.to_thread(acs, env, 'mcp', 'install', 'codex', '--identity', 'codex-agent',
                                            '--home', str(tmp_path / 'agent-client-home'))
-            assert 'no agent client recorded' in hint.stderr and '--provider codex' in hint.stderr
+            assert 'no agent client recorded' in hint.stderr
+            fix = hint.stderr.split('to record one: ', 1)[1].strip()
+            assert fix == ('acs agent rm codex-agent --tenant T_A && '
+                           'acs agent add codex-agent --role worker --tenant T_A --provider codex'), fix
+            # Follow the note: re-register the identity, now with its client.
+            for step in fix.split(' && '):
+                await asyncio.to_thread(acs, env, *step.split()[1:])
             response = await asyncio.to_thread(httpx.get, server + '/v1/device?tenant=T_A',
                 headers={'Authorization': 'Bearer ' + json.loads((root / 'device.json').read_text())['access_token']})
             records = {r['identity']: r for r in response.json()['identities']}
