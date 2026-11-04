@@ -39,7 +39,7 @@ from worker_backends.envelope import (  # noqa: F401  (re-exported: tests, bridg
     is_task_result,
     make_envelope,
 )
-from worker_backends.inbox import NON_TASK_KINDS, InboxDispatcher
+from worker_backends.inbox import NON_TASK_KINDS, InboxDispatcher, AcceptCheck
 from worker_backends.task_registry import TaskRegistry
 from worker_events import (
     execute_with_events,
@@ -384,6 +384,9 @@ async def run_worker(cfg: WorkerConfig) -> None:
         reply = await nc.request(f"hub.api.{cfg.identity}.{op}", req, timeout=5)
         return json.loads(reply.data)
 
+    inbox.accept_check = AcceptCheck(api_request, publish)
+    await inbox.accept_check.refresh()
+
     # Durable JetStream inbox on a `--durable` hub (DMs that arrived while
     # this worker was down are delivered first), else a core subscription.
     inbox_sub = await hub_delivery.subscribe_inbox(nc, cfg.identity, inbox.on_message)
@@ -397,6 +400,9 @@ async def run_worker(cfg: WorkerConfig) -> None:
         """Heartbeat + (idempotent, upserting) registration. Re-registering on
         every beat means a worker that started before hub-server was listening
         (or survived a router restart) still shows up in `hub-agents`."""
+        if not hasattr(announce, "policy_at") or asyncio.get_running_loop().time() - announce.policy_at >= 60:
+            await inbox.accept_check.refresh()
+            announce.policy_at = asyncio.get_running_loop().time()
         payload = {"identity": cfg.identity, **cfg.extra_heartbeat}
         await nc.publish(
             f"hub.presence.{cfg.identity}",

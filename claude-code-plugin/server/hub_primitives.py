@@ -172,9 +172,13 @@ class TaskTracker:
             await self.events.put(env)
         elif kind == "event":
             await self.events.put(env)
-        elif is_task_result(env, self.task_id, self.worker) and self.result is None:
+        elif (is_task_result(env, self.task_id, self.worker) or (
+                meta.get("from") == "hub-server" and env.get("payload", {}).get("rejected") is True
+                and env.get("payload", {}).get("task_id") == self.task_id)) and self.result is None:
             self.result = env
             payload = env.get("payload", {})
+            if payload.get("rejected") is True:
+                payload["error"] = "refused: " + str(payload.get("error", "accept policy"))
             status = payload.get("status")
             # Terminal status set: done | error | cancelled (contract §4.2).
             self.state = status if status in ("error", "cancelled") else "done"

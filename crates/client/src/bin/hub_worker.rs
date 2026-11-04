@@ -110,6 +110,16 @@ async fn main() -> Result<()> {
     );
 
     let client = HubClient::connect(&args.nats_url, &identity).await?;
+    let api = nats_hub_client::ApiClient::connect_with_identity(&args.nats_url, &identity)
+        .await?
+        .with_timeout(Duration::from_secs(5));
+    POLICY.refresh(&api).await;
+    let _policy_task = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            POLICY.refresh(&api).await;
+        }
+    });
 
     // Subscribe first, then announce: once we are visible on the bus we can
     // already receive tasks.
@@ -200,9 +210,15 @@ async fn run_loop(client: &HubClient, args: &Args, inbox: &mut Inbox) {
             handle_task(client, args, task, prompt, inbox).await;
             continue;
         }
-        let Some((env, direct)) = inbox.recv().await else {
+        let Some((mut env, direct)) = inbox.recv().await else {
             break;
         };
+        if direct {
+            env.meta.to = Some(client.identity().into());
+            if !POLICY.check(client, &env).await {
+                continue;
+            }
+        }
         if let Some(id) = cancel_target(&env, direct) {
             // Nothing runs between tasks; only a queued task can match.
             on_cancel(client, inbox, id, &env.meta.from, None).await;
@@ -301,6 +317,9 @@ async fn handle_task(
     prompt: String,
     inbox: &mut Inbox,
 ) {
+    if env.meta.to.is_some() && !POLICY.check(client, &env).await {
+        return;
+    }
     info!(id = %env.meta.id, from = %env.meta.from, kind = ?env.meta.kind, "running task");
 
     if let Err(e) = client.send_task_status(&env, "working").await {
@@ -327,7 +346,12 @@ async fn handle_task(
             outcome = &mut run => break outcome,
             next = inbox.recv(), if bus_open => match next {
                 None => bus_open = false,
-                Some((other, other_direct)) => match cancel_target(&other, other_direct) {
+                Some((mut other, other_direct)) => {
+                    if other_direct {
+                        other.meta.to = Some(client.identity().into());
+                        if !POLICY.check(client, &other).await { continue; }
+                    }
+                    match cancel_target(&other, other_direct) {
                     Some(id) => {
                         if on_cancel(client, inbox, id, &other.meta.from, Some(&env)).await {
                             if let Some(tx) = cancel_tx.take() {
@@ -337,6 +361,7 @@ async fn handle_task(
                         }
                     }
                     None => queue_or_reject(client, inbox, other, other_direct, &env).await,
+                    }
                 },
             },
         }
@@ -394,3 +419,5 @@ async fn publish_cancelled(client: &HubClient, task: &Envelope) {
     }
     let _ = client.send_task_status(task, "cancelled").await;
 }
+
+static POLICY: nats_hub_client::accept::WorkerPolicy = nats_hub_client::accept::WorkerPolicy::new();

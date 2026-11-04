@@ -64,7 +64,7 @@ const CATCH_UP_EVERY: Duration = Duration::from_secs(3);
 #[derive(Parser)]
 #[command(
     name = "hub-delegate",
-    about = "Delegate a task to an agent worker via nats-hub"
+    about = "Delegate a task to an agent worker via nats-hub (exit 5: accept policy refused)"
 )]
 struct Args {
     /// Recipient agent identity (the worker to send the task to)
@@ -286,6 +286,14 @@ async fn main() -> Result<()> {
         };
 
         for env in incoming {
+            if let Some(error) = nats_hub_client::accept::is_rejected_terminal(&env, &task_id) {
+                eprintln!("refused by {}'s accept policy: {error}", args.to);
+                std::process::exit(nats_hub_client::accept::EXIT_REFUSED);
+            }
+            if env.payload["rejected"] == true && env.meta.from != "hub-server" {
+                continue;
+            }
+
             // Rule 5: the result is the first `message` correlated to our
             // task and sent by the worker we delegated to (C5); every
             // status/event envelope is progress.

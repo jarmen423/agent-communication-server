@@ -53,6 +53,7 @@ def _decode(msg: Any, log: str) -> dict[str, Any] | None:
 class InboxDispatcher:
     def __init__(self, inbox_subject: str, registry: TaskRegistry, handle: Handler,
                  report_cancelled: Reporter, log: str = "worker") -> None:
+        self.accept_check = None
         self.inbox_subject = inbox_subject
         self.registry = registry
         self.handle = handle
@@ -72,6 +73,9 @@ class InboxDispatcher:
         meta = envelope.get("meta") or {}
         if not self._seen.first_sight(meta.get("id")):
             logger.debug("duplicate envelope %s dropped", meta.get("id"))
+            return
+        if (msg.subject == self.inbox_subject and self.accept_check is not None
+                and not await self.accept_check.allows(envelope)):
             return
         cancel_id = cancel_request(envelope)
         if cancel_id is not None:
@@ -152,6 +156,9 @@ class InboxDispatcher:
                 if task_id in self._reported:
                     self._reported.discard(task_id)
                     continue
+                if (msg.subject == self.inbox_subject and self.accept_check is not None
+                        and not await self.accept_check.allows(envelope)):
+                    continue
                 await self.handle(msg, envelope)
             except Exception as e:  # noqa: BLE001 - one bad task must not stop the loop
                 print(f"[{self.log}] handler error: {e}")
@@ -161,3 +168,60 @@ class InboxDispatcher:
                 sid = payload.get("session_id") if isinstance(payload, dict) else None
                 if isinstance(sid, str) and self._start_turns.get(sid) == task_id:
                     del self._start_turns[sid]
+
+
+def task_channel(channel: Any) -> bool:
+    import re
+    return isinstance(channel, str) and bool(re.fullmatch(
+        r"(?:task\.[A-Za-z0-9_-]+|wave\.[A-Za-z0-9_-]+\.task\.[A-Za-z0-9_-]+)", channel))
+
+
+def policy_allows(record: dict, origin: Any) -> bool:
+    if not isinstance(origin, dict):
+        return False
+    user = ((origin.get("on_behalf_of") or {}).get("user")
+            if origin.get("identity") == "hub-orchestrator" else origin.get("user"))
+    policy = record.get("accept")
+    if not policy:
+        human = not record.get("agent") and record.get("user") == record.get("identity")
+        policy = {"from": "tenant" if human or record.get("identity") == "owner"
+                  or record.get("owner_kind") == "tenant" else "owner"}
+    if policy.get("from") == "tenant":
+        return origin.get("owner_kind") is not None
+    if policy.get("from") == "users":
+        return user is not None and user in policy.get("users", [])
+    return user is not None and user == record.get("user")
+
+
+class AcceptCheck:
+    """Cache the last good self record; API errors never erase it."""
+    def __init__(self, request, publish):
+        self.request = request
+        self.publish = publish
+        self.record = None
+
+    async def refresh(self):
+        try:
+            reply = await self.request("manifest.self", {})
+            if reply.get("ok"):
+                data = reply.get("data")
+                self.record = data.get("record") if isinstance(data, dict) else None
+        except Exception:
+            logger.debug("manifest.self unavailable", exc_info=True)
+
+    async def allows(self, envelope):
+        if self.record is None or policy_allows(self.record, envelope.get("meta", {}).get("origin")):
+            return True
+        meta = envelope.get("meta") or {}
+        payload = envelope.get("payload") or {}
+        channel = payload.get("task_channel")
+        if not isinstance(channel, str):
+            channel = meta.get("channel")
+        if task_channel(channel):
+            task_id = next((payload[k] for k in ("task_id", "session_id")
+                            if isinstance(payload.get(k), str)), meta.get("id"))
+            await self.publish(channel, "message", {
+                "status": "error", "task_id": task_id, "result": None,
+                "error": "refused by worker accept policy", "rejected": True,
+            }, reply_to=meta.get("id"))
+        return False

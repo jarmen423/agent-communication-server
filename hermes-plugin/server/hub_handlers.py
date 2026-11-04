@@ -192,6 +192,8 @@ async def _wait_for_task(args: dict) -> dict:
         return _err(f"no result within {timeout}s "
                     f"(last_status={result.get('last_status')}); call "
                     "wait_for_task again to keep waiting, or cancel_task")
+    if (result.get("result") or {}).get("rejected"):
+        return _err("refused: " + str(result["result"].get("error")))
     return {"ok": True, "data": result}
 
 
@@ -276,6 +278,39 @@ async def _cancel_wave(args: dict) -> dict:
     return await conn.api_request("wave.cancel", {"wave_id": args["wave_id"]})
 
 
+async def _start_session_checked(args: dict) -> dict:
+    h = hub()
+    await h.ensure_started()
+    since = h.inbox.buf.last_seq
+    result = await SESSION_HANDLERS["start_session"](args)
+    if not result.get("ok"):
+        return result
+    sent_id = result.get("data", {}).get("message_id")
+    import asyncio
+    async def refusal():
+        return await h.inbox.buf.wait_for(
+            lambda env: env.get("meta", {}).get("from") == "hub-server"
+            and env.get("meta", {}).get("reply_to") == sent_id
+            and env.get("payload", {}).get("action") == "rejected",
+            since=since, timeout=min(float(args.get("timeout", 30)), 5))
+    async def ready():
+        buffer = await h.session_buffer(result["data"]["session_id"])
+        await buffer.buf.wait_for(
+            lambda env: env.get("meta", {}).get("from") == args["worker"]
+            and env.get("payload", {}).get("status") == "ready",
+            since=0, timeout=min(float(args.get("timeout", 30)), 5))
+    rejection, readiness = asyncio.create_task(refusal()), asyncio.create_task(ready())
+    try:
+        done, _ = await asyncio.wait((rejection, readiness), return_when=asyncio.FIRST_COMPLETED)
+        if rejection in done and (notice := rejection.result()) is not None:
+            return _err("refused: " + str(notice["env"].get("payload", {}).get("error")))
+    finally:
+        for task in (rejection, readiness):
+            task.cancel()
+        await asyncio.gather(rejection, readiness, return_exceptions=True)
+    return result
+
+
 HANDLERS = {
     "list_agents": _list_agents,
     "get_agent": _get_agent,
@@ -291,6 +326,7 @@ HANDLERS = {
     "wait_for_task": _wait_for_task,
     "cancel_task": _cancel_task,
     **SESSION_HANDLERS,
+    "start_session": _start_session_checked,
     "create_wave": _create_wave,
     "spawn_wave": _spawn_wave,
     "cancel_wave": _cancel_wave,
