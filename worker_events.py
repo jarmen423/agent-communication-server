@@ -18,6 +18,7 @@ import asyncio
 import os
 from typing import Any, Protocol
 
+from worker_backends import origin_report
 from worker_backends.proc import (
     StderrTail,
     drain_stream,
@@ -96,9 +97,19 @@ async def run_to_result(
     cancel: TurnCancel | None = None,
 ) -> dict[str, Any]:
     """Run one turn without progress events and return the terminal result
-    payload. Used for plain-DM replies (rule 6), which have no task channel."""
+    payload. Used for plain-DM replies (rule 6), which have no task channel.
+
+    Nothing is published during the turn; its progress only decides what the
+    reply reports. The turn runs in its own task, so the values are remembered
+    here, in the caller's context, where the reply is built."""
+    reported: dict[str, str] = {}
+
+    async def note_reported(kind: str, data: dict[str, Any]) -> None:
+        if kind == "status":
+            reported.update(origin_report.from_status(data))
+
     try:
-        text, _ = await start_turn(backend, prompt, ctx, None, cancel)
+        text, _ = await start_turn(backend, prompt, ctx, note_reported, cancel)
         if cancel is not None and cancel.requested:
             return result_payload(task_id, cancelled=True)
         return result_payload(task_id, result=text)
@@ -108,6 +119,9 @@ async def run_to_result(
         raise
     except Exception as err:  # noqa: BLE001 - reported to the sender
         return result_payload(task_id, error=str(err) or type(err).__name__)
+    finally:
+        origin_report.remember_turn(
+            task_id, {**origin_report.env_defaults(), **reported} if reported else {})
 
 
 async def publish_event(
@@ -268,6 +282,10 @@ async def execute_with_events(
     Exactly one terminal result is published: once ``finish`` (or the
     cancelled path) has started, a later failure is logged, never answered
     with a second result.
+
+    Backend ``status`` progress also fills what this turn's envelopes report
+    (``origin_report``); that entry is dropped once the turn is over. A status
+    with no message is only recorded, not published.
     """
     emit = lambda et, data: publish_event_dual(
         publish_event_fn, channel, wave_channel, task_id, et, data
@@ -275,6 +293,11 @@ async def execute_with_events(
 
     async def on_stream(kind: str, data: dict[str, Any]) -> None:
         # kind: message | thought | tool | status
+        if kind == "status":
+            if not terminal_sent:
+                origin_report.update_from_status(reported_channels, data)
+            if not (data.get("text") or data.get("message")):
+                return
         payload = dict(data)
         payload.setdefault("stream", kind)
         if kind == "thought":
@@ -287,6 +310,7 @@ async def execute_with_events(
             await emit("progress", {"message": text, **payload, "phase": "message"})
 
     terminal_sent = False
+    reported_channels = [c for c in (channel, wave_channel) if c]
 
     async def finish(kind: str, payload: dict[str, Any], status: str, event: dict[str, Any]) -> None:
         nonlocal terminal_sent
@@ -336,3 +360,6 @@ async def execute_with_events(
             return None
         await finish("error", result_payload(task_id, error=message), "error", {"error": message})
         return None
+    finally:
+        for reported_channel in reported_channels:
+            origin_report.clear_reported(reported_channel)

@@ -30,6 +30,7 @@ worker_backends/proc.py                # subprocess plumbing (imported by headle
 worker_backends/presets.py             # kilo_spec(), opencode_spec(), hermes_spec(), agy_spec(), grok_spec()
 worker_backends/sdk_agent.py           # SdkAgentBackend (imported by worker_backends/__init__.py)
 worker_backends/envelope.py            # envelope helpers (imported by worker_runtime.py)
+worker_backends/origin_report.py       # self-reported session/model (imported by envelope.py)
 worker_backends/inbox.py               # non-blocking inbox dispatcher + cancel routing
 worker_backends/progress.py            # per-turn progress handler (contextvar)
 worker_backends/session_resume.py      # backend_ctx persistence via hub.api (session resume)

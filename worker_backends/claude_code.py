@@ -86,8 +86,8 @@ class ClaudeTurn(CliTurn):
             self.session_id = sid
         etype = event.get("type")
         if etype == "system" and event.get("subtype") == "init":
-            model = event.get("model") or "?"
-            await emit("status", {"message": f"claude session started (model={model})",
+            model = event.get("model")
+            await emit("status", {"message": f"claude session started (model={model or '?'})",
                                   "session_id": self.session_id, "model": model})
         elif etype == "assistant":
             await self._on_assistant(event, emit)

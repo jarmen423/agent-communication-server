@@ -21,6 +21,8 @@ import asyncio
 import logging
 from typing import Any
 
+from worker_backends.origin_report import report_status
+from worker_backends.progress import current_progress_handler
 from worker_runtime import WorkerBackend
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,8 @@ class AcpAgentBackend(WorkerBackend):
                 f"Label={self.label} detail={e}"
             ) from e
 
+        await report_status(current_progress_handler(), session=session_handle,
+                            model=getattr(self.transport, "model", None))
         ctx = dict(ctx or {})
         ctx["acp_session_handle"] = session_handle
         return text, ctx

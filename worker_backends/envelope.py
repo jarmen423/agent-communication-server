@@ -9,6 +9,8 @@ import signal
 import uuid
 from datetime import datetime, timezone
 
+from worker_backends import origin_report
+
 # Payload keys a one-shot prompt may arrive under (bridges send "message").
 PROMPT_KEYS = ("prompt", "text", "command", "message")
 
@@ -32,6 +34,9 @@ def make_envelope(
         meta["to"] = to_id
     if reply_to:
         meta["reply_to"] = reply_to
+    reported = origin_report.reported_for(channel, reply_to)
+    if reported:
+        meta["origin"] = {"reported": reported}
     return json.dumps({"meta": meta, "payload": payload}).encode()
 
 

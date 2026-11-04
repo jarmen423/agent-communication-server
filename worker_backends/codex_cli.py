@@ -80,7 +80,8 @@ def _item_progress(item: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
 class CodexTurn(CliTurn):
     """Parses one `codex exec --json` turn."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model
         fd, path = tempfile.mkstemp(prefix="nats-hub-codex-", suffix=".txt")
         os.close(fd)
         self.last_message_file = path
@@ -103,7 +104,8 @@ class CodexTurn(CliTurn):
         etype = event.get("type")
         if etype == "thread.started" and event.get("thread_id"):
             self.thread_id = str(event["thread_id"])
-            await emit("status", {"message": "codex thread started", "thread_id": self.thread_id})
+            await emit("status", {"message": "codex thread started", "thread_id": self.thread_id,
+                                  "model": self.model})
         elif etype in ("item.started", "item.updated", "item.completed"):
             item = event.get("item") or {}
             if not isinstance(item, dict):
@@ -184,7 +186,10 @@ class CodexBackend(HeadlessCliBackend):
         )
 
     def _make_turn(self, prompt: str, ctx: dict[str, Any]) -> CodexTurn:
-        return CodexTurn()
+        return CodexTurn(self.cfg.model)
+
+    def _configured_model(self) -> tuple[str | None, str | None]:
+        return self.cfg.model, None
 
     def _cmd_for_turn(self, prompt: str, ctx: dict[str, Any], turn: CliTurn | None) -> list[str]:
         cfg = self.cfg

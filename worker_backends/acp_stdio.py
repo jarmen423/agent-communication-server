@@ -38,6 +38,7 @@ from worker_backends.acp_permissions import (  # noqa: F401  (re-exported)
     choose_permission_option,
     permission_result,
 )
+from worker_backends.origin_report import report_status
 from worker_backends.progress import current_progress_handler
 from worker_backends.proc import (
     StderrTail,
@@ -210,6 +211,8 @@ class AcpStdioBackend:
                 ctx.update({self.session_ctx_key: session_id, "acp_session_id": session_id,
                             gen_key: self.generation})
 
+            await report_status(handler, session=session_id, model=getattr(self, "model", None),
+                                model_provider=getattr(self, "provider", None))
             self._chunks.clear()
             self._stream_buf = self._thought_buf = ""
             self._last_stream_emit = 0.0

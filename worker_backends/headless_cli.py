@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from worker_backends.origin_report import report_status
 from worker_backends.proc import ProcResult, ProcTimeout, run_streaming
 from worker_backends.progress import current_progress_handler
 
@@ -32,6 +33,17 @@ _SAFE_SESSION_DIR = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
 
 # per-turn progress handler (worker_backends.progress): async (kind, data) -> None
 ProgressHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+def _flag_value(argv: list[str], flags: tuple[str, ...]) -> str | None:
+    """The value of the last of ``flags`` in ``argv`` (``-m x`` or ``--model=x``)."""
+    found = None
+    for i, arg in enumerate(argv):
+        if arg in flags and i + 1 < len(argv):
+            found = argv[i + 1]
+        elif arg.startswith("--") and arg.split("=", 1)[0] in flags and "=" in arg:
+            found = arg.split("=", 1)[1]
+    return found
 
 
 @dataclass
@@ -220,6 +232,11 @@ class HeadlessCliBackend:
     def _cmd_for_turn(self, prompt: str, ctx: dict[str, Any], turn: CliTurn | None) -> list[str]:
         return self._build_cmd(prompt, ctx)
 
+    def _configured_model(self) -> tuple[str | None, str | None]:
+        """(model, provider) this backend passes to its CLI, if any."""
+        argv = self.spec.base_argv
+        return _flag_value(argv, ("--model", "-m")), _flag_value(argv, ("--provider",))
+
     # ── Execution ──────────────────────────────────────────────────────
 
     async def run(self, prompt: str, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -243,6 +260,10 @@ class HeadlessCliBackend:
                 except Exception as e:  # progress must never break a turn
                     print(f"[{self.spec.log_label}] progress handler error: {e}", flush=True)
 
+            model, provider = self._configured_model()
+            await report_status(handler, session=ctx.get(self.spec.resume_ctx_key),
+                                model=model, model_provider=provider)
+
             on_line = None
             if turn is not None:
                 async def on_line(line: str) -> None:
@@ -261,8 +282,11 @@ class HeadlessCliBackend:
             if result.returncode != 0:
                 raise RuntimeError(self._exit_error(result, turn))
             if turn is not None:
-                return turn.finish(result.stdout, ctx)
-            return self._parse_text(result.stdout.strip(), ctx)
+                text, new_ctx = turn.finish(result.stdout, ctx)
+            else:
+                text, new_ctx = self._parse_text(result.stdout.strip(), ctx)
+            await report_status(handler, session=new_ctx.get(self.spec.resume_ctx_key))
+            return text, new_ctx
         finally:
             if turn is not None:
                 turn.cleanup()
