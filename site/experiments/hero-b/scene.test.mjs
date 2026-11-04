@@ -281,6 +281,13 @@ for (const [name, l] of Object.entries(webModel.WEB)) {
     }
   });
 
+  test(`web ${name}: a teammate's place is always on screen`, () => {
+    for (let t = 0; t < 270; t += 0.25) {
+      const shown = l.slots.some((s, i) => !s.reach && s.places.some((p, j) => p.startsWith("teammate") && placeAlpha(i, s, j, t) === 1));
+      assert.ok(shown, `no teammate at ${t}`);
+    }
+  });
+
   test(`web ${name}: never quiet for long, and every place gets traffic`, () => {
     const traffic = webTracks.createWebTraffic(l);
     const slot = new Map(l.agents.map((a) => [a.id, a.slot]));

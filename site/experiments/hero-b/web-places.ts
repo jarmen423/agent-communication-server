@@ -81,13 +81,17 @@ const REACH = {
   ],
 };
 
-/** Slots per band. Left of the hub, names sit left of the ports (lines leave toward the hub); right of it, on the right. */
+/**
+ * Slots per band. Left of the hub, names sit left of the ports (lines leave
+ * toward the hub); right of it, on the right. Every band keeps a teammate on
+ * screen at all times (teammate-2 never rotates out), next to laptop-1's `me`.
+ */
 export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
   P: [
-    S(850, 620, "start", "office-3", "cloud-1"),
+    S(850, 620, "start", "office-3", "cloud-1", "home-1"),
     S(850, 760, "start", "laptop-1"),
-    S(1550, 620, "end", "website-2", "home-1"),
-    S(1550, 760, "end", "cloud-2", "ci-4"),
+    S(1550, 620, "end", "teammate-2"),
+    S(1550, 760, "end", "cloud-2", "website-2", "ci-4"),
   ],
   M: [
     S(1490, 165, "start", "office-3", "cloud-2"),
@@ -95,8 +99,8 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1795, 425, "start", "home-1", "teammate-4"),
     S(1785, 615, "start", "ci-4", "office-1"),
     S(1625, 735, "end", "cloud-3", "home-3"),
-    S(1340, 728, "end", "office-2", "cloud-4"),
-    S(1040, 745, "end", "website-2", "teammate-2"),
+    S(1340, 728, "end", "office-2", "cloud-4", "website-2"),
+    S(1040, 745, "end", "teammate-2"),
     S(740, 735, "end", "laptop-1"),
     ...REACH.M,
   ],
