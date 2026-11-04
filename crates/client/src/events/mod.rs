@@ -4,9 +4,11 @@
 //! Used by `hub-watch` and worker runtimes for real-time observation.
 
 mod display;
+mod origin_label;
 mod watch;
 
 pub use display::{event_summary, format_event_line};
+pub use origin_label::origin_label;
 pub use watch::{resolve_watch_target, WatchQuery, WatchTarget};
 
 use crate::protocol::Envelope;

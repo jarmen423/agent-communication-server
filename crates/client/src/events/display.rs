@@ -1,6 +1,6 @@
 //! Terminal formatting for structured progress events.
 
-use crate::events::{event_data, event_type};
+use crate::events::{event_data, event_type, origin_label};
 use crate::protocol::Envelope;
 
 #[derive(Debug, Clone, Copy)]
@@ -99,8 +99,19 @@ pub fn format_event_line(env: &Envelope) -> String {
         summary
     };
 
+    let label = env
+        .meta
+        .origin
+        .as_ref()
+        .map(|origin| origin_label(origin, false))
+        .unwrap_or_default();
+    let origin_suffix = if label.is_empty() {
+        String::new()
+    } else {
+        format!("  [{label}]")
+    };
     format!(
-        "\x1b[90m[{ts}]\x1b[0m {ansi}{kind:<10}\x1b[0m \x1b[1m{from}\x1b[0m  {channel}  \"{summary}\"",
+        "\x1b[90m[{ts}]\x1b[0m {ansi}{kind:<10}\x1b[0m \x1b[1m{from}\x1b[0m  {channel}  \"{summary}\"{origin_suffix}",
         ansi = color.ansi(),
         kind = kind,
         from = env.meta.from,
