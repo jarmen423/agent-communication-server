@@ -13,7 +13,7 @@ use anyhow::Result;
 use clap::Parser;
 use nats_hub_client::connect_opts::{default_nats_url, env_identity};
 use nats_hub_client::events::origin_label;
-use nats_hub_client::{ApiClient, HistoryQuery};
+use nats_hub_client::{ApiClient, Envelope, HistoryQuery};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -42,7 +42,8 @@ struct Args {
     session: Option<String>,
     #[arg(long, default_value = "20")]
     limit: usize,
-    #[arg(long)]
+    /// Follow new messages live after the snapshot (same filters apply)
+    #[arg(long, conflicts_with = "json")]
     tail: bool,
     /// Print the stored records as JSON (provenance included)
     #[arg(long)]
@@ -100,14 +101,19 @@ async fn main() -> Result<()> {
         eprintln!("{message}");
         std::process::exit(1);
     }
+    if args.json {
+        // Print the records exactly as the hub returned them: re-parsing
+        // into EnvelopeRecord would run provenance through its lossy
+        // decode and could silently print `[]` on a decode failure.
+        println!("{}", envelopes_json(&resp));
+        return Ok(());
+    }
     let results: Vec<nats_hub_client::storage::EnvelopeRecord> = resp
         .get("envelopes")
         .and_then(|e| serde_json::from_value(e.clone()).ok())
         .unwrap_or_default();
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
-    } else if results.is_empty() {
+    if results.is_empty() {
         println!("(no messages found)");
     } else {
         println!(
@@ -143,6 +149,9 @@ async fn main() -> Result<()> {
         let client = nats_hub_client::HubClient::connect(&args.nats_url, &identity).await?;
         let mut rx = client.subscribe_all().await?;
         while let Some(env) = rx.recv().await {
+            if !tail_matches(&env, &args) {
+                continue;
+            }
             let time = env.meta.timestamp.format("%H:%M:%S").to_string();
             let payload_preview = preview_payload(&env.payload, 80);
             let label = env
@@ -187,6 +196,43 @@ fn check_provenance_filters_applied(
     }
 }
 
+/// The stored records from a `history.query` reply, pretty-printed
+/// exactly as returned (no lossy re-decode through `EnvelopeRecord`).
+fn envelopes_json(resp: &serde_json::Value) -> String {
+    let envelopes = resp
+        .get("envelopes")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    serde_json::to_string_pretty(&envelopes).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Whether a live envelope passes the same `--channel`/`--from` and
+/// provenance filters as the snapshot query, so `--tail` does not print
+/// messages the snapshot was filtered against.
+fn tail_matches(env: &Envelope, args: &Args) -> bool {
+    if let Some(channel) = &args.channel {
+        if env.meta.channel != *channel {
+            return false;
+        }
+    }
+    if let Some(from) = &args.from {
+        if env.meta.from != *from {
+            return false;
+        }
+    }
+    let origin = env.meta.origin.as_ref();
+    let matches = |want: &Option<String>, got: Option<&String>| {
+        want.as_ref().map_or(true, |want| got == Some(want))
+    };
+    matches(&args.user, origin.and_then(|o| o.user.as_ref()))
+        && matches(&args.agent, origin.and_then(|o| o.agent.as_ref()))
+        && matches(&args.model, origin.and_then(|o| o.reported.model.as_ref()))
+        && matches(
+            &args.session,
+            origin.and_then(|o| o.reported.session.as_ref()),
+        )
+}
+
 fn truncate_str(s: &str, max: usize) -> &str {
     if s.len() > max {
         &s[..max.saturating_sub(2)]
@@ -228,6 +274,96 @@ mod tests {
     fn applied_provenance_filters_pass() {
         let resp = json!({"applied_filters": ["channel", "user", "model"]});
         assert!(check_provenance_filters_applied(&resp, &["user", "model"]).is_ok());
+    }
+
+    #[test]
+    fn tail_and_json_conflict() {
+        assert!(Args::try_parse_from(["hub-history", "--tail", "--json"]).is_err());
+        assert!(Args::try_parse_from(["hub-history", "--tail"]).is_ok());
+        assert!(Args::try_parse_from(["hub-history", "--json"]).is_ok());
+    }
+
+    #[test]
+    fn json_output_is_the_hub_reply_unchanged() {
+        // A self-reported value with a control character (dropped by the
+        // lossy EnvelopeRecord decode) and an unknown extra key both
+        // survive verbatim.
+        let resp = json!({"envelopes": [{
+            "id": "m1",
+            "origin": {"user": "alice",
+                       "reported": {"model": "mo\u{7}del", "future_key": "kept"}},
+            "future_record_field": 42,
+        }]});
+        let out = envelopes_json(&resp);
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed, resp["envelopes"]);
+        assert_eq!(envelopes_json(&json!({})), "[]");
+    }
+
+    fn tail_envelope() -> Envelope {
+        let mut env = Envelope::new(
+            "worker-1",
+            "chat",
+            nats_hub_client::MessageKind::Message,
+            json!({"text": "hi"}),
+        );
+        env.meta.origin = Some(nats_hub_client::Origin {
+            user: Some("alice".into()),
+            agent: Some("claude-code".into()),
+            reported: nats_hub_client::Reported {
+                model: Some("some-model".into()),
+                session: Some("sess-1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        env
+    }
+
+    #[test]
+    fn tail_matches_applies_channel_from_and_provenance_filters() {
+        let env = tail_envelope();
+        let matching = Args::try_parse_from([
+            "hub-history",
+            "--tail",
+            "--channel",
+            "chat",
+            "--from",
+            "worker-1",
+            "--user",
+            "alice",
+            "--agent",
+            "claude-code",
+            "--model",
+            "some-model",
+            "--session",
+            "sess-1",
+        ])
+        .unwrap();
+        assert!(tail_matches(&env, &matching));
+
+        for wrong in [
+            ["--channel", "other"],
+            ["--from", "worker-2"],
+            ["--user", "bob"],
+            ["--agent", "codex"],
+            ["--model", "other-model"],
+            ["--session", "sess-2"],
+        ] {
+            let args = Args::try_parse_from(["hub-history", "--tail", wrong[0], wrong[1]]).unwrap();
+            assert!(!tail_matches(&env, &args), "{wrong:?} must not match");
+        }
+
+        // No filters: everything passes, with or without provenance.
+        let open = Args::try_parse_from(["hub-history", "--tail"]).unwrap();
+        assert!(tail_matches(&env, &open));
+        let mut bare = tail_envelope();
+        bare.meta.origin = None;
+        assert!(tail_matches(&bare, &open));
+
+        // A provenance filter never matches an envelope without origin.
+        let filtered = Args::try_parse_from(["hub-history", "--tail", "--user", "alice"]).unwrap();
+        assert!(!tail_matches(&bare, &filtered));
     }
 
     #[test]
