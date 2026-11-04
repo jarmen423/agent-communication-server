@@ -1,0 +1,11 @@
+{
+  // www.agentcommunicationserver.app → https://agentcommunicationserver.app
+  // (301, path and query kept). A separate Worker because the site Worker
+  // (../wrangler.jsonc) is static assets only. Deploy from this directory:
+  // npx -y wrangler@4.157.0 deploy
+  "name": "acs-site-www",
+  "main": "index.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "www.agentcommunicationserver.app", "custom_domain": true }]
+}
