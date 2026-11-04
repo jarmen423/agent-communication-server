@@ -29,6 +29,13 @@ pub const REPORTED_VALUE_MAX_BYTES: usize = 256;
 /// Longest extra `reported` key, in bytes.
 pub const REPORTED_KEY_MAX_BYTES: usize = 32;
 
+/// Environment variable naming the session a client reports.
+pub const ENV_REPORTED_SESSION: &str = "NATS_HUB_REPORTED_SESSION";
+/// Environment variable naming the model a client reports.
+pub const ENV_REPORTED_MODEL: &str = "NATS_HUB_REPORTED_MODEL";
+/// Environment variable naming the model provider a client reports.
+pub const ENV_REPORTED_MODEL_PROVIDER: &str = "NATS_HUB_REPORTED_MODEL_PROVIDER";
+
 /// Provenance of an envelope (see the module docs).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Origin {
@@ -129,6 +136,28 @@ impl OnBehalfOf {
 }
 
 impl Reported {
+    /// What the environment reports: `NATS_HUB_REPORTED_SESSION`,
+    /// `NATS_HUB_REPORTED_MODEL` and `NATS_HUB_REPORTED_MODEL_PROVIDER`. A
+    /// value is trimmed; an empty or unset variable leaves its key out. The
+    /// caps are not applied here: the hub drops what doesn't fit.
+    pub fn from_env() -> Self {
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let read = |key: &str| {
+            lookup(key)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        Self {
+            session: read(ENV_REPORTED_SESSION),
+            model_provider: read(ENV_REPORTED_MODEL_PROVIDER),
+            model: read(ENV_REPORTED_MODEL),
+            extra: BTreeMap::new(),
+        }
+    }
+
     /// Keep what passes the caps and drop the rest, key by key, without
     /// error. A value must be a string of 1..=[`REPORTED_VALUE_MAX_BYTES`]
     /// bytes with no control characters; an extra key must match
@@ -334,6 +363,27 @@ mod tests {
         for bad in [json!(5), json!("x"), json!([]), Value::Null] {
             assert!(Reported::sanitize(&bad).is_empty());
         }
+    }
+
+    #[test]
+    fn env_values_are_trimmed_and_empty_means_unset() {
+        let r = Reported::from_lookup(|key| match key {
+            ENV_REPORTED_SESSION => Some("  s1\n".to_string()),
+            ENV_REPORTED_MODEL => Some("   ".to_string()),
+            ENV_REPORTED_MODEL_PROVIDER => None,
+            other => panic!("unexpected variable {other}"),
+        });
+        assert_eq!(r.session.as_deref(), Some("s1"));
+        assert_eq!(r.model, None);
+        assert_eq!(r.model_provider, None);
+        assert!(r.extra.is_empty());
+    }
+
+    #[test]
+    fn env_values_over_the_cap_are_left_for_the_hub_to_drop() {
+        let long = "x".repeat(REPORTED_VALUE_MAX_BYTES + 1);
+        let r = Reported::from_lookup(|key| (key == ENV_REPORTED_MODEL).then(|| long.clone()));
+        assert_eq!(r.model.as_deref(), Some(long.as_str()));
     }
 
     #[test]

@@ -10,12 +10,14 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::connect_opts::{connect_with_hub_opts, HubConnectOptions};
+use crate::origin::Reported;
 use crate::protocol::{subjects, Envelope, MessageKind};
 
 mod catchup;
 mod dedupe;
 mod durable;
 mod reply;
+mod reported;
 mod tagged;
 pub use catchup::{task_channel_for, ChannelCatchUp, CATCH_UP_BATCH};
 pub use dedupe::{SeenIds, DEFAULT_SEEN_CAPACITY};
@@ -33,6 +35,8 @@ pub struct HubClient {
     nats: async_nats::Client,
     /// Identity of whoever is using this client (agent name, human name, etc.).
     identity: String,
+    /// What `send` reports in `meta.origin.reported`; clones share it.
+    reported: reported::ReportedSlot,
 }
 
 impl HubClient {
@@ -80,12 +84,22 @@ impl HubClient {
         debug!(%url, %identity, ?opts, "connecting to NATS with options");
 
         let nats = connect_with_hub_opts(url, &opts).await?;
-        Ok(Self { nats, identity })
+        Ok(Self {
+            nats,
+            identity,
+            reported: reported::ReportedSlot::from_env(),
+        })
     }
 
     /// Return the identity string.
     pub fn identity(&self) -> &str {
         &self.identity
+    }
+
+    /// Replace what this client (and its clones) reports in
+    /// `meta.origin.reported` from now on. Starts as [`Reported::from_env`].
+    pub fn set_reported(&self, reported: Reported) {
+        self.reported.set(reported);
     }
 
     // ── Typed envelope API ──────────────────────────────────────────
@@ -94,7 +108,11 @@ impl HubClient {
     /// `hub.pub.<identity>.<channel>`; contract §4.1).
     /// Flushes after publish to ensure the message reaches the server
     /// before the caller disconnects (critical for short-lived CLI tools).
+    ///
+    /// Fills `meta.origin.reported` from this client's reported values unless
+    /// the caller already set it.
     pub async fn send(&self, env: &Envelope) -> Result<()> {
+        let env = self.reported.stamp(env);
         let subject = subjects::send_bound(&self.identity, &env.meta.channel);
         let bytes = env.to_json_bytes()?;
         debug!(%subject, id = %env.meta.id, "publishing envelope");
