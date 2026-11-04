@@ -168,6 +168,13 @@ class TaskTracker:
 
     async def _feed(self, env: dict) -> None:
         meta = env.get("meta", {})
+        payload = env.get("payload", {})
+        if payload.get("rejected") is True and (
+                meta.get("from") not in ("hub-server", self.worker)
+                or payload.get("refused_sender") != self.sender
+                or payload.get("message_id") != self.task_id):
+            await self.other_messages.put(env)
+            return
         kind = meta.get("kind")
         if kind == "status":
             status = env.get("payload", {}).get("status")

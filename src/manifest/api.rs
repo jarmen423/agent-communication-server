@@ -202,5 +202,24 @@ fn list(manifest: &IdentityManifest, params: &Value) -> ApiResponse {
 
 fn self_record(manifest: &IdentityManifest, identity: &str) -> ApiResponse {
     let record = manifest.get(identity);
-    ApiResponse::ok(json!({"identity": identity, "record": record.as_deref()}))
+    ApiResponse::ok(
+        json!({"identity": identity, "record": record.as_deref(), "enforced": manifest.writer_configured()}),
+    )
+}
+
+#[cfg(test)]
+mod enforcement_tests {
+    use super::*;
+    #[test]
+    fn self_reports_enforcement_only_with_a_writer() {
+        for enabled in [false, true] {
+            let manifest = IdentityManifest::new(if enabled {
+                ["writer".into()].into()
+            } else {
+                Default::default()
+            });
+            let response = serde_json::to_value(self_record(&manifest, "worker")).unwrap();
+            assert_eq!(response["data"]["enforced"], enabled);
+        }
+    }
 }

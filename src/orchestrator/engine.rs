@@ -96,11 +96,12 @@ impl WaveOrchestrator {
             .await
             .context("orchestrator: subscribe hub.presence.* failed")?;
 
+        let mut rejection_rx = self.client.subscribe_inbox().await?;
         // Resume re-dispatches through the router; wait until it routes.
         tokio::select! {
             biased;
             _ = shutdown.cancelled() => return Ok(()),
-            _ = self.wait_for_router() => {},
+            _ = self.wait_for_router(&mut rejection_rx) => {},
         }
         if let Err(e) = self.resume().await {
             warn!(error = %e, "wave resume failed; starting with an empty slate");
@@ -109,7 +110,6 @@ impl WaveOrchestrator {
         // Sweep often enough to catch a dead worker near its TTL.
         let period =
             (self.config.liveness_ttl / 3).clamp(Duration::from_secs(1), Duration::from_secs(10));
-        let mut rejection_rx = self.client.subscribe_inbox().await?;
         let mut sweep = tokio::time::interval(period);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -135,15 +135,8 @@ impl WaveOrchestrator {
     /// once its storage warm-up is done). A `session_start` re-sent before
     /// that would be dropped by NATS. We DM ourselves a probe until it comes
     /// back on our inbox; after [`ROUTER_READY_TIMEOUT`] we resume anyway.
-    async fn wait_for_router(&self) {
+    async fn wait_for_router(&self, inbox: &mut mpsc::UnboundedReceiver<Envelope>) {
         let identity = self.client.identity().to_string();
-        let mut inbox = match self.client.subscribe_inbox().await {
-            Ok(rx) => rx,
-            Err(e) => {
-                warn!(error = %e, "router probe: inbox subscribe failed; resuming without it");
-                return;
-            }
-        };
         let deadline = Instant::now() + ROUTER_READY_TIMEOUT;
         for attempt in 1u32.. {
             let probe = Envelope::new(

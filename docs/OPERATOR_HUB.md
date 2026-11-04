@@ -185,7 +185,12 @@ hub-server --db-path /var/lib/nats-hub/nats_hub.db \
     --api-admin boss          # repeatable; or NATS_HUB_API_ADMINS=a,b
 ```
 
-**Provenance (optional).** To label messages with your hub and record who owns
+**Provenance and accept enforcement.** Configuring a manifest writer enables
+fail-closed delivery: unknown and removed targets refuse DMs, and known targets
+apply their per-identity accept policy. Populate the manifest before sending
+work. See [Accept policy](ACCEPT_POLICY.md).
+
+To label messages with your hub and record who owns
 each identity, add a tenant label and a manifest writer (a normal per-agent user
 from `hub-admin add-agent`), then record each identity with `hub-admin manifest`:
 

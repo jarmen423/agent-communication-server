@@ -297,14 +297,24 @@ async def _start_session_checked(args: dict) -> dict:
             since=since, timeout=min(float(args.get("timeout", 30)), 5))
     async def ready():
         buffer = await h.session_buffer(result["data"]["session_id"])
-        await buffer.buf.wait_for(
+        return await buffer.buf.wait_for(
             lambda env: env.get("meta", {}).get("from") == args["worker"]
-            and env.get("payload", {}).get("status") == "ready",
+            and (env.get("payload", {}).get("status") == "ready" or (
+                env.get("payload", {}).get("rejected") is True
+                and env.get("payload", {}).get("message_id") == sent_id
+                and env.get("payload", {}).get("refused_sender") == conn.identity())),
             since=0, timeout=min(float(args.get("timeout", 30)), 5))
     rejection, readiness = asyncio.create_task(refusal()), asyncio.create_task(ready())
     try:
         done, _ = await asyncio.wait((rejection, readiness), return_when=asyncio.FIRST_COMPLETED)
-        if rejection in done and (notice := rejection.result()) is not None:
+        notice = rejection.result() if rejection in done else None
+        if notice is None and readiness in done:
+            candidate = readiness.result()
+            if candidate and candidate["env"].get("payload", {}).get("rejected") is True:
+                notice = candidate
+        if notice is not None:
+            from hub_sessions import close_refused_record
+            await close_refused_record(result["data"]["session_id"])
             return _err("refused: " + str(notice["env"].get("payload", {}).get("error")))
     finally:
         for task in (rejection, readiness):

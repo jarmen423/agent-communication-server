@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Awaitable, Callable
 
 from hub_delivery import SeenIds
@@ -93,7 +94,9 @@ class InboxDispatcher:
         payload = envelope.get("payload")
         if not isinstance(payload, dict) or payload.get("action") not in SESSION_CHANNEL_ACTIONS:
             return
-        if (envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS:
+        if ((envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS
+                and not (payload.get("action") == "session_close"
+                         and (envelope.get("meta") or {}).get("kind") == "control")):
             return
         if self.accept_check is not None and not await self.accept_check.allows(envelope):
             return
@@ -173,7 +176,6 @@ class InboxDispatcher:
 
 
 def task_channel(channel: Any) -> bool:
-    import re
     return isinstance(channel, str) and bool(re.fullmatch(
         r"(?:task\.[A-Za-z0-9_-]+|wave\.[A-Za-z0-9_-]+\.task\.[A-Za-z0-9_-]+)", channel))
 
@@ -209,30 +211,43 @@ class AcceptCheck:
             reply = await self.request("manifest.self", {})
             if reply.get("ok"):
                 data = reply.get("data")
-                self.record = data.get("record") if isinstance(data, dict) else None
+                self.record = (data.get("record") if isinstance(data, dict)
+                               and data.get("enforced") is True else None)
         except Exception:
             logger.debug("manifest.self unavailable", exc_info=True)
 
     async def allows(self, envelope):
-        payload = envelope.get("payload") or {}
+        payload = envelope.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
         action = payload.get("action")
-        if (action in ("cancel", "session_close") or
+        if (cancel_request(envelope) is not None or
+                (action == "session_close" and
+                 (envelope.get("meta") or {}).get("kind") == "control") or
                 (action not in ("session_start", "session_send") and
                  (envelope.get("meta") or {}).get("kind") in NON_TASK_KINDS)):
             return True
         if self.record is None or policy_allows(self.record, envelope.get("meta", {}).get("origin")):
             return True
         meta = envelope.get("meta") or {}
-        payload = envelope.get("payload") or {}
         channel = payload.get("task_channel")
         if not isinstance(channel, str):
             channel = meta.get("channel")
-        if task_channel(channel):
+        session_refusal = (action == "session_start" and
+                           isinstance(payload.get("session_channel"), str) and
+                           re.fullmatch(r"session\.[A-Za-z0-9_-]+", payload["session_channel"]))
+        if session_refusal:
+            channel = payload["session_channel"]
+        if task_channel(channel) or session_refusal:
             task_id = next((payload[k] for k in ("task_id", "session_id")
                             if isinstance(payload.get(k), str)
                             and 0 < len(payload[k]) <= 128
                             and all("!" <= c <= "~" for c in payload[k])), meta.get("id"))
-            await self.publish(channel, "message", {
+            origin = meta.get("origin")
+            origin = origin if isinstance(origin, dict) else {}
+            sender = ((origin.get("on_behalf_of") or {}).get("identity")
+                      if origin.get("identity") == "hub-orchestrator" else origin.get("identity"))
+            await self.publish(channel, "status" if session_refusal else "message", {
+                "refused_sender": sender, "message_id": meta.get("id"),
                 "status": "error", "task_id": task_id, "result": None,
                 "error": "refused by worker accept policy", "rejected": True,
             }, reply_to=meta.get("id"))

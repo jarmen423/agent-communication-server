@@ -171,3 +171,9 @@ SESSION_HANDLERS = {
     "close_session": _close_session,
     "session_replies": _session_replies,
 }
+
+
+async def close_refused_record(session_id: str) -> None:
+    """A refused start must not leave an active resumable session."""
+    await conn.api_request("session.update_status", {
+        "session_id": session_id, "status": "closed"})

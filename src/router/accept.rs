@@ -76,10 +76,30 @@ impl ReplyIndex {
 }
 #[derive(Default)]
 pub(super) struct NegativeReplies {
+    buckets: HashMap<String, (f64, std::time::Instant)>,
     entries: HashMap<(String, String, String), std::time::Instant>,
     order: VecDeque<(String, String, String)>,
 }
 impl NegativeReplies {
+    pub(super) fn take_lookup(&mut self, sender: &str) -> bool {
+        let now = std::time::Instant::now();
+        if !self.buckets.contains_key(sender) && self.buckets.len() >= 10_000 {
+            self.buckets
+                .retain(|_, (_, at)| now.duration_since(*at).as_secs() < 60);
+            if self.buckets.len() >= 10_000 {
+                return false;
+            }
+        }
+        let (tokens, at) = self.buckets.entry(sender.to_owned()).or_insert((20.0, now));
+        *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * 20.0).min(20.0);
+        *at = now;
+        if *tokens < 1.0 {
+            return false;
+        }
+        *tokens -= 1.0;
+        true
+    }
+
     pub(super) fn contains(&self, key: &(String, String, String)) -> bool {
         self.entries
             .get(key)
@@ -207,6 +227,18 @@ mod tests {
         }
         m
     }
+    #[test]
+    fn reply_lookups_have_independent_sender_budgets() {
+        let mut cache = NegativeReplies::default();
+        for _ in 0..20 {
+            assert!(cache.take_lookup("bob"));
+        }
+        assert!(!cache.take_lookup("bob"));
+        assert!(cache.take_lookup("alice"));
+        cache.buckets.get_mut("bob").unwrap().1 -= std::time::Duration::from_secs(1);
+        assert!(cache.take_lookup("bob"));
+    }
+
     #[test]
     fn reply_index_bounds_bytes_and_excludes_service_inbox() {
         let mut index = ReplyIndex::default();

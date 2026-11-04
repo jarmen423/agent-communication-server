@@ -25,11 +25,9 @@ pub fn is_rejected_terminal<'a>(
     task_id: &str,
     identity: &str,
 ) -> Option<&'a str> {
-    (env.meta.from == "hub-server"
-        && env.payload["refused_sender"] == identity
+    (env.payload["refused_sender"] == identity
         && env.payload["message_id"] == task_id
-        && env.payload["rejected"] == true
-        && env.payload["task_id"] == task_id)
+        && env.payload["rejected"] == true)
         .then(|| env.payload["error"].as_str())
         .flatten()
 }
@@ -80,7 +78,7 @@ impl WorkerPolicy {
     }
     pub async fn refresh(&self, api: &crate::ApiClient) {
         if let Ok(data) = api.request("manifest.self", serde_json::json!({})).await {
-            if data["record"].is_null() {
+            if data["enforced"] != true || data["record"].is_null() {
                 *self.0.write().await = None;
             } else if let Ok(record) = serde_json::from_value(data["record"].clone()) {
                 *self.0.write().await = Some(record);
@@ -97,12 +95,20 @@ impl WorkerPolicy {
         if allowed {
             return true;
         }
-        let channel = env
+        let mut channel = env
             .payload
             .get("task_channel")
             .and_then(|v| v.as_str())
             .unwrap_or(&env.meta.channel);
-        if task_channel(channel) {
+        let session = env.payload["action"] == "session_start"
+            && env.payload["session_channel"].as_str().is_some_and(|c| {
+                c.strip_prefix("session.")
+                    .is_some_and(crate::protocol::valid_identity)
+            });
+        if session {
+            channel = env.payload["session_channel"].as_str().unwrap();
+        }
+        if task_channel(channel) || session {
             let task_id = env
                 .payload
                 .get("task_id")
@@ -113,12 +119,38 @@ impl WorkerPolicy {
             let mut result = Envelope::new(
                 client.identity(),
                 channel,
-                crate::MessageKind::Message,
-                serde_json::json!({"status":"error", "task_id":task_id, "result":null, "error":"refused by worker accept policy", "rejected":true}),
+                if session {
+                    crate::MessageKind::Status
+                } else {
+                    crate::MessageKind::Message
+                },
+                serde_json::json!({"status":"error", "task_id":task_id, "result":null, "error":"refused by worker accept policy", "rejected":true, "message_id":env.meta.id, "refused_sender":env.meta.origin.as_ref().and_then(|o| if o.identity.as_deref() == Some("hub-orchestrator") { o.on_behalf_of.as_ref().map(|b| b.identity.as_str()) } else { o.identity.as_deref() })}),
             );
             result.meta.reply_to = Some(env.meta.id.clone());
             let _ = client.send(&result).await;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn worker_refusal_requires_sender_and_original_message() {
+        let mut env = Envelope::new(
+            "worker",
+            "task.alice",
+            crate::MessageKind::Message,
+            serde_json::json!({"task_id":"alice", "rejected":true, "refused_sender":"bob", "message_id":"bob", "error":"refused"}),
+        );
+        assert!(is_rejected_terminal(&env, "alice", "alice").is_none());
+        env.payload["refused_sender"] = "alice".into();
+        assert!(is_rejected_terminal(&env, "alice", "alice").is_none());
+        env.payload["message_id"] = "alice".into();
+        assert_eq!(
+            is_rejected_terminal(&env, "alice", "alice"),
+            Some("refused")
+        );
     }
 }

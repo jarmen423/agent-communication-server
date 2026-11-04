@@ -78,3 +78,8 @@ The orchestrator handles refusals only through its private inbox notices.
 The reply exemption is multi-use within 24 hours: several replies may refer
 to the same delivered DM. It does not grant access to unknown or removed targets.
 Manifest writers require `--require-bound-identity`.
+
+`manifest.self` reports `enforced: true` only when a manifest writer is
+configured. Workers apply their check only then; administrative records alone
+do not enable enforcement. Worker refusals identify the refused sender and
+original message id. Session starts also report refusals on the session channel.

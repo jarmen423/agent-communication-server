@@ -101,6 +101,17 @@ impl WaveOrchestrator {
             );
             return;
         }
+        if env.payload["rejected"] == true
+            && !worker_refusal_matches(
+                &env,
+                self.waves
+                    .get(&wave_id)
+                    .and_then(|rt| rt.dispatch_ids.get(&task_id))
+                    .map(String::as_str),
+            )
+        {
+            return;
+        }
         if task_status != "running" {
             // Not dispatched yet, or already terminal: nothing to change.
             debug!(%wave_id, %task_id, status = %task_status, "ignoring envelope for a task that isn't running");
@@ -150,5 +161,31 @@ impl WaveOrchestrator {
             },
             _ => {}
         }
+    }
+}
+
+fn worker_refusal_matches(env: &Envelope, dispatch: Option<&str>) -> bool {
+    env.payload["refused_sender"] == ORCHESTRATOR_IDENTITY
+        && dispatch.is_some_and(|id| env.payload["message_id"].as_str() == Some(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn third_party_refusal_cannot_fail_an_assigned_wave_task() {
+        let mut env = Envelope::new(
+            "worker",
+            "wave.w.task.t",
+            MessageKind::Message,
+            json!({"rejected":true, "status":"error", "refused_sender":"bob", "message_id":"bob-id"}),
+        );
+        assert!(!worker_refusal_matches(&env, Some("dispatch-id")));
+        env.payload["refused_sender"] = ORCHESTRATOR_IDENTITY.into();
+        assert!(!worker_refusal_matches(&env, Some("dispatch-id")));
+        env.payload["message_id"] = "dispatch-id".into();
+        assert!(worker_refusal_matches(&env, Some("dispatch-id")));
+        assert!(!worker_refusal_matches(&env, None));
     }
 }

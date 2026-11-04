@@ -83,7 +83,7 @@ async def test_live_inbox_bypass_is_refused(backend, origin, broadcast):
         await nc.publish(("channel.broadcast-" if broadcast else "channel.inbox.") + identity, json.dumps({"meta": {
             "id":task_id, "from":"intruder", "origin":origin, "channel":channel,
             "kind":"message", "timestamp":"2026-11-04T00:00:00Z"},
-            "payload":{"prompt":"must not execute", "task_channel":channel}}).encode())
+            "payload":{"action":"cancel", "prompt":"must not execute", "task_channel":channel, "task_id":"victim"}}).encode())
         message = await sub.next_msg(timeout=3)
         terminal = json.loads(message.data)["payload"]
         if origin and origin.get("identity") == "hub-orchestrator":
@@ -94,7 +94,12 @@ async def test_live_inbox_bypass_is_refused(backend, origin, broadcast):
         else:
             assert terminal["rejected"] is True
             assert terminal["status"] == "error"
-        assert terminal["task_id"] == task_id
+        if terminal.get("rejected"):
+            assert terminal["task_id"] == "victim"
+            assert terminal["message_id"] == task_id
+            assert terminal["refused_sender"] == (origin or {}).get("identity")
+        else:
+            assert terminal["task_id"] == task_id
     finally:
         process.terminate()
         await asyncio.wait_for(process.wait(), 5)
@@ -127,7 +132,8 @@ async def test_mcp_tracker_only_trusts_router_rejection(monkeypatch):
     assert "refused" in tracker.result["payload"]["error"]
 
 @pytest.mark.asyncio
-async def test_mcp_session_rejection_returns_refused(monkeypatch):
+@pytest.mark.parametrize("source", ["router", "worker"])
+async def test_mcp_session_rejection_returns_refused(monkeypatch, source):
     import sys
     from pathlib import Path
     from types import SimpleNamespace
@@ -142,14 +148,20 @@ async def test_mcp_session_rejection_returns_refused(monkeypatch):
     async def buffer(_):
         return SimpleNamespace(buf=session)
     async def start(_):
-        await inbox.put({"meta":{"from":"hub-server","reply_to":"id"},
-                         "payload":{"action":"rejected","error":"denied","message_id":"id","refused_sender":"sender"}})
+        await (inbox if source == "router" else session).put({"meta":{"from":"hub-server" if source == "router" else "worker","reply_to":"id"},
+                         "payload":{"action":"rejected","rejected":True,"error":"denied","message_id":"id","refused_sender":"sender"}})
         return {"ok":True,"data":{"session_id":"sid","message_id":"id"}}
     monkeypatch.setattr(hub_handlers,"hub",lambda:SimpleNamespace(
         inbox=SimpleNamespace(buf=inbox),ensure_started=started,session_buffer=buffer))
+    closed = []
+    async def api(*args):
+        closed.append(args)
+        return {"ok": True}
+    monkeypatch.setattr(hub_handlers.conn, "api_request", api)
     monkeypatch.setitem(hub_handlers.SESSION_HANDLERS,"start_session",start)
     response = await hub_handlers._start_session_checked({"worker":"worker"})
     assert not response["ok"] and "refused" in response["error"]
+    assert closed == [("session.update_status", {"session_id": "sid", "status": "closed"})]
 
 @pytest.mark.parametrize("origin,allowed", [
     ({"identity":"hub-orchestrator", "on_behalf_of":{"identity":"alice"}}, True),
@@ -191,7 +203,7 @@ async def test_session_turn_policy_after_resume(resumed):
     runner = asyncio.create_task(dispatcher.run())
     try:
         for action in ("session_send", "session_close"):
-            env = {"meta":{"id":action,"from":"bob","kind":"message",
+            env = {"meta":{"id":action,"from":"bob","kind":"control" if action == "session_close" else "message",
                            "origin":{"identity":"bob","user":"bob"}},
                    "payload":{"action":action,"session_id":"sid","prompt":"do work"}}
             await callbacks[0](SimpleNamespace(subject="channel.session.sid", data=json.dumps(env).encode()))
@@ -287,7 +299,7 @@ async def test_live_resumed_session_refuses_turn_but_allows_close():
         await asyncio.wait_for(resumed(),5)
         for action in ("session_send","session_close"):
             env = {"meta":{"id":uuid.uuid4().hex,"from":bob,"channel":channel,
-                           "kind":"message","timestamp":"2026-11-04T00:00:00Z"},
+                           "kind":"control" if action == "session_close" else "message","timestamp":"2026-11-04T00:00:00Z"},
                    "payload":{"action":action,"session_id":sid,"message":"must not execute"}}
             await nc.publish(f"hub.pub.{bob}.{channel}",json.dumps(env).encode())
             await nc.flush()
@@ -315,3 +327,58 @@ async def test_session_start_cannot_bypass_policy_with_kind(kind):
     check.record = {"user":"alice", "accept":{"from":"owner"}}
     assert not await check.allows({"meta":{"kind":kind},
                                    "payload":{"action":"session_start", "prompt":"run"}})
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enforced", [False, True])
+async def test_self_enforcement_flag_and_non_dict_payload(enforced):
+    async def request(*args):
+        return {"ok": True, "data": {"enforced": enforced, "record": {
+            "user": "alice", "accept": {"from": "owner"}}}}
+    async def publish(*args, **kwargs):
+        pass
+    check = AcceptCheck(request, publish)
+    await check.refresh()
+    assert await check.allows({"meta": {}, "payload": ["bad"]}) is not enforced
+
+@pytest.mark.asyncio
+async def test_cancel_action_on_work_message_is_not_exempt():
+    sent = []
+    async def unused(*args):
+        pass
+    async def publish(*args, **kwargs):
+        sent.append(args[2])
+    check = AcceptCheck(unused, publish)
+    check.record = {"user": "alice", "accept": {"from": "owner"}}
+    assert not await check.allows({"meta": {"id": "bob-id", "kind": "message",
+        "origin": {"identity": "bob", "user": "bob"}}, "payload": {
+        "action": "cancel", "prompt": "…", "task_channel": "task.x"}})
+    assert sent[0]["refused_sender"] == "bob"
+    assert sent[0]["message_id"] == "bob-id"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sender", ["worker", "hub-server"])
+async def test_third_party_worker_refusal_does_not_end_delegation(monkeypatch, sender):
+    import hub_connection
+    from hub_primitives import TaskTracker
+    monkeypatch.setattr(hub_connection, "identity", lambda: "alice")
+    tracker = TaskTracker("alice-id", "task.alice-id", "worker")
+    await tracker._feed({"meta": {"from": sender, "kind": "message", "reply_to": "alice-id"},
+        "payload": {"status": "error", "task_id": "alice-id", "rejected": True,
+                    "refused_sender": "bob", "message_id": "bob-id"}})
+    assert not tracker.done.is_set()
+
+@pytest.mark.asyncio
+async def test_session_start_refusal_is_correlated_status():
+    sent = []
+    async def unused(*args):
+        pass
+    async def publish(*args, **kwargs):
+        sent.append(args)
+    check = AcceptCheck(unused, publish)
+    check.record = {"user": "alice", "accept": {"from": "owner"}}
+    assert not await check.allows({"meta": {"id": "start-id", "kind": "message",
+        "origin": {"identity": "bob", "user": "bob"}}, "payload": {
+        "action": "session_start", "session_channel": "session.sid", "session_id": "sid"}})
+    channel, kind, terminal = sent[0]
+    assert (channel, kind) == ("session.sid", "status")
+    assert terminal["message_id"] == "start-id" and terminal["refused_sender"] == "bob"

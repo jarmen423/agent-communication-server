@@ -442,7 +442,10 @@ async fn self_returns_only_the_callers_own_record() {
 
     let stranger = unique("stranger");
     let resp = call(&nc, &stranger, "manifest.self", json!({})).await;
-    assert_eq!(resp["data"], json!({"identity": stranger, "record": null}));
+    assert_eq!(
+        resp["data"],
+        json!({"identity": stranger, "record": null, "enforced": true})
+    );
 
     // A removed identity has no record either.
     write_ok(

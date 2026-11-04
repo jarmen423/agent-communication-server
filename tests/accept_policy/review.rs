@@ -67,8 +67,17 @@ async fn foreign_refusal_does_not_end_delegation_and_worker_refusal_exits_five()
             &dm.meta.channel,
             MessageKind::Message,
             json!({"task_id":dm.meta.id,"status":if worker_refusal {"error"} else {"done"},
-                "result":"ok","error":"refused by worker accept policy","rejected":worker_refusal}),
+                "result":"ok","error":"refused by worker accept policy","rejected":worker_refusal,
+                "refused_sender":alice,"message_id":dm.meta.id}),
         );
+        let mut foreign_worker_refusal = result.clone();
+        foreign_worker_refusal.meta.id = uuid::Uuid::new_v4().to_string();
+        foreign_worker_refusal.payload["rejected"] = true.into();
+        foreign_worker_refusal.payload["refused_sender"] = bob.clone().into();
+        foreign_worker_refusal.payload["message_id"] = "foreign-message".into();
+        w.send(&foreign_worker_refusal).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(child.try_wait().unwrap().is_none());
         result.meta.reply_to = Some(dm.meta.id);
         w.send(&result).await.unwrap();
         let output = tokio::time::timeout(Duration::from_secs(3), child.wait_with_output())

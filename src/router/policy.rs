@@ -60,19 +60,28 @@ impl ControlPlane {
                         effective.unwrap_or_default().to_owned(),
                     );
                     let cached = self.core.negative_replies.lock().unwrap().contains(&key);
-                    let allowed = if cached {
-                        false
+                    let permitted = !cached
+                        && self
+                            .core
+                            .negative_replies
+                            .lock()
+                            .unwrap()
+                            .take_lookup(bound.unwrap_or_default());
+                    let result = if cached || !permitted {
+                        None
                     } else if let Some(storage) = &self.storage {
-                        tokio::time::timeout(
-                            std::time::Duration::from_millis(250),
-                            stored_reply_allows(storage.as_ref(), &id, target, effective),
-                        )
+                        reply_lookup(stored_reply_allows(
+                            storage.as_ref(),
+                            &id,
+                            target,
+                            effective,
+                        ))
                         .await
-                        .unwrap_or(false)
                     } else {
-                        false
+                        None
                     };
-                    if !allowed {
+                    let allowed = result == Some(true);
+                    if result == Some(false) {
                         self.core.negative_replies.lock().unwrap().insert(key);
                     }
                     (!allowed).then_some(accept::POLICY)
@@ -175,7 +184,7 @@ fn rejection_notices(refused: &Envelope, bound: Option<&str>, reason: &str) -> V
             }),
         )
         .to(sender);
-        notice.meta.id = format!("rej-{sender}-{}", refused.meta.id);
+        notice.meta.id = format!("rej:{sender}:{}", refused.meta.id);
         notices.push(notice);
     }
     let channel = refused
@@ -200,10 +209,17 @@ fn rejection_notices(refused: &Envelope, bound: Option<&str>, reason: &str) -> V
                 "status":"error", "task_id":task_id, "result":null, "error":error, "rejected":true,
             }),
         );
-        terminal.meta.id = format!("rej-term-{sender}-{}", refused.meta.id);
+        terminal.meta.id = format!("rej-term:{sender}:{}", refused.meta.id);
         notices.push(terminal);
     }
     notices
+}
+
+async fn reply_lookup(lookup: impl std::future::Future<Output = Result<bool>>) -> Option<bool> {
+    tokio::time::timeout(std::time::Duration::from_millis(250), lookup)
+        .await
+        .ok()
+        .and_then(Result::ok)
 }
 
 async fn stored_reply_allows(
@@ -211,11 +227,12 @@ async fn stored_reply_allows(
     id: &str,
     target: &str,
     sender: Option<&str>,
-) -> bool {
-    match storage.get_envelope(id).await {
-        Ok(Some(old)) => stored_pair_allows(&old, target, sender),
-        _ => false,
-    }
+) -> Result<bool> {
+    Ok(storage
+        .get_envelope(id)
+        .await?
+        .as_ref()
+        .is_some_and(|old| stored_pair_allows(old, target, sender)))
 }
 
 fn stored_pair_allows(
@@ -269,6 +286,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transient_lookup_failures_are_not_cacheable_denials() {
+        assert_eq!(
+            reply_lookup(async { Err(anyhow::anyhow!("unavailable")) }).await,
+            None
+        );
+        assert_eq!(reply_lookup(std::future::pending()).await, None);
+        assert_eq!(reply_lookup(async { Ok(false) }).await, Some(false));
+        assert_eq!(reply_lookup(async { Ok(true) }).await, Some(true));
+    }
+
+    #[test]
+    fn notice_ids_cannot_alias_identity_and_message_boundaries() {
+        let mut env = Envelope::new("a", "task.x", MessageKind::Message, json!({})).to("worker");
+        env.meta.id = "b-c".into();
+        let first = rejection_notices(&env, Some("a"), accept::POLICY);
+        env.meta.id = "c".into();
+        let second = rejection_notices(&env, Some("a-b"), accept::POLICY);
+        assert_ne!(first[0].meta.id, second[0].meta.id);
+        assert_ne!(first[1].meta.id, second[1].meta.id);
+    }
+
+    #[tokio::test]
     async fn storage_fallback_checks_pair_provenance_and_age() {
         let storage = SurrealStorage::connect_memory().await.unwrap();
         storage.migrate().await.unwrap();
@@ -278,11 +317,23 @@ mod tests {
             ..Default::default()
         });
         storage.store_envelope(&old).await.unwrap();
-        assert!(stored_reply_allows(&storage, &old.meta.id, "target", Some("sender")).await);
-        assert!(!stored_reply_allows(&storage, &old.meta.id, "target", Some("stranger")).await);
+        assert!(
+            stored_reply_allows(&storage, &old.meta.id, "target", Some("sender"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !stored_reply_allows(&storage, &old.meta.id, "target", Some("stranger"))
+                .await
+                .unwrap()
+        );
         let mut row = storage.get_envelope(&old.meta.id).await.unwrap().unwrap();
         row.stored_at = chrono::Utc::now() - chrono::Duration::hours(25);
         assert!(!stored_pair_allows(&row, "target", Some("sender")));
-        assert!(!stored_reply_allows(&storage, "missing", "target", Some("sender")).await);
+        assert!(
+            !stored_reply_allows(&storage, "missing", "target", Some("sender"))
+                .await
+                .unwrap()
+        );
     }
 }
