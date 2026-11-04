@@ -4,6 +4,7 @@
 // `started` and `progress`), then exactly one brighter, longer orange result.
 // Every streak on screen is one of these messages between two named agents.
 import { crossing, type Agent, type Lane, type Layout } from "./layout";
+import { rng } from "./prng";
 
 export type Kind = "task" | "status" | "event" | "result";
 export type Msg = {
@@ -44,16 +45,7 @@ const STYLE = {
   result: { speed: 210, intensity: 1.7, sigma: 1.25, dash: 0 },
 } as const;
 
-export function rng(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+export { rng } from "./prng";
 
 const ORCH_WEIGHT: Record<string, number> = { me: 0.42, "claude-web-1": 0.24, "codex-2": 0.2, "claude-web-2": 0.14 };
 const PROGRESS = ["progress · reading files", "progress · cargo test", "progress · editing", "progress · npm run lint", "progress · writing summary"];

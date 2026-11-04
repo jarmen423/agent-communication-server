@@ -1,90 +1,23 @@
 // Server-rendered SVG for the ASCII web, in the same design space as the live
 // canvas and cover-mapped the same way (preserveAspectRatio "slice"):
-//  - WebField: the quiet text field, shared by every band of a variant.
-//  - WebLit: only the cells lit at the poster moment (the first live frame),
-//    per band, lit by cellLight() with that band's nominal copy mask.
+//  - WebPoster: the field and the cells lit at the poster moment, by
+//    reference (<use>) into a cached static document (web-poster-svg.ts), so
+//    the HTML only carries a few elements. Only the shown band is rendered.
 //  - WebOverlay: the hub (glass plate and the lens of the mark), agent ports,
 //    a few haloed names and direction in words, per band.
 import { lensPath } from "@/components/hero/geometry";
-import { FONT } from "./field";
-import { POSTER_T } from "./schedule";
-import { cellLight, cellLook, rampAt, WEB_LOOK, webRows } from "./web-light";
-import { createWeb, frameAt, WEB, type WebLayout } from "./web-model";
+import { WEB, type Band, type WebLayout } from "./web-model";
+import poster from "./posters/web.svg";
 
 const box = (l: WebLayout) => `0 0 ${l.width} ${l.height}`;
+const DOC: { src: string } = poster;
 
-function metrics(l: WebLayout) {
-  const [cols, rows] = l.grid;
-  const cw = l.width / cols;
-  const ch = l.height / rows;
-  const font = ch * FONT.scale;
-  return { cols, rows, cw, ch, font, spacing: cw - font * 0.6, baseline: (r: number) => r * ch + ch / 2 + font * FONT.baseline };
-}
-
-/** The quiet field: every row in one run, lane-muted at the base alpha. */
-export function WebField({ variant, className }: { variant: "wide" | "tall"; className?: string }) {
+/** One layer of the poster document (`field` or `lit-<band>`), inheriting the page's mono face. */
+export function WebPoster({ variant, layer, className }: { variant: "wide" | "tall"; layer: "field" | Band; className?: string }) {
   const l = variant === "wide" ? WEB.M : WEB.tall;
-  const m = metrics(l);
-  const text = webRows(m.cols, m.rows);
   return (
-    <svg viewBox={box(l)} className={className} aria-hidden="true" preserveAspectRatio="xMidYMid slice">
-      <g className="dg-mono" fontSize={m.font} letterSpacing={m.spacing} xmlSpace="preserve" fill="var(--lane-muted)" fillOpacity={WEB_LOOK.base}>
-        {text.map((row, r) => (
-          <text key={r} x={m.spacing / 2} y={m.baseline(r)}>
-            {row}
-          </text>
-        ))}
-      </g>
-    </svg>
-  );
-}
-
-type Run = { c: number; text: string; fill: string; opacity: number };
-
-/** The cells lit at the poster moment, drawn over the quiet field at the same grid positions. */
-export function WebLit({ layout: l, className }: { layout: WebLayout; className?: string }) {
-  const m = metrics(l);
-  const frame = frameAt(l, createWeb(l).live(POSTER_T), POSTER_T);
-  const light = cellLight(l, frame);
-  const text = webRows(m.cols, m.rows);
-  const rows = Array.from({ length: m.rows }, (_, r) => {
-    const runs: Run[] = [];
-    for (let c = 0; c < m.cols; c++) {
-      const i = (r * m.cols + c) * 4;
-      const k = cellLook(light[i], light[i + 1], light[i + 2]);
-      if (k.alpha < WEB_LOOK.base + 0.012 && k.hue < 0.5) continue;
-      const fill = k.hue >= 0.5 ? (k.share > 0.5 ? "var(--lane-orange)" : "var(--lane-teal)") : k.n > 0.35 ? "var(--lane-ink)" : "var(--lane-muted)";
-      const opacity = Math.round(k.alpha * 40) / 40;
-      const g = rampAt(text[r][c], k.a);
-      const last = runs.at(-1);
-      if (last && last.c + last.text.length === c && last.fill === fill && last.opacity === opacity) last.text += g;
-      else runs.push({ c, text: g, fill, opacity });
-    }
-    return runs;
-  });
-  const glow = `web-glow-${l.band}`;
-  return (
-    <svg viewBox={box(l)} className={className} aria-hidden="true" preserveAspectRatio="xMidYMid slice">
-      <defs>
-        <radialGradient id={glow}>
-          <stop offset="0.4" stopColor="var(--lane-ink)" stopOpacity={frame.glow * 0.3} />
-          <stop offset="1" stopColor="var(--lane-ink)" stopOpacity={0} />
-        </radialGradient>
-      </defs>
-      <ellipse cx={l.hub.cx} cy={l.hub.cy} rx={l.plate.w * 1.05} ry={l.plate.h * 1.05} fill={`url(#${glow})`} />
-      <g className="dg-mono" fontSize={m.font} letterSpacing={m.spacing} xmlSpace="preserve">
-        {rows.map((runs, r) =>
-          runs.length ? (
-            <text key={r} y={m.baseline(r)}>
-              {runs.map((run) => (
-                <tspan key={run.c} x={run.c * m.cw + m.spacing / 2} fill={run.fill} fillOpacity={run.opacity}>
-                  {run.text}
-                </tspan>
-              ))}
-            </text>
-          ) : null,
-        )}
-      </g>
+    <svg viewBox={box(l)} className={`dg-mono ${className ?? ""}`} aria-hidden="true" preserveAspectRatio="xMidYMid slice">
+      <use href={`${DOC.src}#${layer === "field" ? `field-${variant}` : `lit-${layer}`}`} />
     </svg>
   );
 }

@@ -321,9 +321,9 @@ test("B's hub lamp: rim flashes, neutral glow and ripples for every envelope", (
 
 test("the web starts, recolours and disposes on the mock adapter", async () => {
   const palette = { lane: [0, 0, 0], laneRaised: [0, 0, 0], laneLine: [0, 0, 0], laneInk: [1, 1, 1], laneMuted: [0.6, 0.6, 0.6], teal: [0.24, 0.72, 0.67], orange: [0.96, 0.65, 0.26] };
-  for (const layout of Object.values(webModel.WEB)) {
+  for (const band of Object.keys(webModel.WEB)) {
     const canvas = new MockCanvas();
-    const hero = await webMod.startWeb(canvas, { layout, palette });
+    const hero = await webMod.startWeb(canvas, { band, palette });
     await new Promise((r) => setTimeout(r, 40));
     hero.setPalette({ ...palette, laneInk: [0.9, 0.9, 0.9] });
     hero.setPaused(true);
@@ -409,4 +409,34 @@ test("cover mapping: client point → design → device pixel round-trips", () =
       assert.ok(Math.abs(ux * dev.k + dev.x - cx * dpr) < 1e-6 && Math.abs(uy * dev.k + dev.y - cy * dpr) < 1e-6);
     }
   }
+});
+
+// ---- lightweight: the external poster document, the line early-out, the pixel budget ----
+
+const { readFileSync } = await import("node:fs");
+const posterDoc = await import("./web-poster-svg.ts");
+
+test("posters/web.svg is up to date (run tools/bake-web.mjs after changing the web)", () => {
+  const committed = readFileSync(new URL("./posters/web.svg", import.meta.url), "utf8");
+  assert.equal(committed, posterDoc.posterSvg());
+  for (const id of ["field-wide", "field-tall", "lit-P", "lit-M", "lit-W", "lit-tall"]) assert.ok(committed.includes(`id="${id}"`), id);
+  assert.ok(!committed.includes("var(--"), "literal colours: an external document cannot see page variables");
+});
+
+test("a line's light stays inside its inflated box", () => {
+  const l = webModel.WEB.W;
+  const t = 52;
+  const frame = webModel.frameAt(l, webModel.createWeb(l).live(t), t, { copy: [-1, -1, -1, -1] });
+  const sigma = webLight.lineSigma(l);
+  assert.ok(Math.exp(-((4 * sigma) ** 2) / (2 * sigma ** 2)) < 4e-4, "4 sigma is beyond any visible light");
+  for (const line of frame.lines) {
+    const [x0, y0, x1, y1] = webLight.lineBox(line.pts, l);
+    for (let j = 0; j < line.pts.length; j += 2) assert.ok(line.pts[j] - x0 >= 4 * sigma - 1e-6 && x1 - line.pts[j] >= 4 * sigma - 1e-6 && line.pts[j + 1] - y0 >= 4 * sigma - 1e-6 && y1 - line.pts[j + 1] >= 4 * sigma - 1e-6);
+  }
+});
+
+test("the canvas keeps to its pixel budget", () => {
+  assert.equal(webMod.dprCap(1425, 900), 1.5);
+  assert.ok(Math.abs(webMod.dprCap(2545, 980) * webMod.dprCap(2545, 980) * 2545 * 980 - webMod.PIXEL_BUDGET) < 1);
+  assert.equal(webMod.dprCap(5000, 2000), 1);
 });

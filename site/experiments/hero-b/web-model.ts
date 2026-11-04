@@ -6,11 +6,12 @@
 // bigger orange result. Then the line dies and another lights up elsewhere.
 // Everything here is analytic and deterministic, so the server poster
 // (web-poster.tsx) and the live shader (web-cells.wgsl) compute the same light.
-import { rng } from "./schedule";
+import { rng } from "./prng";
 
+import type { Band } from "./web-bands";
+
+export { BAND_QUERY, bandFor, cover, type Band } from "./web-bands";
 export type WebAgent = { id: string; role: "orchestrator" | "worker"; x: number; y: number; label?: "left" | "right" };
-/** Desktop aspect bands (P under 1.3, M to 1.9, W beyond) and the phone layout. */
-export type Band = "P" | "M" | "W" | "tall";
 export type WebLayout = {
   band: Band;
   variant: "wide" | "tall";
@@ -37,14 +38,6 @@ export type WebLayout = {
    */
   copy: readonly [number, number, number, number];
 };
-
-/**
- * Band queries on the viewport's aspect ratio. CSS shows a band's poster layers
- * with these exact strings and the live layer picks its layout with
- * matchMedia on them, so the poster and the first live frame always agree.
- */
-export const BAND_QUERY = { M: "(min-aspect-ratio: 13/10)", W: "(min-aspect-ratio: 19/10)" } as const;
-export const bandFor = (matches: (q: string) => boolean): "P" | "M" | "W" => (matches(BAND_QUERY.W) ? "W" : matches(BAND_QUERY.M) ? "M" : "P");
 
 const plateOf = (cx: number, cy: number, size: number, r: number) => {
   const half = size * 0.82;
@@ -127,12 +120,6 @@ export const WEB: Record<Band, WebLayout> = {
     copy: [17, 80, 384, 495],
   },
 };
-
-/** Cover ("slice") mapping of the design space onto a box of `w` × `h` (any unit). */
-export function cover(l: Pick<WebLayout, "width" | "height">, w: number, h: number) {
-  const k = Math.max(w / l.width, h / l.height);
-  return { k, x: (w - l.width * k) / 2, y: (h - l.height * k) / 2 };
-}
 
 // ---- lines ----
 
@@ -256,6 +243,9 @@ export type WebFrame = {
   /** The copy block the field yields around (design units): x0, y0, x1, y1, feather. */
   mask: [number, number, number, number, number];
 };
+
+/** The moment the web's poster shows and its live layer starts from. */
+export const WEB_POSTER_T = 30;
 
 export const CLICKS = 4;
 /** Feather of the copy mask, design units (at least 120 CSS px down to a 760 px tall hero). */

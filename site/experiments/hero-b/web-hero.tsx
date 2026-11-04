@@ -9,7 +9,7 @@ import { HERO_LOG } from "@/content/home";
 import { INVITE_REQUEST_URL } from "@/content/site";
 import { WEB } from "./web-model";
 import { WebLive, WebPause, WebSection } from "./web-live";
-import { WebField, WebLit, WebOverlay } from "./web-svg";
+import { WebOverlay, WebPoster } from "./web-svg";
 import css from "./web.module.css";
 
 const BANDS = ["P", "M", "W"] as const;
@@ -24,10 +24,10 @@ export function WebHero() {
             variant="wide"
             poster={
               <>
-                <WebField variant="wide" className={css.fill} />
+                <WebPoster variant="wide" layer="field" className={css.fill} />
                 {BANDS.map((b) => (
                   <div key={b} className={bandClass[b]}>
-                    <WebLit layout={WEB[b]} className={css.fill} />
+                    <WebPoster variant="wide" layer={b} className={css.fill} />
                   </div>
                 ))}
               </>
@@ -44,8 +44,8 @@ export function WebHero() {
             variant="tall"
             poster={
               <>
-                <WebField variant="tall" className={css.fill} />
-                <WebLit layout={WEB.tall} className={css.fill} />
+                <WebPoster variant="tall" layer="field" className={css.fill} />
+                <WebPoster variant="tall" layer="tall" className={css.fill} />
               </>
             }
           />

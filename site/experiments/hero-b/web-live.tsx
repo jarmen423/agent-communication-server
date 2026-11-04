@@ -10,10 +10,31 @@
 // it) and turns a pointerdown on empty field into a neutral ring.
 // The poster crossfades out once the live canvas has a frame.
 import { useEffect, useRef, useState } from "react";
-import { readPalette } from "@/components/hero/gpu-stage";
+import type { HeroPalette } from "@/components/hero/gpu-stage";
 import type { WebRenderer } from "./web";
-import { BAND_QUERY, bandFor, cover, WEB, type Band } from "./web-model";
+import { BAND_QUERY, bandFor, cover, DESIGN, type Band } from "./web-bands";
 import css from "./web.module.css";
+
+// Copy of readPalette() from components/hero/gpu-stage.tsx: importing it would
+// pull the shared stage module into this first-paint chunk.
+const VARS: Record<keyof HeroPalette, string> = {
+  lane: "--lane",
+  laneRaised: "--lane-raised",
+  laneLine: "--lane-line",
+  laneInk: "--lane-ink",
+  laneMuted: "--lane-muted",
+  teal: "--lane-teal",
+  orange: "--lane-orange",
+};
+function readPalette(el: Element): HeroPalette {
+  const cs = getComputedStyle(el);
+  const out = {} as HeroPalette;
+  for (const [k, v] of Object.entries(VARS) as [keyof HeroPalette, string][]) {
+    const hex = cs.getPropertyValue(v).trim().replace("#", "");
+    out[k] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
+  }
+  return out;
+}
 
 /** Pointerdowns here are the page's own controls and text, not the field. */
 const NOT_FIELD = "a, button, input, header, [data-web-log], [data-web-copy]";
@@ -51,7 +72,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     if (!("gpu" in navigator) || reduced.matches || new URLSearchParams(location.search).get("gpu") === "off") return;
     if (el.offsetParent === null) return; // only the variant that is displayed starts
 
-    const layout = WEB[band];
+    const design = DESIGN[band === "tall" ? "tall" : "wide"];
     const section = el.closest("section");
     let renderer: WebRenderer | null = null;
     let disposed = false;
@@ -61,7 +82,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       try {
         const mod = await load();
         if (disposed) return;
-        renderer = await mod.startWeb(cv, { layout, palette: readPalette(el) });
+        renderer = await mod.startWeb(cv, { band, palette: readPalette(el) });
         if (disposed) return renderer.dispose();
         sync();
         measure();
@@ -74,7 +95,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     // Client px → design units, through the canvas's own cover mapping.
     const toDesign = (x: number, y: number) => {
       const r = cv.getBoundingClientRect();
-      const m = cover(layout, r.width, r.height);
+      const m = cover(design, r.width, r.height);
       return [(x - r.left - m.x) / m.k, (y - r.top - m.y) / m.k] as const;
     };
     const copy = section?.querySelector("[data-web-copy]");

@@ -1,7 +1,7 @@
 // Glyph atlas for the ASCII layers: IBM Plex Mono (the site's --font-mono)
 // drawn into canvas 2D at the live cell size, coverage only, uploaded as RGBA
 // texels (value in R: universally supported, and what the mock adapter models).
-import { FONT } from "./field";
+import { FONT } from "./glyphs";
 
 /** Glyph coverage atlas: `cols` slots per row, each `slot` texels, one byte per texel. */
 export type Atlas = { data: Uint8Array<ArrayBuffer>; width: number; height: number; cols: number; slot: [number, number] };

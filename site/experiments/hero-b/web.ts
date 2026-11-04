@@ -5,12 +5,11 @@ import { effect, init, sampler, surface, target, texture } from "vgpu";
 import type { Frame, Gpu, Target, Texture } from "vgpu";
 import type { HeroPalette, HeroRenderer } from "@/components/hero/gpu-stage";
 import { ATLAS_COLS, canvasAtlas, monoFamily, rgba, type AtlasMaker } from "./atlas";
-import { FONT, glyphTable } from "./field";
+import { FONT, glyphTable } from "./glyphs";
 import { run } from "./run";
-import { POSTER_T } from "./schedule";
 import cellsShader from "./web-cells.wgsl";
-import { WEB_LOOK, WEB_RAMP, YIELD, lineSigma, webRows } from "./web-light";
-import { clickRings, cover, createWeb, frameAt, LINE_POINTS, PULSES_PER_LINE, RIPPLES, type WebFrame, type WebLayout } from "./web-model";
+import { WEB_LOOK, WEB_RAMP, YIELD, lineBox, lineSigma, webRows } from "./web-light";
+import { clickRings, cover, createWeb, frameAt, LINE_POINTS, PULSES_PER_LINE, RIPPLES, WEB, WEB_POSTER_T, type Band, type WebFrame, type WebLayout } from "./web-model";
 import fieldShader from "./web.wgsl";
 
 export type WebRenderer = HeroRenderer & {
@@ -19,17 +18,19 @@ export type WebRenderer = HeroRenderer & {
   /** A visitor's click at a design-space point: one neutral ring. */
   click(x: number, y: number): void;
 };
-export type WebModule = { startWeb(canvas: HTMLCanvasElement, opts: { layout: WebLayout; palette: HeroPalette }): Promise<WebRenderer> };
+export type WebModule = { startWeb(canvas: HTMLCanvasElement, opts: { band: Band; palette: HeroPalette }): Promise<WebRenderer> };
 
 /** The per-frame uniform for web-cells.wgsl. */
 export function webUniform(l: WebLayout, f: WebFrame) {
   const [cols, rows] = l.grid;
   const lineInfo: number[][] = [];
+  const boxes: number[][] = [];
   const pts: number[][] = [];
   const pulses: number[][] = [];
   for (let i = 0; i < 6; i++) {
     const line = f.lines[i];
     lineInfo.push(line ? [line.alive, line.pulses.length, 0, 0] : [0, 0, 0, 0]);
+    boxes.push(line ? lineBox(line.pts, l) : [1, 1, -1, -1]);
     for (let j = 0; j < LINE_POINTS; j += 2) pts.push(line ? Array.from(line.pts.subarray(j * 2, j * 2 + 4)) : [0, 0, 0, 0]);
     for (let k = 0; k < PULSES_PER_LINE; k++) pulses.push(line?.pulses[k] ?? [0, 0, 1, 1]);
   }
@@ -41,6 +42,7 @@ export function webUniform(l: WebLayout, f: WebFrame) {
     lines: Math.min(6, f.lines.length),
     look: [WEB_LOOK.ahead, WEB_LOOK.lift, WEB_LOOK.ripple, 0],
     line_info: lineInfo,
+    line_box: boxes,
     pts,
     pulses,
     ripples: f.ripples.slice(0, RIPPLES),
@@ -53,13 +55,13 @@ export function webUniform(l: WebLayout, f: WebFrame) {
 export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, size: readonly [number, number], makeAtlas: AtlasMaker) {
   const [cols, rows] = l.grid;
   const web = createWeb(l);
-  let t = POSTER_T;
+  let t = WEB_POSTER_T;
   let copy: readonly number[] = l.copy;
   const clicks: { x: number; y: number; t: number }[] = [];
   const frameNow = () => frameAt(l, web.live(t), t, { copy, clicks: clickRings(clicks, t) });
   const cells = target(gpu, { size: [cols, rows], format: "rgba16float", label: "hero-b.web-cells" });
   const light = effect(gpu, cellsShader, { set: { web: webUniform(l, frameNow()) } });
-  const { chars, index } = glyphTable(webRows(cols, rows));
+  const { chars, index } = glyphTable(webRows(cols, rows), WEB_RAMP.chars);
   const text = texture(gpu, { kind: "2d", size: [cols, rows], format: "rgba8uint", usage: ["texture_binding", "copy_dst"], label: "hero-b.web-text" });
   gpu.gpu.queue.writeTexture({ texture: text.gpu }, rgba(index), { bytesPerRow: cols * 4 }, [cols, rows]);
 
@@ -143,12 +145,18 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
   };
 }
 
-export const startWeb: WebModule["startWeb"] = async (canvas, { layout, palette }) => {
+/** About 3.2 M device px: 1.5 on a 1440 × 900 retina hero, ~1.13 on 2560 × 980, never below 1. */
+export const PIXEL_BUDGET = 3.2e6;
+export const dprCap = (w: number, h: number) => Math.max(1, Math.min(1.5, Math.sqrt(PIXEL_BUDGET / Math.max(1, w * h))));
+
+export const startWeb: WebModule["startWeb"] = async (canvas, { band, palette }) => {
+  const layout = WEB[band];
   const family = await monoFamily(canvas);
   const gpu = await init();
   try {
-    // A full-viewport canvas: the field pass is capped at 1.5 device px per CSS px.
-    const out = surface(gpu, canvas, { dpr: [1, 1.5] });
+    // A full-viewport canvas: at most 1.5 device px per CSS px, and less on very
+    // large heroes so the field pass stays near a fixed pixel budget.
+    const out = surface(gpu, canvas, { dpr: [1, dprCap(canvas.clientWidth, canvas.clientHeight)] });
     const layer = createWebLayer(gpu, layout, palette, out.size, canvasAtlas(family));
     out.onResize(({ width, height }) => layer.resize(width, height));
     await layer.compile(out);

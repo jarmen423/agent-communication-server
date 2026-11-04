@@ -2,7 +2,8 @@
 // (no feedback buffer): for every live line, the distance from the cell to
 // the line and the arc length there; the line lifts nearby cells while alive,
 // and each signal is a pulse with a sharp front and a fading tail. Ripples
-// from the hub and visitor clicks add neutral rings. Around the copy block the
+// from the hub and visitor clicks add neutral rings. Lines skip cells outside
+// their inflated bounding box (most cells, for most lines). Around the copy block the
 // field yields: everything falls to a floor inside a feathered rounded rect.
 // Mirrors cellLight() in web-light.ts, which renders the server poster.
 // Output: R sent (teal), G received (orange), B neutral, A yield (0 under the copy; for tests and tools).
@@ -15,6 +16,7 @@ struct Web {
   lines: f32,                 // live line count
   look: vec4f,                // pulse front width, lift weight, ripple weight, unused
   line_info: array<vec4f, 6>, // per line: alive, pulse count
+  line_box: array<vec4f, 6>,  // per line: bounding box inflated by 4 sigma (outside it the line adds nothing)
   pts: array<vec4f, 48>,      // per line 16 points, two per vec4
   pulses: array<vec4f, 36>,   // per line 6: head arc length, amp (+ sent, - received), direction, tail
   ripples: array<vec4f, 8>,   // radius, amp, width
@@ -38,6 +40,8 @@ fn point(i: i32, j: i32) -> vec2f {
   let n = i32(web.lines);
   for (var i = 0; i < 6; i++) {
     if (i >= n) { break; }
+    let box = web.line_box[i];
+    if (u.x < box.x || u.y < box.y || u.x > box.z || u.y > box.w) { continue; }
     var best = 1e20;
     var best_s = 0.0;
     var run = 0.0;
