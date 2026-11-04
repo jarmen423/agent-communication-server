@@ -16,11 +16,13 @@ import { CARD, placeSteady } from "./web-places";
  * B's track widths and speeds, in the web's design units. The hero is
  * height-bound (cover over 1000 design units), so on a laptop the web draws at
  * about 0.9 css px per unit, close to B's stage: widths stay B's, a touch
- * bolder; runs are longer here, so messages travel a little faster.
+ * bolder; runs are longer here, so messages travel a little faster. Places
+ * fork four or five ways, so the gate sits further out than B's (the
+ * branches merge at a gentler slope).
  */
 const TRACK = {
-  wide: { sigma: 0.75, halo: 2.8, gap: 5, drift: 2.6, speed: 1.3, gate: 40 },
-  tall: { sigma: 0.72, halo: 2.6, gap: 4, drift: 1.8, speed: 0.7, gate: 22 },
+  wide: { sigma: 0.75, halo: 2.8, gap: 5, drift: 2.6, speed: 1.3, gate: 58 },
+  tall: { sigma: 0.72, halo: 2.6, gap: 4, drift: 1.8, speed: 0.7, gate: 28 },
 } as const;
 
 /** Where a slot's trunk starts (the gate) and where it meets the plate (entry, with the trunk's direction out of the plate there). */

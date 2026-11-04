@@ -18,21 +18,21 @@ const W: Role = "worker";
 export const PLACES: Record<string, Place> = Object.fromEntries(
   (
     [
-      ["laptop-1", [["me", O], ["codex-2", W]]],
-      ["website-2", [["claude-web-1", O], ["chatgpt-web-1", O]]],
-      ["teammate-2", [["claude-8", O], ["hermes-3", W]]],
-      ["teammate-4", [["codex-5", O], ["claude-6", W]]],
-      ["cloud-1", [["codex-1", W], ["opencode-1", W], ["kilo-1", W]]],
-      ["cloud-2", [["claude-2", W], ["codex-3", W], ["agy-1", W]]],
-      ["cloud-3", [["codex-4", W], ["kilo-2", W]]],
-      ["cloud-4", [["claude-7", W], ["opencode-3", W]]],
-      ["office-1", [["cursor-2", W], ["claude-5", W]]],
-      ["office-2", [["grok-2", W], ["codex-6", W]]],
-      ["office-3", [["claude-1", W], ["cursor-1", W], ["grok-1", W]]],
-      ["home-1", [["hermes-1", W], ["agy-2", W]]],
-      ["home-2", [["hermes-2", W], ["opencode-2", W]]],
-      ["home-3", [["claude-4", W], ["hermes-4", W]]],
-      ["ci-4", [["ci-1", W], ["ci-2", W]]],
+      ["laptop-1", [["me", O], ["codex-2", W], ["claude-11", W], ["cursor-4", W]]],
+      ["website-2", [["claude-web-1", O], ["chatgpt-web-1", O], ["grok-web-1", O], ["claude-web-2", O]]],
+      ["teammate-2", [["claude-8", O], ["hermes-3", W], ["codex-11", W], ["opencode-5", W]]],
+      ["teammate-4", [["codex-5", O], ["claude-6", W], ["kilo-4", W], ["agy-3", W]]],
+      ["cloud-1", [["codex-1", W], ["opencode-1", W], ["kilo-1", W], ["claude-12", W], ["codex-12", W]]],
+      ["cloud-2", [["claude-2", W], ["codex-3", W], ["agy-1", W], ["hermes-6", W], ["grok-4", W]]],
+      ["cloud-3", [["codex-4", W], ["kilo-2", W], ["claude-13", W], ["opencode-6", W]]],
+      ["cloud-4", [["claude-7", W], ["opencode-3", W], ["codex-13", W], ["kilo-5", W], ["agy-4", W]]],
+      ["office-1", [["cursor-2", W], ["claude-5", W], ["codex-14", W], ["grok-5", W]]],
+      ["office-2", [["grok-2", W], ["codex-6", W], ["cursor-5", W], ["claude-14", W], ["hermes-7", W]]],
+      ["office-3", [["claude-1", W], ["cursor-1", W], ["grok-1", W], ["codex-15", W]]],
+      ["home-1", [["hermes-1", W], ["agy-2", W], ["claude-15", W], ["opencode-7", W]]],
+      ["home-2", [["hermes-2", W], ["opencode-2", W], ["codex-16", W], ["kilo-6", W], ["claude-16", W]]],
+      ["home-3", [["claude-4", W], ["hermes-4", W], ["cursor-6", W], ["codex-17", W]]],
+      ["ci-4", [["ci-1", W], ["ci-2", W], ["ci-3", W], ["ci-5", W]]],
       // Beyond the frame (reach slots): never labelled, always there.
       ["cloud-5", [["codex-7", W], ["claude-3", W], ["kilo-3", W]]],
       ["teammate-5", [["claude-9", O], ["codex-8", W]]],
@@ -53,10 +53,10 @@ export type Reach = { face: number; gate: P2; c1: P2; c2: P2 };
 /** A slot: title baseline at (x, y); ports run down from it; names on the `align` side. */
 export type Slot = { x: number; y: number; align: "start" | "end"; places: readonly string[]; reach?: Reach };
 
-/** Card metrics per variant (design units). */
+/** Card metrics per variant (design units): every place shows up to `rows` agents, so each track's end forks four or five ways (three on phones). */
 export const CARD = {
-  wide: { title: 13, name: 12, row: 18, first: 20, rows: 3 },
-  tall: { title: 12, name: 11, row: 16, first: 18, rows: 2 },
+  wide: { title: 13, name: 12, row: 18, first: 20, rows: 5 },
+  tall: { title: 12, name: 11, row: 15, first: 17, rows: 3 },
 } as const;
 
 const S = (x: number, y: number, align: Slot["align"], ...places: string[]): Slot => ({ x, y, align, places });
@@ -95,7 +95,7 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1795, 425, "start", "home-1", "teammate-4"),
     S(1785, 615, "start", "ci-4", "office-1"),
     S(1625, 735, "end", "cloud-3", "home-3"),
-    S(1340, 735, "end", "office-2", "cloud-4"),
+    S(1340, 728, "end", "office-2", "cloud-4"),
     S(1040, 745, "end", "website-2", "teammate-2"),
     S(740, 735, "end", "laptop-1"),
     ...REACH.M,
@@ -106,17 +106,18 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1880, 200, "start", "cloud-1", "home-2", "home-1"),
     S(1965, 420, "start", "teammate-4", "cloud-3"),
     S(1955, 640, "start", "office-2", "cloud-4", "ci-4"),
-    S(1690, 740, "end", "teammate-2"),
-    S(1385, 740, "end", "office-1", "home-3"),
-    S(1080, 740, "end", "website-2"),
-    S(760, 730, "end", "laptop-1"),
+    S(1690, 715, "end", "teammate-2"),
+    S(1385, 715, "end", "office-1", "home-3"),
+    S(1080, 715, "end", "website-2"),
+    S(760, 720, "end", "laptop-1"),
     ...REACH.W,
   ],
   tall: [
     S(36, 540, "start", "laptop-1"),
     S(364, 540, "end", "office-3", "home-1"),
-    S(36, 640, "start", "teammate-2", "home-2"),
-    S(364, 640, "end", "cloud-1", "office-1"),
+    // teammate-2 stays: with laptop-1 always there, some orchestrator always has a worker on screen.
+    S(36, 640, "start", "teammate-2"),
+    S(364, 640, "end", "cloud-1", "office-1", "home-2"),
   ],
 };
 

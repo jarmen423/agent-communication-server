@@ -24,7 +24,7 @@ const { WEB } = await import("../web-model.ts");
 const { createTrails } = await import("../web-trails.ts");
 
 /** Bake scale per band (px per design unit): soft light survives the upscale. */
-const SCALE = { P: 0.75, M: 0.7, W: 0.7, tall: 1 };
+const SCALE = { P: 0.75, M: 0.7, W: 0.66, tall: 1 };
 // Brand lane colours (identical in both themes): --lane-teal, --lane-orange.
 const hex = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
 const palette = { teal: hex("3cb8ab"), orange: hex("f5a742") };

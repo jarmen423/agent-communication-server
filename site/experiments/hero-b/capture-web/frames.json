@@ -16,6 +16,6 @@
   ],
   "frames": 53,
   "medianMs": "150.0",
-  "p95Ms": "183.4",
+  "p95Ms": "183.3",
   "note": "rAF interval under SwiftShader; rough guide only"
 }
