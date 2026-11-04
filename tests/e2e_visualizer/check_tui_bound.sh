@@ -36,7 +36,13 @@ export NATS_URL="nats://127.0.0.1:$nats_port"
 "$CARGO_TARGET_DIR/debug/hub-server" --nats-url "$NATS_URL" --db-path "$tmp/db" \
   --require-bound-identity --api-admin test-admin >"$tmp/hub.log" 2>&1 &
 pids+=("$!")
-sleep 1; kill -0 "${pids[-1]}" 2>/dev/null || { cat "$tmp/hub.log"; exit 1; }
+# Wait until the query API answers (startup can take more than a second).
+for _ in $(seq 1 100); do
+  kill -0 "${pids[-1]}" 2>/dev/null || { cat "$tmp/hub.log"; exit 1; }
+  NATS_HUB_IDENTITY=test-admin "$CARGO_TARGET_DIR/debug/hub-agents" --nats-url "$NATS_URL" \
+    >/dev/null 2>&1 && break
+  sleep 0.2
+done
 
 TUI="$CARGO_TARGET_DIR/debug/hub-tui"
 # Positive: bound identity starts the TUI (pty via `script`, quit with q).
