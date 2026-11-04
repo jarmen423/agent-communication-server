@@ -479,7 +479,26 @@ test("the field yields around the copy, with a smooth feather and no edge", () =
   const open = webLight.cellLight(l, webModel.groundFrame(l, msgs, POSTER_T, { copy: [-1, -1, -1, -1], clicks }));
   const covered = webLight.cellLight(l, webModel.groundFrame(l, msgs, POSTER_T, { copy: [-100, -100, l.width + 100, l.height + 100], clicks }));
   assert.ok(open.some((v, i) => i % 2 === 0 && v > 0.1), "rings light the open field");
-  for (let i = 0; i < open.length; i += 2) assert.ok(covered[i] <= open[i] * webLight.YIELD.floor * (1 + 1e-5) + 1e-6);
+  for (let i = 0; i < open.length; i += 2) assert.ok(covered[i] <= open[i] * webLight.CLICK_YIELD.floor * (1 + 1e-5) + 1e-6);
+  const hubOnly = (copy) => webLight.cellLight(l, webModel.groundFrame(l, msgs, POSTER_T, { copy }));
+  const hubOpen = hubOnly([-1, -1, -1, -1]);
+  const hubCovered = hubOnly([-100, -100, l.width + 100, l.height + 100]);
+  for (let i = 0; i < hubOpen.length; i += 2) assert.ok(hubCovered[i] <= hubOpen[i] * webLight.YIELD.floor * (1 + 1e-5) + 1e-6, "hub rings yield fully");
+});
+
+test("a click rings clearly anywhere on the field, beside the copy too; right behind it, dimmed but there", () => {
+  const l = webModel.WEB.M;
+  const at = (x, y, copy = l.copy) => {
+    const frame = webModel.groundFrame(l, [], 10, { copy, clicks: webModel.clickRings([{ x, y, t: 9.7 }], 10) });
+    const light = webLight.cellLight(l, frame);
+    let sum = 0;
+    for (let i = 0; i < light.length; i += 2) sum += light[i];
+    return sum;
+  };
+  const [x0, y0, x1, y1] = l.copy;
+  const away = at(1500, 750, [-1, -1, -1, -1]);
+  for (const [x, y] of [[x0 - 60, (y0 + y1) / 2], [(x0 + x1) / 2, y1 + 60], [x1 + 60, y0]]) assert.ok(at(x, y) > away * 0.6, `beside the copy at ${x}, ${y}`);
+  assert.ok(at((x0 + x1) / 2, (y0 + y1) / 2) > away * webLight.CLICK_YIELD.floor * 0.9, "inside the block: at least the click floor");
 });
 
 test("click rings: neutral, at most four, oldest dropped, gone in about 1.5 s", () => {

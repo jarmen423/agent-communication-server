@@ -37,8 +37,18 @@ function readPalette(el: Element): HeroPalette {
   return out;
 }
 
-/** Pointerdowns here are the page's own controls and text, not the field. */
-const NOT_FIELD = "a, button, input, header, [data-web-log], [data-web-copy]";
+/** Pointerdowns here are the page's own controls and chrome, not the field. */
+const NOT_FIELD = "a, button, input, header, [data-web-log]";
+
+/** True on a line of the copy's text (a pointerdown there selects text); the block's empty space is field. */
+function onText(copy: Element, x: number, y: number) {
+  const r = document.createRange();
+  for (const el of copy.querySelectorAll(".hero-title, .hero-sub")) {
+    r.selectNodeContents(el);
+    for (const b of r.getClientRects()) if (x >= b.left - 4 && x <= b.right + 4 && y >= b.top && y <= b.bottom) return true;
+  }
+  return false;
+}
 /** The copy rect grows by this much (CSS px) before the feather starts. */
 const COPY_MARGIN = 16;
 
@@ -115,6 +125,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     if (copy) ro.observe(copy);
     const onPointer = (e: PointerEvent) => {
       if (!renderer || (e.target instanceof Element && e.target.closest(NOT_FIELD))) return;
+      if (copy && e.target instanceof Node && copy.contains(e.target) && onText(copy, e.clientX, e.clientY)) return;
       const [x, y] = toDesign(e.clientX, e.clientY);
       renderer.click(x, y);
     };

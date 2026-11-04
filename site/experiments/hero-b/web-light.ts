@@ -19,6 +19,12 @@ export const YIELD = { floor: 0.15, radius: 40 };
  * paragraph. Tracks only: the ground keeps YIELD everywhere.
  */
 export const HEAD = { floor: 0.6, ramp: 32 };
+/**
+ * A visitor's click rings yield far less: only right behind the copy block
+ * (to `floor`, over a short `feather`), so a click anywhere on the field,
+ * next to the headline too, rings clearly. Hub ripples keep YIELD.
+ */
+export const CLICK_YIELD = { floor: 0.35, feather: 40 };
 
 /** 0 inside the copy block, rising (smoothstep) to 1 at `feather` outside it: no edge anywhere. */
 export function yieldAt(x: number, y: number, m: readonly number[]) {
@@ -52,8 +58,9 @@ export function cellLight(l: WebLayout, f: WebFrame): Float32Array {
       }
       const y = yieldAt(ux, uy, f.mask);
       const k = YIELD.floor + (1 - YIELD.floor) * y;
+      const kc = CLICK_YIELD.floor + (1 - CLICK_YIELD.floor) * yieldAt(ux, uy, [...f.mask.slice(0, 4), CLICK_YIELD.feather]);
       const i = (r * cols + c) * 2;
-      out[i] = (ripple * WEB_LOOK.ripple + click * WEB_LOOK.click) * k;
+      out[i] = ripple * WEB_LOOK.ripple * k + click * WEB_LOOK.click * kc;
       out[i + 1] = y;
     }
   }

@@ -11,7 +11,7 @@ import { ATLAS_COLS, canvasAtlas, monoFamily, rgba, type AtlasMaker } from "./at
 import { FONT, glyphTable } from "./glyphs";
 import { run } from "./run";
 import cellsShader from "./web-cells.wgsl";
-import { WEB_LOOK, YIELD, webRows } from "./web-light";
+import { CLICK_YIELD, WEB_LOOK, YIELD, webRows } from "./web-light";
 import { clickRings, cover, FEATHER, groundFrame, WEB, type Band, type WebFrame, type WebLayout } from "./web-model";
 import { createTrails } from "./web-trails";
 import fieldShader from "./web.wgsl";
@@ -30,7 +30,7 @@ export function webUniform(l: WebLayout, f: WebFrame) {
   return {
     hub: [l.hub.cx, l.hub.cy],
     cell: [l.width / l.grid[0], l.height / l.grid[1]],
-    look: [WEB_LOOK.ripple, WEB_LOOK.click, 0, 0],
+    look: [WEB_LOOK.ripple, WEB_LOOK.click, CLICK_YIELD.floor, CLICK_YIELD.feather],
     ripples: f.ripples,
     clicks: f.clicks,
     mask: f.mask.slice(0, 4),
