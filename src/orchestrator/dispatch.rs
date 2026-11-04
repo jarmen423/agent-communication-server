@@ -68,7 +68,12 @@ impl WaveOrchestrator {
         task: &WaveTaskRecord,
     ) -> Result<()> {
         self.ensure_task_session(wave_id, task).await;
-        let env = messages::session_start(self.client.identity(), wave_id, task);
+        let env = messages::session_start(
+            self.client.identity(),
+            &self.waves[wave_id].owner,
+            wave_id,
+            task,
+        );
         self.client
             .send(&env)
             .await
@@ -152,12 +157,18 @@ impl WaveOrchestrator {
                 .and_then(|rt| rt.dispatch_ids.get(&task.task_id))
                 .cloned()
                 .unwrap_or_else(|| task.task_id.clone());
-            let env = messages::cancel(identity, wave_id, task, &dispatch_id);
+            let env = messages::cancel(
+                identity,
+                &self.waves[wave_id].owner,
+                wave_id,
+                task,
+                &dispatch_id,
+            );
             if let Err(e) = self.client.send(&env).await {
                 warn!(error = %e, %wave_id, task_id = %task.task_id, "cancel DM failed");
             }
         }
-        let env = messages::session_close(identity, wave_id, task);
+        let env = messages::session_close(identity, &self.waves[wave_id].owner, wave_id, task);
         if let Err(e) = self.client.send(&env).await {
             warn!(error = %e, %wave_id, task_id = %task.task_id, "session_close DM failed");
         }

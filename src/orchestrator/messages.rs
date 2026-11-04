@@ -16,7 +16,12 @@ use crate::wave::wave_task_session_id;
 ///   progress and terminal result, which is where the orchestrator listens.
 /// - The returned envelope's `meta.id` is what the worker registers the turn
 ///   under; the orchestrator's cancel DM carries it (C2).
-pub(super) fn session_start(identity: &str, wave_id: &str, task: &WaveTaskRecord) -> Envelope {
+pub(super) fn session_start(
+    identity: &str,
+    owner: &str,
+    wave_id: &str,
+    task: &WaveTaskRecord,
+) -> Envelope {
     let task_channel = subjects::wave_task_channel_name(wave_id, &task.task_id);
     let mut payload = json!({
         "action": "session_start",
@@ -34,7 +39,10 @@ pub(super) fn session_start(identity: &str, wave_id: &str, task: &WaveTaskRecord
     if let Some(ref path) = task.handoff_path {
         payload["handoff_path"] = json!(path);
     }
-    Envelope::new(identity, &task_channel, MessageKind::Message, payload).to(&task.worker)
+    behalf(
+        Envelope::new(identity, &task_channel, MessageKind::Message, payload).to(&task.worker),
+        owner,
+    )
 }
 
 /// §4.2 cancel: `kind=control {"action":"cancel","task_id": <dispatch id>}`.
@@ -42,6 +50,7 @@ pub(super) fn session_start(identity: &str, wave_id: &str, task: &WaveTaskRecord
 /// `wave_task_id` names the wave task for humans and logs.
 pub(super) fn cancel(
     identity: &str,
+    owner: &str,
     wave_id: &str,
     task: &WaveTaskRecord,
     dispatch_id: &str,
@@ -54,12 +63,20 @@ pub(super) fn cancel(
         "wave_task_id": task.task_id,
         "session_id": wave_task_session_id(wave_id, &task.task_id),
     });
-    Envelope::new(identity, &task_channel, MessageKind::Control, payload).to(&task.worker)
+    behalf(
+        Envelope::new(identity, &task_channel, MessageKind::Control, payload).to(&task.worker),
+        owner,
+    )
 }
 
 /// `session_close` once the task is terminal (C4): the worker frees the
 /// session's state and subscriptions.
-pub(super) fn session_close(identity: &str, wave_id: &str, task: &WaveTaskRecord) -> Envelope {
+pub(super) fn session_close(
+    identity: &str,
+    owner: &str,
+    wave_id: &str,
+    task: &WaveTaskRecord,
+) -> Envelope {
     let task_channel = subjects::wave_task_channel_name(wave_id, &task.task_id);
     let payload = json!({
         "action": "session_close",
@@ -67,7 +84,21 @@ pub(super) fn session_close(identity: &str, wave_id: &str, task: &WaveTaskRecord
         "wave_id": wave_id,
         "wave_task_id": task.task_id,
     });
-    Envelope::new(identity, &task_channel, MessageKind::Message, payload).to(&task.worker)
+    behalf(
+        Envelope::new(identity, &task_channel, MessageKind::Message, payload).to(&task.worker),
+        owner,
+    )
+}
+
+fn behalf(mut env: Envelope, owner: &str) -> Envelope {
+    env.meta.origin = Some(crate::protocol::Origin {
+        on_behalf_of: Some(crate::protocol::OnBehalfOf {
+            identity: owner.into(),
+            user: None,
+        }),
+        ..Default::default()
+    });
+    env
 }
 
 #[cfg(test)]
@@ -96,7 +127,7 @@ mod tests {
 
     #[test]
     fn session_start_carries_wave_session_id_and_task_channel() {
-        let env = session_start("hub-orchestrator", "w1", &task());
+        let env = session_start("hub-orchestrator", "alice", "w1", &task());
         assert_eq!(env.meta.from, "hub-orchestrator");
         assert_eq!(env.meta.to.as_deref(), Some("bob"));
         assert_eq!(env.meta.channel, "wave.w1.task.t1");
@@ -108,8 +139,8 @@ mod tests {
 
     #[test]
     fn cancel_targets_the_dispatch_envelope() {
-        let start = session_start("hub-orchestrator", "w1", &task());
-        let env = cancel("hub-orchestrator", "w1", &task(), &start.meta.id);
+        let start = session_start("hub-orchestrator", "alice", "w1", &task());
+        let env = cancel("hub-orchestrator", "alice", "w1", &task(), &start.meta.id);
         assert_eq!(env.meta.kind, MessageKind::Control);
         assert_eq!(env.meta.from, start.meta.from);
         assert_eq!(env.meta.to.as_deref(), Some("bob"));
@@ -120,7 +151,7 @@ mod tests {
 
     #[test]
     fn session_close_names_the_wave_session() {
-        let env = session_close("hub-orchestrator", "w1", &task());
+        let env = session_close("hub-orchestrator", "alice", "w1", &task());
         assert_eq!(env.payload["action"], "session_close");
         assert_eq!(env.payload["session_id"], "w1--t1");
     }

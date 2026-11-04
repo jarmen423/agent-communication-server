@@ -29,6 +29,7 @@ pub(super) const ROUTER_HEADER_OVERHEAD: usize = 64;
 /// (so it can be exercised without a server).
 pub(crate) struct RouterCore {
     pub(super) routing: RoutingTable,
+    pub(super) replies: super::accept::SharedReplies,
     pub(super) registry: AgentRegistry,
     pub(super) metrics: Option<Arc<MetricsCollector>>,
     /// When true, legacy self-asserted subjects (`hub.send.*`, `hub.register`,
@@ -56,6 +57,7 @@ impl RouterCore {
     pub(crate) fn new() -> Self {
         Self {
             routing: RoutingTable::new(),
+            replies: Default::default(),
             registry: AgentRegistry::new(),
             metrics: None,
             require_bound: false,
@@ -122,11 +124,7 @@ impl RouterCore {
     /// all see that same stamped envelope. `None` = drop (undecodable, invalid
     /// identity or recipient, a legacy subject while
     /// `--require-bound-identity` is on, or too large to publish once stamped).
-    pub(crate) fn on_send(
-        &self,
-        subject: &str,
-        payload: &[u8],
-    ) -> Option<(String, Envelope, Vec<u8>)> {
+    pub(super) fn prepare_send(&self, subject: &str, payload: &[u8]) -> Option<Envelope> {
         let mut env = match Envelope::from_json_bytes(payload) {
             Ok(env) => env,
             Err(e) => {
@@ -174,21 +172,31 @@ impl RouterCore {
             }
         }
 
-        // Encode first: the guard can still change `origin`, and a dropped
-        // envelope must not show up in the metrics or on the WS feed.
-        let publish = self.encode_within_limit(subject, &mut env)?;
+        Some(env)
+    }
 
-        // Live metrics: non-blocking atomic increments.
+    #[cfg(test)]
+    pub(crate) fn on_send(
+        &self,
+        subject: &str,
+        payload: &[u8],
+    ) -> Option<(String, Envelope, Vec<u8>)> {
+        self.finish_send(subject, self.prepare_send(subject, payload)?)
+    }
+
+    pub(super) fn finish_send(
+        &self,
+        subject: &str,
+        mut env: Envelope,
+    ) -> Option<(String, Envelope, Vec<u8>)> {
+        let publish = self.encode_within_limit(subject, &mut env)?;
         if let Some(metrics) = &self.metrics {
             metrics.record(&env);
         }
-        // Push to WS bridge for visualizer (broadcast::send is non-blocking).
-        if let Some(tx) = &self.ws_event_tx {
-            if let Ok(json) = std::str::from_utf8(&publish) {
-                let _ = tx.send(json.to_string());
-            }
+        if !self.reserve_router_header {
+            self.emit_ws(&env);
         }
-
+        let channel = &env.meta.channel;
         let dest = route_channel(channel, &env);
         debug!(
             id = %env.meta.id,
@@ -199,6 +207,14 @@ impl RouterCore {
             "routing envelope"
         );
         Some((dest, env, publish))
+    }
+
+    pub(super) fn emit_ws(&self, env: &Envelope) {
+        if let Some(tx) = &self.ws_event_tx {
+            if let Ok(json) = serde_json::to_string(env) {
+                let _ = tx.send(json);
+            }
+        }
     }
 
     /// Encode a stamped envelope for publishing. Over the limit, drop

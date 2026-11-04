@@ -80,9 +80,22 @@ impl ControlPlane {
             ack(&msg, AckKind::Term).await;
             return;
         }
-        let Some((dest, env, bytes)) = self.core.on_send(subject, &msg.payload) else {
-            ack(&msg, AckKind::Term).await; // undecodable / refused: never retry
-            return;
+        let (dest, env, bytes) = match self.accept_send(subject, &msg.payload, Some(ingress)).await
+        {
+            Ok(super::policy::SendOutcome::Routed(dest, env, bytes)) => (dest, env, bytes),
+            Ok(super::policy::SendOutcome::Dropped) => {
+                ack(&msg, AckKind::Term).await;
+                return;
+            }
+            Ok(super::policy::SendOutcome::Rejected) => {
+                ack(&msg, AckKind::Ack).await;
+                return;
+            }
+            Err(e) => {
+                warn!(error = %e, "rejection publish failed");
+                ack(&msg, AckKind::Nak(Some(RETRY_DELAY))).await;
+                return;
+            }
         };
         let stored = match ingress.cfg.stream_for(&dest) {
             Some(_) => {
@@ -112,6 +125,8 @@ impl ControlPlane {
                 if duplicate {
                     debug!(%dest, id = %env.meta.id, "redelivered envelope already stored");
                 } else {
+                    self.core.emit_ws(&env);
+                    self.core.replies.lock().unwrap().record(&env);
                     self.core.mirror_envelope(env);
                 }
                 ack(&msg, AckKind::Ack).await;

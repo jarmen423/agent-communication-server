@@ -109,6 +109,7 @@ impl WaveOrchestrator {
         // Sweep often enough to catch a dead worker near its TTL.
         let period =
             (self.config.liveness_ttl / 3).clamp(Duration::from_secs(1), Duration::from_secs(10));
+        let mut rejection_rx = self.client.subscribe_inbox().await?;
         let mut sweep = tokio::time::interval(period);
         sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -119,6 +120,7 @@ impl WaveOrchestrator {
             }
             tokio::select! {
                 _ = shutdown.cancelled() => return Ok(()),
+                Some(env) = rejection_rx.recv() => self.on_rejection(env).await,
                 Some(env) = wave_rx.recv() => self.on_wave_envelope(env).await,
                 Some((subj, env)) = presence_rx.recv() => self.on_presence(&subj, &env),
                 Some((subj, env)) = bound_presence_rx.recv() => self.on_presence(&subj, &env),

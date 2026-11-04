@@ -20,8 +20,10 @@ use crate::protocol::subjects;
 use crate::storage::{AgentFilter, AgentRecord, Storage};
 use crate::MetricsCollector;
 
+mod accept;
 mod durable;
 mod mirror;
+mod policy;
 #[cfg(all(test, feature = "storage-surreal"))]
 mod provenance_tests;
 mod routing;
@@ -326,12 +328,22 @@ impl ControlPlane {
     /// No per-message `flush()`: async-nats batches and flushes outgoing
     /// publishes on its own, so the loop never waits on a network round-trip.
     async fn handle_send(&self, msg: &async_nats::Message) {
-        let Some((dest, env, bytes)) = self.core.on_send(msg.subject.as_str(), &msg.payload) else {
-            return;
+        let (dest, env, bytes) = match self
+            .accept_send(msg.subject.as_str(), &msg.payload, None)
+            .await
+        {
+            Ok(policy::SendOutcome::Routed(dest, env, bytes)) => (dest, env, bytes),
+            Ok(_) => return,
+            Err(e) => {
+                error!(error = %e, "rejection publish failed");
+                return;
+            }
         };
         if let Err(e) = self.nats.publish(dest.clone(), bytes.into()).await {
             error!(%dest, error = %e, "failed to route envelope");
+            return;
         }
+        self.core.replies.lock().unwrap().record(&env);
         self.core.mirror_envelope(env);
     }
 

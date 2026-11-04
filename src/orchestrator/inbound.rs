@@ -14,6 +14,32 @@ use super::state::{
 };
 
 impl WaveOrchestrator {
+    pub(super) async fn on_rejection(&mut self, env: Envelope) {
+        let Some(id) = env.meta.reply_to.as_deref() else {
+            return;
+        };
+        if env.meta.from != "hub-server" || env.payload["action"] != "rejected" {
+            return;
+        }
+        let found = self.waves.iter().find_map(|(wave_id, rt)| {
+            rt.dispatch_ids
+                .iter()
+                .find(|(_, start)| start.as_str() == id)
+                .map(|(task_id, _)| (wave_id.clone(), task_id.clone()))
+        });
+        if let Some((wave, task)) = found {
+            if self.waves[&wave].tasks[&task].status == "running" {
+                self.fail_task(
+                    &wave,
+                    &task,
+                    env.payload["error"].as_str().unwrap_or("refused").into(),
+                    false,
+                )
+                .await;
+            }
+        }
+    }
+
     pub(super) async fn on_wave_envelope(&mut self, env: Envelope) {
         let Some((wave_id, chan_task)) = parse_wave_channel(&env.meta.channel) else {
             return;
@@ -59,7 +85,14 @@ impl WaveOrchestrator {
                 None => return,
             }
         };
-        if env.meta.from != worker {
+        let rejected = env.meta.from == "hub-server"
+            && env.payload["rejected"] == true
+            && self
+                .waves
+                .get(&wave_id)
+                .and_then(|rt| rt.dispatch_ids.get(&task_id))
+                == env.meta.reply_to.as_ref();
+        if env.meta.from != worker && !rejected {
             warn!(
                 %wave_id, %task_id, sender = %env.meta.from, expected = %worker,
                 "ignoring wave task envelope from foreign sender"
