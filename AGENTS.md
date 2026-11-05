@@ -6,6 +6,15 @@ Guidance for AI agents working on this codebase.
 
 **nats-hub** is a NATS-based communication layer with a control plane router for agent-to-agent and human-to-agent messaging. Built in Rust with `async-nats` and optional SurrealDB persistence.
 
+## Mission
+
+The main goal of this project, and of its sibling Agentic Memory
+(`jarmen423/agent-memory-hosted`), is to make it feel as seamless as possible to
+generate **shared, coherent, consistent context across agents and teammates
+alike, and across environments** (owner, 2026-11-05). This hub carries the
+communication side: discovery, messaging, delegation and handoff. When choosing
+between options, prefer the one that serves this mission.
+
 ## Architecture
 
 ```

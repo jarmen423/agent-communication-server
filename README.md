@@ -2,6 +2,13 @@
 
 A NATS-based communication layer with control plane routing for agent-to-agent and human-to-agent messaging. Built in Rust with `async-nats` and optional SurrealDB persistence.
 
+
+**Mission:** make it feel as seamless as possible to generate shared, coherent,
+consistent context across agents and teammates alike, and across environments.
+This hub is the communication half of that (who is doing what, and handing work
+between agents). Its sibling, Agentic Memory (`jarmen423/agent-memory-hosted`), is
+the shared memory half. Weigh features and trade-offs against this mission.
+
 ## Why?
 
 When building agent systems, you need a way for agents to talk to each other. nats-hub gives you:

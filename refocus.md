@@ -42,6 +42,12 @@ coordinate through one hub while a human watches and steers.
 
 ### North star (to be confirmed)
 
+**Mission (owner, 2026-11-05):** make it feel as seamless as possible to
+generate shared, coherent, consistent context across agents and teammates
+alike, and across environments. The options below are ways to deliver it;
+note that it covers teammates, not only one person's agents.
+
+
 - **A (recommended):** a coordination hub for *our own* multi-machine coding
   agents, used every day ourselves.
 - **B:** an embeddable crate for other Rust developers.
