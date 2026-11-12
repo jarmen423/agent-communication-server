@@ -55,7 +55,7 @@ function hub(l: WebLayout) {
   );
 }
 
-const BANDS: Band[] = ["P", "M", "W", "tall"];
+const BANDS: Band[] = ["P", "M", "L", "W", "tall"];
 
 /** Place cards for a band: names on the side away from the hub, a knockout halo in the ground colour; an icon before each name. */
 function cards(l: WebLayout) {

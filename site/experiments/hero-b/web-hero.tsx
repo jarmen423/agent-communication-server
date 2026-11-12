@@ -12,8 +12,8 @@ import { WebLive, WebPause, WebSection } from "./web-live";
 import { WebOverlay, WebPoster, WebTrails } from "./web-svg";
 import css from "./web.module.css";
 
-const BANDS = ["P", "M", "W"] as const;
-const bandClass = { P: css.bandP, M: css.bandM, W: css.bandW };
+const BANDS = ["P", "M", "L", "W"] as const;
+const bandClass = { P: css.bandP, M: css.bandM, L: css.bandL, W: css.bandW };
 
 export function WebHero() {
   return (

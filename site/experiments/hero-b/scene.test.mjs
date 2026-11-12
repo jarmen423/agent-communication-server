@@ -385,12 +385,13 @@ test("the web starts, recolours and disposes on the mock adapter", async () => {
 /** Realistic (hero aspect, hero height) pairs per band, from the hero's min-height rules and the band queries. */
 const CASES = {
   P: [0.75, 1.1, 1.45].flatMap((a) => [920, 960, 1000].map((h) => [a, h])),
-  M: [1.38, 1.6, 1.95].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.3, 980], [2.6, 980]]),
+  M: [1.38, 1.52, 1.7].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.3, 980], [2.6, 980]]),
+  L: [1.62, 1.78, 1.95].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.3, 980], [2.6, 980]]),
   W: [1.85, 2.06, 2.4, 2.65].flatMap((a) => [760, 870, 980].map((h) => [a, h])),
   tall: [0.42, 0.45, 0.5].flatMap((a) => [860, 940].map((h) => [a, h])),
 };
 const HEADER = 88;
-const STRIP = { P: 116, M: 116, W: 116, tall: 124 };
+const STRIP = { P: 116, M: 116, L: 116, W: 116, tall: 124 };
 const { CARD, PLACES } = await import("./web-places.ts");
 
 /** A place card's box in design units: its name above, one row per agent, names on the align side. */
@@ -406,7 +407,7 @@ function cardBox(l, slot, pid) {
 }
 const overlaps = (a, b, pad = 0) => a[0] < b[2] + pad && a[2] > b[0] - pad && a[1] < b[3] + pad && a[3] > b[1] - pad;
 
-for (const band of ["P", "M", "W", "tall"]) {
+for (const band of ["P", "M", "L", "W", "tall"]) {
   const l = webModel.WEB[band];
   const boxes = l.slots.filter((slot) => !slot.reach).flatMap((slot) => slot.places.map((pid) => ({ pid, slot, box: cardBox(l, slot, pid) })));
   const size = band === "tall" ? 12 : 14;
@@ -443,7 +444,7 @@ for (const band of ["P", "M", "W", "tall"]) {
   });
 
   const reaches = l.slots.map((slot, i) => ({ slot, i })).filter((r) => r.slot.reach);
-  if (band === "M" || band === "W")
+  if (band === "M" || band === "L" || band === "W")
     test(`web ${band}: three reaches leave the hub's upper left, behind the headline and off the left edge`, () => {
       assert.equal(reaches.length, 3);
       const t = webTracks.trackLayout(l);
@@ -554,7 +555,7 @@ test("posters/web.svg is up to date (run tools/bake-web.mjs after changing the w
       assert.ok(committed.includes(`<path id="rail-${band}-${i}-${j}" d="M`), `rail-${band}-${i}-${j}`);
     }));
   assert.ok(!committed.includes("var(--"), "literal colours: an external document cannot see page variables");
-  for (const band of ["P", "M", "W", "tall"]) assert.ok(readFileSync(new URL(`./posters/web-trails-${band}.png`, import.meta.url)).length < 60_000, `web-trails-${band}.png stays small`);
+  for (const band of ["P", "M", "L", "W", "tall"]) assert.ok(readFileSync(new URL(`./posters/web-trails-${band}.png`, import.meta.url)).length < 60_000, `web-trails-${band}.png stays small`);
 });
 
 test("the canvas keeps to its pixel budget", () => {

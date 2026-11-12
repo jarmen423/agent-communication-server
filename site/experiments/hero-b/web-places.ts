@@ -86,7 +86,7 @@ const REACH = {
  * toward the hub); right of it, on the right. Every band keeps a teammate on
  * screen at all times (teammate-2 never rotates out), next to laptop-1's `me`.
  */
-export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
+export const SLOTS: Record<"P" | "M" | "L" | "W" | "tall", Slot[]> = {
   P: [
     S(850, 620, "start", "office-3", "cloud-1", "home-1"),
     S(850, 760, "start", "laptop-1"),
@@ -98,6 +98,18 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1778, 226, "start", "cloud-1", "home-2"),
     S(1795, 425, "start", "home-1", "teammate-4"),
     S(1809, 618, "start", "ci-4", "office-1"),
+    S(1625, 735, "end", "cloud-3", "home-3"),
+    S(1340, 728, "end", "office-2", "cloud-4", "website-2"),
+    S(1040, 745, "end", "teammate-2"),
+    S(740, 735, "end", "laptop-1"),
+    ...REACH.M,
+  ],
+  // 16:9-ish: M's places, the right-hand ones further off the hub.
+  L: [
+    S(1490, 139, "start", "office-3", "cloud-2"),
+    S(1900, 160, "start", "cloud-1", "home-2"),
+    S(1911, 425, "start", "home-1", "teammate-4"),
+    S(1925, 636, "start", "ci-4", "office-1"),
     S(1625, 735, "end", "cloud-3", "home-3"),
     S(1340, 728, "end", "office-2", "cloud-4", "website-2"),
     S(1040, 745, "end", "teammate-2"),

@@ -55,7 +55,7 @@ function agentsOf(slots: Slot[], card: (typeof CARD)["wide" | "tall"]): WebAgent
   );
 }
 
-const desktop = (band: "P" | "M" | "W", hub: [number, number, number], copy: WebLayout["copy"]): WebLayout => ({
+const desktop = (band: "P" | "M" | "L" | "W", hub: [number, number, number], copy: WebLayout["copy"]): WebLayout => ({
   band,
   variant: "wide",
   width: 2400,
@@ -74,6 +74,8 @@ export const WEB: Record<Band, WebLayout> = {
   P: desktop("P", [1200, 730, 92], [840, 120, 1332, 558, 350]),
   // Laptops: copy upper left, the hub upper right (about 78% across, 43% down), places around it, three reaching off the left edge.
   M: desktop("M", [1640, 430, 108], [551, 133, 1442, 583, 424]),
+  // 16:9-ish screens: M's hub and copy, the right-hand places further out (more of the design space is on screen).
+  L: desktop("L", [1640, 430, 108], [551, 133, 1442, 583, 424]),
   // Wide and short screens: the same, with one more place along the bottom (no cards left of the copy).
   W: desktop("W", [1780, 430, 110], [565, 130, 1437, 570, 415]),
   tall: {

@@ -56,7 +56,7 @@ function useBand(variant: "wide" | "tall"): Band {
   const [band, setBand] = useState<Band>(variant === "tall" ? "tall" : "M");
   useEffect(() => {
     if (variant === "tall") return;
-    const qs = [matchMedia(BAND_QUERY.M), matchMedia(BAND_QUERY.W)];
+    const qs = [matchMedia(BAND_QUERY.M), matchMedia(BAND_QUERY.L), matchMedia(BAND_QUERY.W)];
     const sync = () => setBand(bandFor((q) => matchMedia(q).matches));
     sync();
     qs.forEach((q) => q.addEventListener("change", sync));

@@ -14,6 +14,7 @@ import poster from "./posters/web.svg";
 import trailsM from "./posters/web-trails-M.png";
 import trailsP from "./posters/web-trails-P.png";
 import trailsTall from "./posters/web-trails-tall.png";
+import trailsL from "./posters/web-trails-L.png";
 import trailsW from "./posters/web-trails-W.png";
 import { BAND_QUERY } from "./web-bands";
 
@@ -50,6 +51,7 @@ export function WebTrails({ variant, className }: { variant: "wide" | "tall"; cl
     <picture>
       <source media="(max-width: 767px)" srcSet={NOTHING} />
       <source media={BAND_QUERY.W} srcSet={trailsW.src} width={trailsW.width} height={trailsW.height} />
+      <source media={BAND_QUERY.L} srcSet={trailsL.src} width={trailsL.width} height={trailsL.height} />
       <source media={BAND_QUERY.M} srcSet={trailsM.src} width={trailsM.width} height={trailsM.height} />
       <img src={trailsP.src} width={trailsP.width} height={trailsP.height} alt="" className={className} />
     </picture>

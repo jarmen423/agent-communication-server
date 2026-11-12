@@ -97,14 +97,18 @@
 }
 
 /* Aspect bands: these query strings match BAND_QUERY in web-model.ts (the live layer uses matchMedia on them). */
-.bandP, .bandM, .bandW { position: absolute; inset: 0; }
-.bandM, .bandW { display: none; }
+.bandP, .bandM, .bandL, .bandW { position: absolute; inset: 0; }
+.bandM, .bandL, .bandW { display: none; }
 @media (min-aspect-ratio: 29/20) {
   .bandP { display: none; }
   .bandM { display: block; }
 }
-@media (min-aspect-ratio: 39/20) {
+@media (min-aspect-ratio: 17/10) {
   .bandM { display: none; }
+  .bandL { display: block; }
+}
+@media (min-aspect-ratio: 39/20) {
+  .bandL { display: none; }
   .bandW { display: block; }
 }
 
