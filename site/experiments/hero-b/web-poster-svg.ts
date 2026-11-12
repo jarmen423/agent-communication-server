@@ -23,8 +23,8 @@ import { createWebTraffic, railPath } from "./web-tracks";
 const INK = { muted: "#a3a9b0", ink: "#eef0ea", line: "#384049", paper: "#101317" };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
-/** The coloured-logo variant (bake with HERO_ICONS=color); the committed poster is single-colour. */
-const COLOURED = typeof process !== "undefined" && process.env?.HERO_ICONS === "color";
+/** Makers' own logo colours; bake with HERO_ICONS=mono for the single-colour variant. */
+const COLOURED = !(typeof process !== "undefined" && process.env?.HERO_ICONS === "mono");
 /** IBM Plex Mono advance, em. */
 const MONO_ADVANCE = 0.6;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -65,9 +65,6 @@ function cards(l: WebLayout) {
   const s = r2(card.name * 1.15); // agent icon size
   const ts = r2(card.title * 1.25); // place icon size
   const gap = 4;
-  // A knockout behind an icon, like the text's halo.
-  const plate = (x: number, y: number, size: number) =>
-    `<rect x="${r2(x - 2)}" y="${r2(y - 2)}" width="${r2(size + 4)}" height="${r2(size + 4)}" rx="3" fill="${INK.paper}" opacity="0.85"/>`;
   return l.slots
     .flatMap((slot, i) =>
       // Reaches have no card: their places are beyond the frame.
@@ -85,7 +82,6 @@ function cards(l: WebLayout) {
           return (
             `<circle cx="${slot.x}" cy="${y}" r="${r}" fill="${INK.paper}" stroke="${tone}" stroke-width="1.5"/>` +
             `<text x="${tx}" y="${r2(y + card.name * 0.34)}" text-anchor="${anchor}" font-size="${card.name}" fill="${INK.muted}" ${halo}>${esc(id)}</text>` +
-            plate(ix, iy, s) +
             iconUse(agentIcon(id), ix, iy, s, COLOURED ? INK.ink : tone, COLOURED)
           );
         });
@@ -94,7 +90,7 @@ function cards(l: WebLayout) {
         const titleW = pid.length * MONO_ADVANCE * card.title;
         const px = r2(start ? slot.x - 5 : slot.x + 5 - titleW - gap - ts);
         const py = r2(slot.y - card.title * 0.36 - ts / 2);
-        return `<g id="card-${l.band}-${i}-${j}"><text x="${titleX}" y="${slot.y}" text-anchor="${anchor}" font-size="${card.title}" fill="${INK.ink}" ${halo}>${esc(pid)}</text>${plate(px, py, ts)}${iconUse(placeIcon(pid), px, py, ts, INK.ink)}${rows.join("")}</g>`;
+        return `<g id="card-${l.band}-${i}-${j}"><text x="${titleX}" y="${slot.y}" text-anchor="${anchor}" font-size="${card.title}" fill="${INK.ink}" ${halo}>${esc(pid)}</text>${iconUse(placeIcon(pid), px, py, ts, INK.ink)}${rows.join("")}</g>`;
       }),
     )
     .join("\n");
