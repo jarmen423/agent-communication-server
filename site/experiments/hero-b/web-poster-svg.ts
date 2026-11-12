@@ -16,12 +16,15 @@ import { FONT } from "./glyphs";
 import { WEB_LOOK, webRows } from "./web-light";
 import { groundFrame, WEB, WEB_POSTER_T, type Band, type WebLayout } from "./web-model";
 import { CARD, PLACES } from "./web-places";
+import { agentIcon, iconUse, ICON_DEFS, placeIcon } from "./web-icons";
 import { createWebTraffic, railPath } from "./web-tracks";
 
 /** Dark-island brand colours (tokens.css, dark): identical in both themes. */
 const INK = { muted: "#a3a9b0", ink: "#eef0ea", line: "#384049", paper: "#101317" };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** IBM Plex Mono advance, em. */
+const MONO_ADVANCE = 0.6;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 export function metrics(l: WebLayout) {
@@ -52,11 +55,17 @@ function hub(l: WebLayout) {
 
 const BANDS: Band[] = ["P", "M", "W", "tall"];
 
-/** Place cards for a band: names on the side away from the hub, a knockout halo in the ground colour. */
+/** Place cards for a band: names on the side away from the hub, a knockout halo in the ground colour; an icon before each name. */
 function cards(l: WebLayout) {
   const card = CARD[l.variant];
   const halo = `stroke="${INK.paper}" stroke-width="${l.variant === "tall" ? 5 : 6}" stroke-linejoin="round" paint-order="stroke"`;
   const r = l.variant === "tall" ? 3.5 : 4.5;
+  const s = r2(card.name * 1.15); // agent icon size
+  const ts = r2(card.title * 1.25); // place icon size
+  const gap = 4;
+  // A knockout behind an icon, like the text's halo.
+  const plate = (x: number, y: number, size: number) =>
+    `<rect x="${r2(x - 2)}" y="${r2(y - 2)}" width="${r2(size + 4)}" height="${r2(size + 4)}" rx="3" fill="${INK.paper}" opacity="0.85"/>`;
   return l.slots
     .flatMap((slot, i) =>
       // Reaches have no card: their places are beyond the frame.
@@ -65,12 +74,24 @@ function cards(l: WebLayout) {
         const anchor = start ? "start" : "end";
         const rows = PLACES[pid].agents.slice(0, card.rows).map(([id, role], k) => {
           const y = slot.y + card.first + k * card.row;
+          const tone = role === "orchestrator" ? INK.ink : INK.muted;
+          // The icon sits next to the port, the name beyond it.
+          const ix = r2(start ? slot.x + 11 : slot.x - 11 - s);
+          const iy = r2(y - s / 2);
+          const tx = r2(start ? slot.x + 11 + s + gap : slot.x - 11 - s - gap);
           return (
-            `<circle cx="${slot.x}" cy="${y}" r="${r}" fill="${INK.paper}" stroke="${role === "orchestrator" ? INK.ink : INK.muted}" stroke-width="1.5"/>` +
-            `<text x="${start ? slot.x + 11 : slot.x - 11}" y="${r2(y + card.name * 0.34)}" text-anchor="${anchor}" font-size="${card.name}" fill="${INK.muted}" ${halo}>${esc(id)}</text>`
+            `<circle cx="${slot.x}" cy="${y}" r="${r}" fill="${INK.paper}" stroke="${tone}" stroke-width="1.5"/>` +
+            plate(ix, iy, s) +
+            iconUse(agentIcon(id), ix, iy, s, tone) +
+            `<text x="${tx}" y="${r2(y + card.name * 0.34)}" text-anchor="${anchor}" font-size="${card.name}" fill="${INK.muted}" ${halo}>${esc(id)}</text>`
           );
         });
-        return `<g id="card-${l.band}-${i}-${j}"><text x="${start ? slot.x - 5 : slot.x + 5}" y="${slot.y}" text-anchor="${anchor}" font-size="${card.title}" fill="${INK.ink}" ${halo}>${esc(pid)}</text>${rows.join("")}</g>`;
+        // The place's icon reads before its name on both sides (mono type: the name's width is known).
+        const titleX = r2(start ? slot.x - 5 + ts + gap : slot.x + 5);
+        const titleW = pid.length * MONO_ADVANCE * card.title;
+        const px = r2(start ? slot.x - 5 : slot.x + 5 - titleW - gap - ts);
+        const py = r2(slot.y - card.title * 0.36 - ts / 2);
+        return `<g id="card-${l.band}-${i}-${j}"><text x="${titleX}" y="${slot.y}" text-anchor="${anchor}" font-size="${card.title}" fill="${INK.ink}" ${halo}>${esc(pid)}</text>${plate(px, py, ts)}${iconUse(placeIcon(pid), px, py, ts, INK.ink)}${rows.join("")}</g>`;
       }),
     )
     .join("\n");
@@ -93,7 +114,7 @@ function rails(l: WebLayout) {
 export function posterSvg() {
   return (
     // Never drawn directly (only <use>d); the nominal size is for Next's static-asset import.
-    `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1000" viewBox="0 0 2400 1000">\n` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1000" viewBox="0 0 2400 1000">\n${ICON_DEFS}\n` +
     `${field(WEB.M, "field-wide")}\n${field(WEB.tall, "field-tall")}\n${BANDS.map((b) => hub(WEB[b])).join("\n")}\n${BANDS.map((b) => rails(WEB[b])).join("\n")}\n${BANDS.map((b) => cards(WEB[b])).join("\n")}\n</svg>\n`
   );
 }
