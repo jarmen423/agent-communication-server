@@ -11,7 +11,9 @@ import { createWebTraffic } from "./web-tracks";
 import trailsShader from "./web-trails.wgsl";
 
 /** B's soft saturation (0.7); sent gets more, since teal is the darker hue on the dark ground. */
-const GAIN = { sent: 1.05, received: 0.7 };
+const GAIN = { sent: 1.5, received: 1.0 };
+/** Chroma boost on the developed light (1 = the tokens as they are). */
+const VIVID = 1.35;
 
 type Rgb = readonly [number, number, number];
 
@@ -30,7 +32,7 @@ export function createTrails(gpu: Gpu, w: WebLayout, lightSize: readonly [number
       gain: [GAIN.sent, GAIN.received],
       map: [k, (out[0] - w.width * k) / 2, (out[1] - w.height * k) / 2, 0],
       mask: copy.slice(0, 4),
-      mask2: [FEATHER, YIELD.floor, YIELD.radius, 0],
+      mask2: [FEATHER, YIELD.floor, YIELD.radius, VIVID],
       // No headline bottom given: the head zone is empty (the whole block yields fully).
       head: [HEAD.floor, copy[4] ?? copy[1], HEAD.ramp, 0],
     };

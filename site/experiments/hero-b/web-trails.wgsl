@@ -1,5 +1,5 @@
 // The web's message tracks, developed: plain B's long-exposure light (R sent,
-// G received) soft-saturated into teal and orange, premultiplied, drawn over
+// G received) soft-saturated into teal and orange (added as light, chroma-boosted), premultiplied, drawn over
 // the ASCII ground. On the dark ground orange reads much brighter than teal,
 // so sent light gets a little more gain: both directions read equally. The
 // light target may be smaller than the output (soft
@@ -14,7 +14,7 @@ struct Trails {
   gain: vec2f,       // soft-saturation gain: sent, received
   map: vec4f,        // output px per design unit, offset x, offset y
   mask: vec4f,       // copy block x0, y0, x1, y1 (design units)
-  mask2: vec4f,      // feather, floor, corner radius
+  mask2: vec4f,      // feather, floor, corner radius, vivid (chroma boost)
   head: vec4f,       // headline floor, headline bottom y (design units), ramp
 }
 
@@ -27,7 +27,6 @@ struct Trails {
   let sent = 1.0 - exp(-trails.gain.x * max(v.r, 0.0));
   let received = 1.0 - exp(-trails.gain.y * max(v.g, 0.0));
   let a = 1.0 - (1.0 - sent) * (1.0 - received);
-  let share = received / max(sent + received, 1e-5);
   let u = (p.xy - trails.map.yz) / trails.map.x;
   let half = (trails.mask.zw - trails.mask.xy) * 0.5;
   let r = trails.mask2.z;
@@ -35,5 +34,10 @@ struct Trails {
   let sd = length(max(m, vec2f(0.0))) + min(max(m.x, m.y), 0.0) - r;
   let low = mix(trails.head.x, trails.mask2.y, smoothstep(trails.head.y, trails.head.y + trails.head.z, u.y));
   let k = low + (1.0 - low) * smoothstep(0.0, trails.mask2.x, sd);
-  return vec4f(mix(trails.teal.rgb, trails.orange.rgb, share) * a, a) * k;
+  // Lanes add as light (no teal/orange cross-fade into grey where they overlap),
+  // then a mild chroma boost around each pixel's own luminance.
+  let col = trails.teal.rgb * sent + trails.orange.rgb * received;
+  let lum = dot(col, vec3f(0.2126, 0.7152, 0.0722));
+  let vivid = max(mix(vec3f(lum), col, trails.mask2.w), vec3f(0.0));
+  return vec4f(vivid, a) * k;
 }
