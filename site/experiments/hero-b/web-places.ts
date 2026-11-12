@@ -94,10 +94,10 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
     S(1550, 760, "end", "cloud-2", "website-2", "ci-4"),
   ],
   M: [
-    S(1490, 165, "start", "office-3", "cloud-2"),
-    S(1765, 235, "start", "cloud-1", "home-2"),
+    S(1490, 135, "start", "office-3", "cloud-2"),
+    S(1778, 226, "start", "cloud-1", "home-2"),
     S(1795, 425, "start", "home-1", "teammate-4"),
-    S(1785, 615, "start", "ci-4", "office-1"),
+    S(1809, 618, "start", "ci-4", "office-1"),
     S(1625, 735, "end", "cloud-3", "home-3"),
     S(1340, 728, "end", "office-2", "cloud-4", "website-2"),
     S(1040, 745, "end", "teammate-2"),
@@ -106,10 +106,10 @@ export const SLOTS: Record<"P" | "M" | "W" | "tall", Slot[]> = {
   ],
   // No cards left of the copy (a card's track would cross the headline); only the reaches go there.
   W: [
-    S(1560, 185, "start", "office-3", "cloud-2"),
-    S(1880, 200, "start", "cloud-1", "home-2", "home-1"),
-    S(1965, 420, "start", "teammate-4", "cloud-3"),
-    S(1955, 640, "start", "office-2", "cloud-4", "ci-4"),
+    S(1560, 163, "start", "office-3", "cloud-2"),
+    S(1936, 165, "start", "cloud-1", "home-2", "home-1"),
+    S(2024, 420, "start", "teammate-4", "cloud-3"),
+    S(2027, 648, "start", "office-2", "cloud-4", "ci-4"),
     S(1690, 715, "end", "teammate-2"),
     S(1385, 715, "end", "office-1", "home-3"),
     S(1080, 715, "end", "website-2"),
