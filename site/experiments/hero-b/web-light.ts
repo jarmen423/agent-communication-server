@@ -9,7 +9,7 @@ import { createWebTraffic } from "./web-tracks";
  * clicks) lifts a character's alpha, the weights of each, and how far lifted
  * characters move from muted toward ink.
  */
-export const WEB_LOOK = { base: 0.06, liftAlpha: 0.24, ripple: 0.32, click: 1.4, ink: 0.9 };
+export const WEB_LOOK = { base: 0.06, liftAlpha: 0.24, ripple: 0.32, click: 1.4, torch: 0.4, ink: 0.9 };
 /** Around the copy the field yields: tracks, rings and the lamp fall to `floor` (the quiet texture stays). */
 export const YIELD = { floor: 0.15, radius: 40 };
 /**
@@ -56,11 +56,13 @@ export function cellLight(l: WebLayout, f: WebFrame): Float32Array {
         const x = (Math.hypot(ux - cx, uy - cy) - radius) / (26 + radius * 0.05);
         click += amp * Math.exp(-x * x);
       }
+      const [tx, ty, tr, ta] = f.torch;
+      const torch = ta * Math.exp(-((Math.hypot(ux - tx, uy - ty) / tr) ** 2));
       const y = yieldAt(ux, uy, f.mask);
       const k = YIELD.floor + (1 - YIELD.floor) * y;
       const kc = CLICK_YIELD.floor + (1 - CLICK_YIELD.floor) * yieldAt(ux, uy, [...f.mask.slice(0, 4), CLICK_YIELD.feather]);
       const i = (r * cols + c) * 2;
-      out[i] = ripple * WEB_LOOK.ripple * k + click * WEB_LOOK.click * kc;
+      out[i] = ripple * WEB_LOOK.ripple * k + (click * WEB_LOOK.click + torch * WEB_LOOK.torch) * kc;
       out[i + 1] = y;
     }
   }

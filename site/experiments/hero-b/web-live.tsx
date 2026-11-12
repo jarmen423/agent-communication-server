@@ -98,6 +98,8 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
         sync();
         measure();
         section?.addEventListener("pointerdown", onPointer);
+        section?.addEventListener("pointermove", onMove);
+        section?.addEventListener("pointerleave", onLeave);
         setLive(true);
       } catch (err) {
         console.info("hero: keeping the poster frame", err);
@@ -129,6 +131,12 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       const [x, y] = toDesign(e.clientX, e.clientY);
       renderer.click(x, y);
     };
+    const onMove = (e: PointerEvent) => {
+      if (!renderer || e.pointerType === "touch") return;
+      const [x, y] = toDesign(e.clientX, e.clientY);
+      renderer.hover(x, y);
+    };
+    const onLeave = () => renderer?.leave();
     const handle = idle(() => void start());
     const io = new IntersectionObserver(([e]) => {
       onScreen = e.isIntersecting;
@@ -139,6 +147,8 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     const onReduced = () => {
       if (reduced.matches) {
         section?.removeEventListener("pointerdown", onPointer);
+        section?.removeEventListener("pointermove", onMove);
+        section?.removeEventListener("pointerleave", onLeave);
         renderer?.dispose();
         renderer = null;
         setLive(false);
@@ -156,6 +166,8 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       ro.disconnect();
       mo.disconnect();
       section?.removeEventListener("pointerdown", onPointer);
+      section?.removeEventListener("pointermove", onMove);
+      section?.removeEventListener("pointerleave", onLeave);
       document.removeEventListener("visibilitychange", sync);
       reduced.removeEventListener("change", onReduced);
       renderer?.dispose();

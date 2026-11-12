@@ -1,6 +1,6 @@
 // The ASCII ground's light, one texel per character cell, computed
 // analytically: faint rings out from the hub (one per envelope routed) and
-// from visitor clicks, both neutral. Around the copy block the ground yields:
+// from visitor clicks, both neutral, and a soft torch under the mouse. Around the copy block the ground yields:
 // hub rings fall to a floor inside a feathered rounded rect; click rings only
 // dim right behind the block (their own floor, a short feather). The tracks
 // themselves are plain B's long exposure (web-trails.wgsl), drawn on top.
@@ -14,7 +14,8 @@ struct Web {
   ripples: array<vec4f, 8>,   // radius, amp, width
   clicks: array<vec4f, 4>,    // x, y, radius, amp
   mask: vec4f,                // copy block x0, y0, x1, y1
-  mask2: vec4f,               // feather, floor, corner radius
+  mask2: vec4f,               // feather, floor, corner radius, torch weight
+  torch: vec4f,               // pointer x, y, radius, amp
 }
 
 @group(0) @binding(0) var<uniform> web: Web;
@@ -34,6 +35,8 @@ struct Web {
     let x = (length(u - q.xy) - q.z) / (26.0 + q.z * 0.05);
     click += q.w * exp(-x * x);
   }
+  let tq = length(u - web.torch.xy) / web.torch.z;
+  let torch = web.torch.w * exp(-tq * tq);
   let half = (web.mask.zw - web.mask.xy) * 0.5;
   let r = web.mask2.z;
   let m = abs(u - (web.mask.xy + half)) - half + vec2f(r);
@@ -41,5 +44,5 @@ struct Web {
   let yielded = smoothstep(0.0, web.mask2.x, sd);
   let k = web.mask2.y + (1.0 - web.mask2.y) * yielded;
   let kc = web.look.z + (1.0 - web.look.z) * smoothstep(0.0, web.look.w, sd);
-  return vec4f(ripple * web.look.x * k + click * web.look.y * kc, yielded, 0.0, 1.0);
+  return vec4f(ripple * web.look.x * k + (click * web.look.y + torch * web.mask2.w) * kc, yielded, 0.0, 1.0);
 }

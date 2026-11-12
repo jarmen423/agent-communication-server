@@ -106,6 +106,8 @@ export type WebFrame = {
   glow: number;
   /** Visitor clicks: [x, y, radius, amp], neutral rings (at most CLICKS). */
   clicks: [number, number, number, number][];
+  /** The visitor's pointer torch: [x, y, radius, amp], a soft neutral glow that follows the mouse (amp 0 when away). */
+  torch: [number, number, number, number];
   /** The copy block the field yields around (design units): x0, y0, x1, y1, feather. */
   mask: [number, number, number, number, number];
 };
@@ -117,6 +119,8 @@ export const CLICKS = 4;
 /** Feather of the copy mask, design units (at least 120 CSS px down to a 760 px tall hero). */
 export const FEATHER = 170;
 const CLICK_LIFE = 1.5;
+/** The pointer torch: radius (design units) and how fast it eases after the pointer and fades in / out (per second). */
+export const TORCH = { radius: 150, follow: 14, fade: 5 };
 
 /** A visitor's click: one neutral ring out from the pointer, a little stronger than a hub ripple. */
 export function clickRings(clicks: readonly { x: number; y: number; t: number }[], t: number): WebFrame["clicks"] {
@@ -134,7 +138,7 @@ export function clickRings(clicks: readonly { x: number; y: number; t: number }[
  * and sends one faint ring out through the field; a slow glow follows
  * throughput. Like B's hubLamp, at the web's scale.
  */
-export function groundFrame(l: WebLayout, msgs: readonly Msg[], t: number, extra: { clicks?: WebFrame["clicks"]; copy?: readonly number[] } = {}): WebFrame {
+export function groundFrame(l: WebLayout, msgs: readonly Msg[], t: number, extra: { clicks?: WebFrame["clicks"]; torch?: WebFrame["torch"]; copy?: readonly number[] } = {}): WebFrame {
   const events: WebFrame["events"] = [];
   const ripples: WebFrame["ripples"] = [];
   let glow = 0;
@@ -154,5 +158,6 @@ export function groundFrame(l: WebLayout, msgs: readonly Msg[], t: number, extra
   while (ripples.length < RIPPLES) ripples.push([0, 0, 1, 0]);
   const c = extra.copy ?? l.copy;
   const clicks = extra.clicks ?? clickRings([], t);
-  return { events, ripples, glow: 1 - Math.exp(-glow / 6), clicks, mask: [c[0], c[1], c[2], c[3], FEATHER] };
+  const torch = extra.torch ?? [0, 0, 1, 0];
+  return { events, ripples, glow: 1 - Math.exp(-glow / 6), clicks, torch, mask: [c[0], c[1], c[2], c[3], FEATHER] };
 }

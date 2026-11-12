@@ -12,7 +12,7 @@ import { FONT, glyphTable } from "./glyphs";
 import { run } from "./run";
 import cellsShader from "./web-cells.wgsl";
 import { CLICK_YIELD, WEB_LOOK, YIELD, webRows } from "./web-light";
-import { clickRings, cover, FEATHER, groundFrame, WEB, type Band, type WebFrame, type WebLayout } from "./web-model";
+import { clickRings, cover, FEATHER, groundFrame, TORCH, WEB, type Band, type WebFrame, type WebLayout } from "./web-model";
 import { createTrails } from "./web-trails";
 import fieldShader from "./web.wgsl";
 import { placeAlpha } from "./web-places";
@@ -22,6 +22,10 @@ export type WebRenderer = HeroRenderer & {
   setCopy(rect: readonly number[]): void;
   /** A visitor's click at a design-space point: one neutral ring. */
   click(x: number, y: number): void;
+  /** The mouse is over the field at a design-space point: the torch eases after it. */
+  hover(x: number, y: number): void;
+  /** The mouse left the hero: the torch fades out. */
+  leave(): void;
 };
 export type WebModule = { startWeb(canvas: HTMLCanvasElement, opts: { band: Band; palette: HeroPalette }): Promise<WebRenderer> };
 
@@ -34,7 +38,8 @@ export function webUniform(l: WebLayout, f: WebFrame) {
     ripples: f.ripples,
     clicks: f.clicks,
     mask: f.mask.slice(0, 4),
-    mask2: [FEATHER, YIELD.floor, YIELD.radius, 0],
+    mask2: [FEATHER, YIELD.floor, YIELD.radius, WEB_LOOK.torch],
+    torch: f.torch,
   };
 }
 
@@ -51,7 +56,10 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
   let copy: readonly number[] = l.copy;
   const clicks: { x: number; y: number; t: number }[] = [];
   const now = () => trails.ex.time;
-  const frameNow = () => groundFrame(l, trails.traffic.live(now()), now(), { copy, clicks: clickRings(clicks, now()) });
+  // The torch: eased position and amp, toward the pointer's target (on = over the field).
+  const torch = { x: 0, y: 0, amp: 0, tx: 0, ty: 0, on: false };
+  const torchFrame = (): WebFrame["torch"] => [torch.x, torch.y, TORCH.radius, torch.amp];
+  const frameNow = () => groundFrame(l, trails.traffic.live(now()), now(), { copy, clicks: clickRings(clicks, now()), torch: torchFrame() });
   const cells = target(gpu, { size: [cols, rows], format: "rgba16float", label: "hero-b.web-cells" });
   const light = effect(gpu, cellsShader, { set: { web: webUniform(l, frameNow()) } });
   const { chars, index } = glyphTable(webRows(cols, rows), []);
@@ -103,6 +111,10 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
     encode(f: Frame, out: Target, dt: number) {
       trails.ex.encode(f, dt);
       while (clicks.length && now() - clicks[0].t > 2) clicks.shift();
+      const kf = 1 - Math.exp(-dt * TORCH.follow);
+      torch.x += (torch.tx - torch.x) * kf;
+      torch.y += (torch.ty - torch.y) * kf;
+      torch.amp += ((torch.on ? 1 : 0) - torch.amp) * (1 - Math.exp(-dt * TORCH.fade));
       const frame = frameNow();
       light.set({ web: webUniform(l, frame) });
       draw.set({ lamp: lampUniform(frame) });
@@ -119,6 +131,19 @@ export function createWebLayer(gpu: Gpu, l: WebLayout, palette: HeroPalette, siz
     click(x: number, y: number) {
       clicks.push({ x, y, t: now() });
       if (clicks.length > 4) clicks.shift();
+    },
+    hover(x: number, y: number) {
+      // Fresh in from outside: start under the pointer rather than sliding in from the last spot.
+      if (torch.amp < 0.02) {
+        torch.x = x;
+        torch.y = y;
+      }
+      torch.tx = x;
+      torch.ty = y;
+      torch.on = true;
+    },
+    leave() {
+      torch.on = false;
     },
     resize(w: number, h: number, css = 0) {
       current = [w, h];
@@ -175,7 +200,7 @@ export const startWeb: WebModule["startWeb"] = async (canvas, { band, palette })
       setPalette: layer.setPalette,
       dispose: layer.dispose,
     });
-    return { ...renderer, setCopy: layer.setCopy, click: layer.click };
+    return { ...renderer, setCopy: layer.setCopy, click: layer.click, hover: layer.hover, leave: layer.leave };
   } catch (err) {
     gpu.dispose();
     throw err;
