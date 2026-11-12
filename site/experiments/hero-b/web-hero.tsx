@@ -59,12 +59,7 @@ export function WebHero() {
 
       <div className={`container-page ${css.copy}`}>
         <div className={css.copyBlock} data-web-copy>
-          <Link href="/pricing" className="beta-pill">
-            <span className="beta-pill-dot" aria-hidden="true" />
-            Hosted beta · invite only
-            <span aria-hidden="true">→</span>
-          </Link>
-          <h1 id="hero-title" className="hero-title mt-6">
+          <h1 id="hero-title" className="hero-title">
             Many agents,
             <br />
             many machines,

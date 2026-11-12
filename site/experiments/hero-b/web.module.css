@@ -84,7 +84,7 @@
 }
 /* Geist Serif headline (web-font.ts), as the integration branch's display trial sets it. */
 .copyBlock :global(.hero-title) {
-  font-family: var(--font-geist-serif-hero), "Times New Roman", serif;
+  font-family: var(--font-geist-serif-hero, var(--font-geist-serif)), "Times New Roman", serif;
   font-weight: 400;
   letter-spacing: -0.025em;
   line-height: 1;
