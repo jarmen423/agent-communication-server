@@ -6,13 +6,14 @@
 // shader (ascii.wgsl mirrors cellLook/glyph rules) and the SVG poster.
 import type { Layout, Tune } from "./layout";
 import { createTraffic, POSTER_T, type Msg } from "./schedule";
+import { glyphTable as table } from "./glyphs";
 
 /** Columns × rows, anchored to the viewBox so the poster and live grids coincide (~8×14 CSS px at full width). */
 export const GRID = { wide: [136, 29], tall: [44, 31] } as const;
 /** Lanes a character row apart, so sent and received light land in different rows. */
 export const TUNE: Record<"wide" | "tall", Tune> = { wide: { gap: 8, drift: 1.2 }, tall: { gap: 4.5, drift: 0.8 } };
 /** Glyph size relative to the row height, and baseline offset (× font size) below the cell middle. */
-export const FONT = { scale: 0.78, baseline: 0.3 };
+export { FONT } from "./glyphs";
 /** Dim field: lane-muted at `base` alpha. Light saturates with `gain`; lit alpha rises as (a × scale)^power. */
 export const LOOK = { base: 0.13, gain: 0.75, scale: 1.25, power: 1.1 };
 /** Spaces between words step up this density ramp as light grows, so a lit trail never breaks. */
@@ -72,15 +73,6 @@ export function fieldRows(layout: Layout, cols: number, rows: number): string[] 
   });
 }
 
-/** Every glyph the field can show (text + ramp + space) and the per-cell glyph index. */
-export function glyphTable(rows: string[]) {
-  const chars = [" ", ...RAMP.chars];
-  for (const row of rows) for (const ch of row) if (!chars.includes(ch)) chars.push(ch);
-  const index = new Uint8Array(rows.length * rows[0].length);
-  rows.forEach((row, r) => [...row].forEach((ch, c) => (index[r * row.length + c] = chars.indexOf(ch))));
-  return { chars, index };
-}
-
 /** Light at a cell (already soft-saturated, 0..1 per channel) → coverage and received share. */
 export function cellLook(sent: number, received: number) {
   const a = 1 - (1 - sent) * (1 - received);
@@ -99,3 +91,6 @@ export function glyphAt(ch: string, a: number): string {
 
 /** Final alpha of a lit cell's glyph: dim texture at zero light, full at strong light. */
 export const litAlpha = (a: number) => LOOK.base + (1 - LOOK.base) * Math.min(1, Math.pow(a * LOOK.scale, LOOK.power));
+
+/** Every glyph the field can show (text + ramp + space) and the per-cell glyph index. */
+export const glyphTable = (rows: string[]) => table(rows, RAMP.chars);

@@ -7,16 +7,48 @@
 // instead of an aspect-ratio box, and it starts the web with its own layout:
 // the aspect band's (the same media queries the poster's CSS uses). Once live
 // it also measures the copy block into design space (the field yields around
-// it) and turns a pointerdown on empty field into a neutral ring.
+// it, less behind the headline) and turns a pointerdown on empty field into a
+// neutral ring.
 // The poster crossfades out once the live canvas has a frame.
 import { useEffect, useRef, useState } from "react";
-import { readPalette } from "@/components/hero/gpu-stage";
+import type { HeroPalette } from "@/components/hero/gpu-stage";
 import type { WebRenderer } from "./web";
-import { BAND_QUERY, bandFor, cover, WEB, type Band } from "./web-model";
+import { BAND_QUERY, bandFor, cover, DESIGN, type Band } from "./web-bands";
 import css from "./web.module.css";
 
-/** Pointerdowns here are the page's own controls and text, not the field. */
-const NOT_FIELD = "a, button, input, header, [data-web-log], [data-web-copy]";
+// Copy of readPalette() from components/hero/gpu-stage.tsx: importing it would
+// pull the shared stage module into this first-paint chunk.
+const VARS: Record<keyof HeroPalette, string> = {
+  lane: "--lane",
+  laneRaised: "--lane-raised",
+  laneLine: "--lane-line",
+  laneInk: "--lane-ink",
+  laneMuted: "--lane-muted",
+  teal: "--lane-teal",
+  orange: "--lane-orange",
+};
+function readPalette(el: Element): HeroPalette {
+  const cs = getComputedStyle(el);
+  const out = {} as HeroPalette;
+  for (const [k, v] of Object.entries(VARS) as [keyof HeroPalette, string][]) {
+    const hex = cs.getPropertyValue(v).trim().replace("#", "");
+    out[k] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number];
+  }
+  return out;
+}
+
+/** Pointerdowns here are the page's own controls and chrome, not the field. */
+const NOT_FIELD = "a, button, input, header, [data-web-log]";
+
+/** True on a line of the copy's text (a pointerdown there selects text); the block's empty space is field. */
+function onText(copy: Element, x: number, y: number) {
+  const r = document.createRange();
+  for (const el of copy.querySelectorAll(".hero-title, .hero-sub")) {
+    r.selectNodeContents(el);
+    for (const b of r.getClientRects()) if (x >= b.left - 4 && x <= b.right + 4 && y >= b.top && y <= b.bottom) return true;
+  }
+  return false;
+}
 /** The copy rect grows by this much (CSS px) before the feather starts. */
 const COPY_MARGIN = 16;
 
@@ -51,7 +83,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     if (!("gpu" in navigator) || reduced.matches || new URLSearchParams(location.search).get("gpu") === "off") return;
     if (el.offsetParent === null) return; // only the variant that is displayed starts
 
-    const layout = WEB[band];
+    const design = DESIGN[band === "tall" ? "tall" : "wide"];
     const section = el.closest("section");
     let renderer: WebRenderer | null = null;
     let disposed = false;
@@ -61,7 +93,7 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
       try {
         const mod = await load();
         if (disposed) return;
-        renderer = await mod.startWeb(cv, { layout, palette: readPalette(el) });
+        renderer = await mod.startWeb(cv, { band, palette: readPalette(el) });
         if (disposed) return renderer.dispose();
         sync();
         measure();
@@ -74,22 +106,26 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
     // Client px → design units, through the canvas's own cover mapping.
     const toDesign = (x: number, y: number) => {
       const r = cv.getBoundingClientRect();
-      const m = cover(layout, r.width, r.height);
+      const m = cover(design, r.width, r.height);
       return [(x - r.left - m.x) / m.k, (y - r.top - m.y) / m.k] as const;
     };
     const copy = section?.querySelector("[data-web-copy]");
+    const title = copy?.querySelector(".hero-title");
     const measure = () => {
       if (!renderer || !copy) return;
       const c = copy.getBoundingClientRect();
       const [x0, y0] = toDesign(c.left - COPY_MARGIN, c.top - COPY_MARGIN);
       const [x1, y1] = toDesign(c.right + COPY_MARGIN, c.bottom + COPY_MARGIN);
-      renderer.setCopy([x0, y0, x1, y1]);
+      // The headline's bottom: above it the tracks yield less (the reaches show behind the large type).
+      const head = title ? toDesign(0, title.getBoundingClientRect().bottom)[1] : y0;
+      renderer.setCopy([x0, y0, x1, y1, head]);
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     if (copy) ro.observe(copy);
     const onPointer = (e: PointerEvent) => {
       if (!renderer || (e.target instanceof Element && e.target.closest(NOT_FIELD))) return;
+      if (copy && e.target instanceof Node && copy.contains(e.target) && onText(copy, e.clientX, e.clientY)) return;
       const [x, y] = toDesign(e.clientX, e.clientY);
       renderer.click(x, y);
     };
@@ -135,9 +171,9 @@ export function WebLive({ variant, poster }: { variant: "wide" | "tall"; poster:
 }
 
 /**
- * Safety net for agent labels (poster and live share the overlay, so this
- * covers both, with or without a GPU): any label that would touch the copy,
- * the header or the log strip (+12 px) is hidden at this viewport.
+ * Safety net for labels and place cards (poster and live share the overlay,
+ * so this covers both, with or without a GPU): anything that would touch the
+ * copy, the header or the log strip (+12 px) is hidden at this viewport.
  */
 export function useLabelGuard(ref: React.RefObject<HTMLElement | null>) {
   useEffect(() => {
@@ -147,7 +183,7 @@ export function useLabelGuard(ref: React.RefObject<HTMLElement | null>) {
       const keep = ["[data-web-copy]", "[data-web-log]", "header"]
         .map((q) => document.querySelector(q)?.getBoundingClientRect())
         .filter((r): r is DOMRect => !!r);
-      section.querySelectorAll<SVGTextElement>("[data-agent-label]").forEach((label) => {
+      section.querySelectorAll<SVGGraphicsElement>("[data-agent-label], [data-place]").forEach((label) => {
         label.style.visibility = "";
         const r = label.getBoundingClientRect();
         if (!r.width) return;

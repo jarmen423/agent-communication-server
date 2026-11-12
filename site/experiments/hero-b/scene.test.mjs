@@ -242,73 +242,122 @@ const webModel = await import("./web-model.ts");
 const webLight = await import("./web-light.ts");
 const webMod = await import("./web.ts");
 
+const webTracks = await import("./web-tracks.ts");
+const { placeAlpha } = await import("./web-places.ts");
+const { viewMap } = await import("./light.ts");
+const near = (x, y, px, py, eps) => Math.hypot(x - px, y - py) < eps;
+
 for (const [name, l] of Object.entries(webModel.WEB)) {
-  test(`web ${name}: every line is one task through the hub, in reply-contract rhythm`, () => {
-    const web = webModel.createWeb(l);
-    web.advance(120);
-    const lines = web.lines();
-    assert.ok(lines.length > 20, `${lines.length} lines`);
-    const ids = new Set(l.agents.map((a) => a.id));
-    for (const x of lines) {
-      assert.ok(ids.has(x.from) && ids.has(x.to), "named agents at both ends");
-      const kinds = x.pulses.map((p) => p.kind);
-      assert.equal(kinds.filter((k) => k === "task").length, 1, "one teal task out");
-      assert.equal(kinds.filter((k) => k === "result").length, 1, "exactly one result");
-      assert.ok(kinds.filter((k) => k === "progress").length >= 2, "progress pulses back");
-      assert.equal(kinds[0], "task");
-      assert.equal(kinds.at(-1), "result", "the result comes last");
-      for (const p of x.pulses) assert.equal(p.dir, p.kind === "task" ? 1 : -1, "sent goes out, received comes back");
-      const atHub = webModel.pointAt(x, x.hubS);
-      assert.ok(Math.hypot(atHub[0] - l.hub.cx, atHub[1] - l.hub.cy) < 1, "the line passes through hub-server");
-      assert.equal(webModel.aliveAt(x, x.dies + 2), 0, "the line dies");
+  const byTask = (traffic) => {
+    const tasks = new Map();
+    for (const m of traffic.pending()) tasks.set(m.task, [...(tasks.get(m.task) ?? []), m]);
+    return [...tasks.values()];
+  };
+
+  test(`web ${name}: every task follows the reply contract, place to place through the hub`, () => {
+    const traffic = webTracks.createWebTraffic(l);
+    traffic.advance(150);
+    const tasks = byTask(traffic);
+    assert.ok(tasks.length > 40, `${tasks.length} tasks`);
+    const agent = new Map(l.agents.map((a) => [a.id, a]));
+    for (const msgs of tasks) {
+      const [task, ...back] = msgs;
+      const orch = agent.get(task.from), worker = agent.get(task.to);
+      assert.equal(task.kind, "task");
+      assert.equal(orch.role, "orchestrator");
+      assert.equal(worker.role, "worker");
+      assert.notEqual(orch.slot, worker.slot, "between two places");
+      assert.equal(back[0].kind, "status");
+      assert.equal(back[0].detail, "working");
+      assert.equal(back[1].detail, "started");
+      assert.ok(back.slice(2, -1).length >= 1 && back.slice(2, -1).every((m) => m.kind === "event" && m.detail.startsWith("progress")));
+      assert.equal(back.at(-1).kind, "result", "exactly one result, last");
+      for (const m of msgs) assert.equal(m.channel, m.kind === "task" ? 0 : 1, "teal goes out, orange comes back");
+      for (const m of back) assert.ok(m.from === worker.id && m.to === orch.id);
+      for (let i = 1; i < msgs.length; i++) assert.ok(msgs[i].t0 > msgs[i - 1].t0);
+      const end = traffic.arrival(back.at(-1)) + 8;
+      for (let t = task.t0; t <= end; t += 0.25)
+        for (const a of [orch, worker]) assert.equal(placeAlpha(a.slot, l.slots[a.slot], a.j, t), 1, `${a.place} on screen while ${task.task} glows`);
     }
   });
 
-  test(`web ${name}: a calm number of lines alive, always moving`, () => {
-    const web = webModel.createWeb(l);
-    const counts = [];
-    for (let t = 20; t < 120; t += 0.5) counts.push(web.live(t).filter((x) => webModel.aliveAt(x, t) > 0.5).length);
-    const max = Math.max(...counts);
-    const mean = counts.reduce((s, c) => s + c, 0) / counts.length;
-    assert.ok(max <= l.maxLines, `max ${max}`);
-    assert.ok(mean >= l.maxLines * 0.4 && mean <= 6, `mean ${mean.toFixed(2)}`);
-    assert.ok(Math.min(...counts) >= 1, "never empty");
+  test(`web ${name}: a teammate's place is always on screen`, () => {
+    for (let t = 0; t < 270; t += 0.25) {
+      const shown = l.slots.some((s, i) => !s.reach && s.places.some((p, j) => p.startsWith("teammate") && placeAlpha(i, s, j, t) === 1));
+      assert.ok(shown, `no teammate at ${t}`);
+    }
   });
 
-  test(`web ${name}: poster light puts each pulse in its own colour, and the uniform fits the shader`, () => {
-    const web = webModel.createWeb(l);
+  test(`web ${name}: never quiet for long, and every place gets traffic`, () => {
+    const traffic = webTracks.createWebTraffic(l);
+    const slot = new Map(l.agents.map((a) => [a.id, a.slot]));
+    const lit = new Set();
+    let quiet = 0;
+    for (let t = 15; t < 400; t += 0.25) {
+      const live = traffic.live(t);
+      for (const m of live) lit.add(slot.get(m.from)).add(slot.get(m.to));
+      // Between messages the exposure still glows (tau 5.5 s); a lull never lasts long.
+      quiet = live.some((m) => traffic.arrival(m) >= t) ? 0 : quiet + 0.25;
+      assert.ok(quiet <= 2.5, `nothing in flight for ${quiet} s at ${t}`);
+    }
+    assert.equal(lit.size, l.slots.length, "every slot carries traffic");
+  });
+
+  test(`web ${name}: two lanes per agent, into the plate and through the hub`, () => {
+    const t = webTracks.trackLayout(l);
+    const half = l.plate.w / 2;
+    for (const a of l.agents) {
+      const { toHub, fromHub } = t.lanes[a.id];
+      const end = toHub.pts.slice(-2);
+      const onPlate = Math.max(Math.abs(end[0] - l.hub.cx), Math.abs(end[1] - l.hub.cy));
+      assert.ok(Math.abs(onPlate - half) < t.gap + 0.5, `${a.id} enters the plate`);
+      assert.ok(near(toHub.pts[0], toHub.pts[1], a.x, a.y, t.gap * 1.5), `${a.id}: lane starts at its port`);
+      const mid = Math.floor(toHub.pts.length / 4) * 2;
+      const back = fromHub.pts.length - 2 - mid;
+      const apart = Math.hypot(toHub.pts[mid] - fromHub.pts[back], toHub.pts[mid + 1] - fromHub.pts[back + 1]);
+      assert.ok(Math.abs(apart - 2 * t.gap) < 0.5, `${a.id}: lanes ${apart.toFixed(2)} apart`);
+    }
+    const traffic = webTracks.createWebTraffic(l);
+    traffic.advance(60);
+    for (const m of traffic.pending().slice(0, 30)) {
+      const a = m.a.pts, mid = m.mid.pts, b = m.b.pts;
+      assert.ok(near(a[a.length - 2], a[a.length - 1], mid[0], mid[1], 1e-3) && near(mid[mid.length - 2], mid[mid.length - 1], b[0], b[1], 1e-3), "continuous through the hub");
+    }
+  });
+
+  test(`web ${name}: the ground frame fits its shader, and the field is the web's own traffic`, () => {
+    const traffic = webTracks.createWebTraffic(l);
     const t = 47.3;
-    const frame = webModel.frameAt(l, web.live(t), t);
+    const frame = webModel.groundFrame(l, traffic.live(t), t);
     assert.ok(frame.glow > 0 && frame.glow < 1);
     assert.equal(frame.events.length, 12);
     assert.equal(frame.ripples.length, webModel.RIPPLES);
-    const light = webLight.cellLight(l, frame);
+    assert.ok(frame.ripples.some((r) => r[1] > 0), "something is rippling");
     const [cols, rows] = l.grid;
-    assert.equal(light.length, cols * rows * 4);
-    for (const line of frame.lines) {
-      for (const [s, amp] of line.pulses) {
-        const x = web.live(t).find((y) => y.pts === line.pts);
-        if (s < 0 || s > x.length) continue;
-        const [px, py] = webModel.pointAt(x, s);
-        const i = (Math.min(rows - 1, Math.floor(py / (l.height / rows))) * cols + Math.min(cols - 1, Math.floor(px / (l.width / cols)))) * 4;
-        if (light[i + 3] < 0.5) continue; // under the copy the field yields
-        if (amp > 0) assert.ok(light[i] > 0.1, "teal where a sent pulse is");
-        else assert.ok(light[i + 1] > 0.1, "orange where a received pulse is");
-      }
-    }
+    assert.equal(webLight.cellLight(l, frame).length, cols * rows * 2);
     const u = webMod.webUniform(l, frame);
-    assert.equal(u.line_info.length, 6);
-    assert.equal(u.pts.length, 48);
-    assert.equal(u.pulses.length, 36);
     assert.equal(u.ripples.length, 8);
     assert.equal(u.clicks.length, 4);
     assert.equal(u.mask.length, 4);
     assert.equal(u.mask2.length, 4);
-    const rows2 = webLight.webRows(cols, rows);
-    assert.equal(rows2.length, rows);
-    assert.ok(rows2.every((r) => r.length === cols));
+    const text = webLight.webRows(cols, rows);
+    assert.equal(text.length, rows);
+    assert.ok(text.every((r) => r.length === cols));
+  });
+
+  test(`web ${name}: the tracks' light lands where the field and the overlay draw (same cover map)`, () => {
+    for (const [w, h] of [[1440, 900], [2560, 980], [768, 1000], [390, 860], [3000, 900]]) {
+      const v = viewMap(l, w, h, true);
+      const c = webModel.cover(l, w, h);
+      assert.ok(Math.abs(v.scale - c.k) < 1e-9 && Math.abs(v.off[0] - c.x) < 1e-9 && Math.abs(v.off[1] - c.y) < 1e-9);
+    }
   });
 }
+
+test("B draws its own design space: without cover the view is the identity", () => {
+  const v = viewMap({ width: 1200, height: 440 }, 2400, 880, false);
+  assert.deepEqual([v.scale, v.off[0], v.off[1], v.size[0], v.size[1]], [1, 0, 0, 1200, 440]);
+});
 
 test("B's hub lamp: rim flashes, neutral glow and ripples for every envelope", () => {
   const layout = wideLayout(WIDE);
@@ -321,9 +370,9 @@ test("B's hub lamp: rim flashes, neutral glow and ripples for every envelope", (
 
 test("the web starts, recolours and disposes on the mock adapter", async () => {
   const palette = { lane: [0, 0, 0], laneRaised: [0, 0, 0], laneLine: [0, 0, 0], laneInk: [1, 1, 1], laneMuted: [0.6, 0.6, 0.6], teal: [0.24, 0.72, 0.67], orange: [0.96, 0.65, 0.26] };
-  for (const layout of Object.values(webModel.WEB)) {
+  for (const band of Object.keys(webModel.WEB)) {
     const canvas = new MockCanvas();
-    const hero = await webMod.startWeb(canvas, { layout, palette });
+    const hero = await webMod.startWeb(canvas, { band, palette });
     await new Promise((r) => setTimeout(r, 40));
     hero.setPalette({ ...palette, laneInk: [0.9, 0.9, 0.9] });
     hero.setPaused(true);
@@ -335,34 +384,90 @@ test("the web starts, recolours and disposes on the mock adapter", async () => {
 
 /** Realistic (hero aspect, hero height) pairs per band, from the hero's min-height rules and the band queries. */
 const CASES = {
-  P: [0.75, 1.0, 1.3].flatMap((a) => [920, 960, 1000].map((h) => [a, h])),
-  M: [1.25, 1.6, 1.9].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.2, 980], [2.6, 980]]),
-  W: [1.75, 2.06, 2.4, 2.65].flatMap((a) => [760, 870, 980].map((h) => [a, h])),
+  P: [0.75, 1.1, 1.45].flatMap((a) => [920, 960, 1000].map((h) => [a, h])),
+  M: [1.38, 1.6, 1.95].flatMap((a) => [760, 870, 980].map((h) => [a, h])).concat([[2.3, 980], [2.6, 980]]),
+  W: [1.85, 2.06, 2.4, 2.65].flatMap((a) => [760, 870, 980].map((h) => [a, h])),
   tall: [0.42, 0.45, 0.5].flatMap((a) => [860, 940].map((h) => [a, h])),
 };
 const HEADER = 88;
 const STRIP = { P: 116, M: 116, W: 116, tall: 124 };
+const { CARD, PLACES } = await import("./web-places.ts");
+
+/** A place card's box in design units: its name above, one row per agent, names on the align side. */
+function cardBox(l, slot, pid) {
+  const card = CARD[l.variant];
+  const agents = PLACES[pid].agents.slice(0, card.rows);
+  const nameW = Math.max(...agents.map(([id]) => id.length)) * card.name * 0.6;
+  const titleW = pid.length * card.title * 0.6;
+  const start = slot.align === "start";
+  const x0 = start ? slot.x - 6 : Math.min(slot.x - 11 - nameW, slot.x + 5 - titleW);
+  const x1 = start ? Math.max(slot.x + 11 + nameW, slot.x - 5 + titleW) : slot.x + 6;
+  return [x0, slot.y - card.title * 0.8, x1, slot.y + card.first + (agents.length - 1) * card.row + card.name * 0.45];
+}
+const overlaps = (a, b, pad = 0) => a[0] < b[2] + pad && a[2] > b[0] - pad && a[1] < b[3] + pad && a[3] > b[1] - pad;
 
 for (const band of ["P", "M", "W", "tall"]) {
   const l = webModel.WEB[band];
-  test(`web ${band}: endpoints and the hub stay in safe zones of the real hero box`, () => {
+  const boxes = l.slots.filter((slot) => !slot.reach).flatMap((slot) => slot.places.map((pid) => ({ pid, slot, box: cardBox(l, slot, pid) })));
+  const size = band === "tall" ? 12 : 14;
+  const hubBox = [l.plate.x - 6, l.plate.y - 6, l.plate.x + l.plate.w + 6, l.plate.y + l.plate.h + size * 3.8];
+  const legendHalf = 10.5 * size * 0.9 * 0.6;
+  hubBox[0] = Math.min(hubBox[0], l.hub.cx - legendHalf);
+  hubBox[2] = Math.max(hubBox[2], l.hub.cx + legendHalf);
+
+  test(`web ${band}: place cards and the hub stay in safe zones of the real hero box`, () => {
     for (const [aspect, h] of CASES[band]) {
       const w = aspect * h;
       const m = webModel.cover(l, w, h);
       const px = (x, y) => [x * m.k + m.x, y * m.k + m.y];
-      for (const a of l.agents) {
-        const [x, y] = px(a.x, a.y);
-        assert.ok(x > 12 && x < w - 12, `${a.id} on screen at ${w.toFixed(0)}×${h}`);
-        assert.ok(y - 8 > HEADER && y + 8 < h - STRIP[band], `${a.id} clear of header and strip at ${w.toFixed(0)}×${h} (y ${y.toFixed(0)})`);
+      for (const { pid, box } of boxes) {
+        const [x0, y0] = px(box[0], box[1]);
+        const [x1, y1] = px(box[2], box[3]);
+        const at = `${pid} at ${w.toFixed(0)}×${h}`;
+        assert.ok(x0 > 8 && x1 < w - 8, `${at}: on screen (${x0.toFixed(0)}..${x1.toFixed(0)} of ${w.toFixed(0)})`);
+        assert.ok(y0 > HEADER && y1 < h - STRIP[band], `${at}: clear of header and strip (${y0.toFixed(0)}..${y1.toFixed(0)})`);
       }
-      const legend = px(l.hub.cx, l.plate.y + l.plate.h + (band === "tall" ? 12 : 14) * 3.6)[1];
-      assert.ok(legend < h - STRIP[band], `hub legend clear of the strip at ${w.toFixed(0)}×${h}`);
+      assert.ok(px(0, hubBox[3])[1] < h - STRIP[band], `hub legend clear of the strip at ${w.toFixed(0)}×${h}`);
     }
-    const c = l.copy;
-    const pad = 24 / 0.9;
-    for (const a of l.agents) assert.ok(a.x < c[0] - pad || a.x > c[2] + pad || a.y < c[1] - pad || a.y > c[3] + pad, `${a.id} clear of the copy`);
+  });
+
+  test(`web ${band}: cards keep clear of the copy, the hub and each other`, () => {
+    const copy = l.copy;
+    for (const { pid, box } of boxes) {
+      assert.ok(!overlaps(box, copy, 24 / 0.9), `${pid} clear of the copy`);
+      assert.ok(!overlaps(box, hubBox, 8), `${pid} clear of the hub and its labels`);
+    }
+    // Cards in the same slot take turns; cards in different slots must not touch.
+    for (const a of boxes) for (const b of boxes) if (a.slot !== b.slot) assert.ok(!overlaps(a.box, b.box, 6), `${a.pid} vs ${b.pid}`);
     assert.ok(l.plate.x > l.copy[2] || l.plate.y > l.copy[3], "the hub sits beside or below the copy");
   });
+
+  const reaches = l.slots.map((slot, i) => ({ slot, i })).filter((r) => r.slot.reach);
+  if (band === "M" || band === "W")
+    test(`web ${band}: three reaches leave the hub's upper left, behind the headline and off the left edge`, () => {
+      assert.equal(reaches.length, 3);
+      const t = webTracks.trackLayout(l);
+      const [x0, y0, x1, , head] = l.copy;
+      for (const { slot, i } of reaches) {
+        const m = t.machines[i];
+        assert.ok(Math.abs(m.entry[0] - l.plate.x) < 1e-6 && m.entry[1] < l.hub.cy && m.entry[1] > l.plate.y + l.plate.r - 2, `${slot.places[0]}: out of the plate's left face, upper half`);
+        for (const [aspect, h] of CASES[band]) {
+          const c = webModel.cover(l, aspect * h, h);
+          for (const p of [m.gate, ...m.agents.map((a) => [a.x, a.y])]) assert.ok(p[0] * c.k + c.x < -4, `${slot.places[0]}: gate and ports beyond the frame at ${aspect}×${h}`);
+        }
+        const trunk = webTracks.railPath(l, i, 0);
+        const pts = t.lanes[m.agents[0].id].toHub.pts;
+        let behind = 0;
+        for (let k = 0; k < pts.length; k += 2) {
+          const [x, y] = [pts[k], pts[k + 1]];
+          if (x > x0 && x < x1 && y > y0 && y < head) behind++;
+          if (x > x0 && x < x1) assert.ok(y < head + 4, `${slot.places[0]}: stays above the paragraph (y ${y.toFixed(0)} at x ${x.toFixed(0)})`);
+          for (const { pid, box } of boxes) assert.ok(!(x > box[0] - 12 && x < box[2] + 12 && y > box[1] - 12 && y < box[3] + 12), `${slot.places[0]} clear of ${pid}`);
+        }
+        assert.ok(behind > 20, `${slot.places[0]}: runs behind the headline`);
+        assert.ok(trunk.startsWith("M") && !trunk.includes("NaN"));
+      }
+    });
 }
 
 test("the field yields around the copy, with a smooth feather and no edge", () => {
@@ -376,10 +481,31 @@ test("the field yields around the copy, with a smooth feather and no edge", () =
     prev = v;
   }
   const l = webModel.WEB.M;
-  const lines = webModel.createWeb(l).live(POSTER_T);
-  const open = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [-1, -1, -1, -1] }));
-  const covered = webLight.cellLight(l, webModel.frameAt(l, lines, POSTER_T, { copy: [0, 0, l.width, l.height] }));
-  for (let i = 0; i < open.length; i += 4) for (let c = 0; c < 3; c++) assert.ok(covered[i + c] <= open[i + c] * webLight.YIELD.floor + 1e-6);
+  const msgs = webTracks.createWebTraffic(l).live(POSTER_T);
+  const clicks = webModel.clickRings([{ x: 900, y: 500, t: POSTER_T - 0.3 }], POSTER_T);
+  const open = webLight.cellLight(l, webModel.groundFrame(l, msgs, POSTER_T, { copy: [-1, -1, -1, -1], clicks }));
+  const covered = webLight.cellLight(l, webModel.groundFrame(l, msgs, POSTER_T, { copy: [-100, -100, l.width + 100, l.height + 100], clicks }));
+  assert.ok(open.some((v, i) => i % 2 === 0 && v > 0.1), "rings light the open field");
+  for (let i = 0; i < open.length; i += 2) assert.ok(covered[i] <= open[i] * webLight.CLICK_YIELD.floor * (1 + 1e-5) + 1e-6);
+  const hubOnly = (copy) => webLight.cellLight(l, webModel.groundFrame(l, msgs, POSTER_T, { copy }));
+  const hubOpen = hubOnly([-1, -1, -1, -1]);
+  const hubCovered = hubOnly([-100, -100, l.width + 100, l.height + 100]);
+  for (let i = 0; i < hubOpen.length; i += 2) assert.ok(hubCovered[i] <= hubOpen[i] * webLight.YIELD.floor * (1 + 1e-5) + 1e-6, "hub rings yield fully");
+});
+
+test("a click rings clearly anywhere on the field, beside the copy too; right behind it, dimmed but there", () => {
+  const l = webModel.WEB.M;
+  const at = (x, y, copy = l.copy) => {
+    const frame = webModel.groundFrame(l, [], 10, { copy, clicks: webModel.clickRings([{ x, y, t: 9.7 }], 10) });
+    const light = webLight.cellLight(l, frame);
+    let sum = 0;
+    for (let i = 0; i < light.length; i += 2) sum += light[i];
+    return sum;
+  };
+  const [x0, y0, x1, y1] = l.copy;
+  const away = at(1500, 750, [-1, -1, -1, -1]);
+  for (const [x, y] of [[x0 - 60, (y0 + y1) / 2], [(x0 + x1) / 2, y1 + 60], [x1 + 60, y0]]) assert.ok(at(x, y) > away * 0.6, `beside the copy at ${x}, ${y}`);
+  assert.ok(at((x0 + x1) / 2, (y0 + y1) / 2) > away * webLight.CLICK_YIELD.floor * 0.9, "inside the block: at least the click floor");
 });
 
 test("click rings: neutral, at most four, oldest dropped, gone in about 1.5 s", () => {
@@ -392,11 +518,12 @@ test("click rings: neutral, at most four, oldest dropped, gone in about 1.5 s", 
   assert.ok(webModel.clickRings([{ x: 0, y: 0, t: 0 }], 1.4)[0][3] < 0.07, "faded by 1.4 s");
   assert.equal(webModel.clickRings([{ x: 0, y: 0, t: 0 }], 1.6)[0][3], 0, "gone by 1.6 s");
   const l = webModel.WEB.W;
-  const frame = webModel.frameAt(l, [], 10, { copy: [-1, -1, -1, -1], clicks: webModel.clickRings([{ x: 1200, y: 600, t: 9.7 }], 10) });
+  const frame = webModel.groundFrame(l, [], 10, { copy: [-1, -1, -1, -1], clicks: webModel.clickRings([{ x: 1200, y: 600, t: 9.7 }], 10) });
   const light = webLight.cellLight(l, frame);
-  let sent = 0, recv = 0, neutral = 0;
-  for (let i = 0; i < light.length; i += 4) { sent += light[i]; recv += light[i + 1]; neutral += light[i + 2]; }
-  assert.ok(neutral > 1 && sent === 0 && recv === 0, "a click is neither sent nor received");
+  let neutral = 0;
+  for (let i = 0; i < light.length; i += 2) neutral += light[i];
+  assert.ok(neutral > 1, "a click rings through the ground (neutral: the tracks carry the colour)");
+  assert.equal(frame.events.filter((e) => e[2] < 99).length, 0, "and never flashes the hub");
 });
 
 test("cover mapping: client point → design → device pixel round-trips", () => {
@@ -409,4 +536,29 @@ test("cover mapping: client point → design → device pixel round-trips", () =
       assert.ok(Math.abs(ux * dev.k + dev.x - cx * dpr) < 1e-6 && Math.abs(uy * dev.k + dev.y - cy * dpr) < 1e-6);
     }
   }
+});
+
+// ---- lightweight: the external poster document, the line early-out, the pixel budget ----
+
+const { readFileSync } = await import("node:fs");
+const posterDoc = await import("./web-poster-svg.ts");
+
+test("posters/web.svg is up to date (run tools/bake-web.mjs after changing the web)", () => {
+  const committed = readFileSync(new URL("./posters/web.svg", import.meta.url), "utf8");
+  assert.equal(committed, posterDoc.posterSvg());
+  for (const id of ["field-wide", "field-tall", "hub-P", "hub-M", "hub-W", "hub-tall"]) assert.ok(committed.includes(`id="${id}"`), id);
+  for (const [band, l] of Object.entries(webModel.WEB))
+    l.slots.forEach((slot, i) => slot.places.forEach((_, j) => {
+      if (slot.reach) assert.ok(!committed.includes(`id="card-${band}-${i}-${j}"`), `card-${band}-${i}-${j}: a reach has no card`);
+      else assert.ok(committed.includes(`id="card-${band}-${i}-${j}"><text`), `card-${band}-${i}-${j}: text only (the label guard measures it)`);
+      assert.ok(committed.includes(`<path id="rail-${band}-${i}-${j}" d="M`), `rail-${band}-${i}-${j}`);
+    }));
+  assert.ok(!committed.includes("var(--"), "literal colours: an external document cannot see page variables");
+  for (const band of ["P", "M", "W", "tall"]) assert.ok(readFileSync(new URL(`./posters/web-trails-${band}.png`, import.meta.url)).length < 60_000, `web-trails-${band}.png stays small`);
+});
+
+test("the canvas keeps to its pixel budget", () => {
+  assert.equal(webMod.dprCap(1425, 900), 1.5);
+  assert.ok(Math.abs(webMod.dprCap(2545, 980) * webMod.dprCap(2545, 980) * 2545 * 980 - webMod.PIXEL_BUDGET) < 1);
+  assert.equal(webMod.dprCap(5000, 2000), 1);
 });

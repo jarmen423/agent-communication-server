@@ -1,10 +1,9 @@
-// The ASCII web, drawn: a still grid of protocol text across the whole hero
-// section (cover-mapped from the design space), each cell lit from its
-// web-cells texel: a quiet lane-muted texture, lifted toward ink along live
-// lines and ripples, and taking teal (sent) or orange (received) under a
-// pulse, where spaces step up a density ramp. Under the glass hub plate, the
-// lamp: a neutral (ink) glow that follows throughput and a rim flash in each
-// envelope's own colour. Mirrors cellLook()/rampAt() in web-light.ts.
+// The ASCII ground, drawn: a still grid of protocol text across the whole
+// hero section (cover-mapped from the design space), each cell lit from its
+// web-cells texel: a quiet lane-muted texture, lifted toward ink where a
+// ring passes. Under the glass hub plate, the lamp: a neutral (ink) glow
+// that follows throughput and a rim flash in each envelope's own colour.
+// The tracks (web-trails.wgsl) are drawn over this in the same pass.
 
 struct Field {
   grid: vec2f,       // columns, rows
@@ -17,10 +16,7 @@ struct Field {
   ink: vec4f,
   teal: vec4f,
   orange: vec4f,
-  look: vec4f,       // base alpha, lift alpha, gain, lit scale
-  look2: vec4f,      // hue speed, ink mix
-  ramp_at: vec4f,
-  ramp: vec4f,       // glyph indices of the ramp steps
+  look: vec4f,       // base alpha, lift alpha, ink mix
 }
 
 struct Lamp {
@@ -39,26 +35,14 @@ struct Lamp {
 fn glyph(u: vec2f) -> vec4f {
   let cf = u / field.cell;
   let cell = clamp(vec2i(floor(cf)), vec2i(0), vec2i(field.grid) - vec2i(1));
-  let light = textureLoad(cells, cell, 0).rgb;
-  let es = 1.0 - exp(-field.look.z * light.r);
-  let er = 1.0 - exp(-field.look.z * light.g);
-  let a = 1.0 - (1.0 - es) * (1.0 - er);
-  let n = 1.0 - exp(-light.b);
-  let quiet = field.look.x + field.look.y * n;
-  let alpha = quiet + (1.0 - quiet) * min(1.0, a * field.look.w);
-  var g = textureLoad(text, cell, 0).r;
-  if (g == 0u) {
-    for (var i = 0; i < 4; i++) {
-      if (a >= field.ramp_at[i]) { g = u32(field.ramp[i]); }
-    }
-  }
+  let n = 1.0 - exp(-textureLoad(cells, cell, 0).r);
+  let alpha = field.look.x + field.look.y * n;
+  let g = textureLoad(text, cell, 0).r;
   let cols = u32(field.atlas_cols);
   let slot = vec2f(f32(g % cols), f32(g / cols));
   let uv = (slot * field.slot + fract(cf) * field.cell * field.map.x) / vec2f(textureDimensions(atlas));
   let cov = textureSampleLevel(atlas, samp, uv, 0.0).r;
-  let quiet_rgb = mix(field.muted.rgb, field.ink.rgb, n * field.look2.y);
-  let hue = mix(field.teal.rgb, field.orange.rgb, er / max(es + er, 1e-5));
-  let rgb = mix(quiet_rgb, hue, min(1.0, a * field.look2.x));
+  let rgb = mix(field.muted.rgb, field.ink.rgb, n * field.look.z);
   return vec4f(rgb * alpha * cov, alpha * cov);
 }
 

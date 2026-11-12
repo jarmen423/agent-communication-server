@@ -1,7 +1,7 @@
 // The ASCII web hero: a full-bleed copy of components/hero/hero.tsx (shared,
 // read-only). Same copy, CTAs and hub-watch log; the lane card is gone. The
-// section's ground is the web (poster SVG → live canvas, overlay with the
-// hub on top). No box behind the copy: the field yields around it (the copy
+// section's ground is the web (poster: SVG field + baked trails → live
+// canvas; overlay with the hub, the places and their rails on top). No box behind the copy: the field yields around it (the copy
 // rect is measured into the light) and the text wears cartographic halos.
 // Copy: pill, headline, then one row with the paragraph beside the buttons.
 import Link from "next/link";
@@ -9,7 +9,7 @@ import { HERO_LOG } from "@/content/home";
 import { INVITE_REQUEST_URL } from "@/content/site";
 import { WEB } from "./web-model";
 import { WebLive, WebPause, WebSection } from "./web-live";
-import { WebField, WebLit, WebOverlay } from "./web-svg";
+import { WebOverlay, WebPoster, WebTrails } from "./web-svg";
 import css from "./web.module.css";
 
 const BANDS = ["P", "M", "W"] as const;
@@ -24,17 +24,18 @@ export function WebHero() {
             variant="wide"
             poster={
               <>
-                <WebField variant="wide" className={css.fill} />
+                <WebPoster variant="wide" layer="field" className={css.fill} />
                 {BANDS.map((b) => (
                   <div key={b} className={bandClass[b]}>
-                    <WebLit layout={WEB[b]} className={css.fill} />
+                    <WebPoster variant="wide" layer={b} className={css.fill} />
                   </div>
                 ))}
+                <WebTrails variant="wide" className={css.cover} />
               </>
             }
           />
           {BANDS.map((b) => (
-            <div key={b} className={bandClass[b]}>
+            <div key={b} className={bandClass[b]} data-band={b}>
               <WebOverlay layout={WEB[b]} className={css.fill} />
             </div>
           ))}
@@ -44,12 +45,15 @@ export function WebHero() {
             variant="tall"
             poster={
               <>
-                <WebField variant="tall" className={css.fill} />
-                <WebLit layout={WEB.tall} className={css.fill} />
+                <WebPoster variant="tall" layer="field" className={css.fill} />
+                <WebPoster variant="tall" layer="tall" className={css.fill} />
+                <WebTrails variant="tall" className={css.cover} />
               </>
             }
           />
-          <WebOverlay layout={WEB.tall} className={css.fill} />
+          <div className={css.fill} data-band="tall">
+            <WebOverlay layout={WEB.tall} className={css.fill} />
+          </div>
         </div>
       </div>
 

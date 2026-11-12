@@ -4,6 +4,7 @@
 // `started` and `progress`), then exactly one brighter, longer orange result.
 // Every streak on screen is one of these messages between two named agents.
 import { crossing, type Agent, type Lane, type Layout } from "./layout";
+import { rng } from "./prng";
 
 export type Kind = "task" | "status" | "event" | "result";
 export type Msg = {
@@ -37,23 +38,14 @@ export const POSTER_T = 30;
 export const STRIDE = 12;
 
 const HUB_DELAY = 0.16;
-const STYLE = {
+export const STYLE = {
   task: { speed: 250, intensity: 1, sigma: 1, dash: 0 },
   status: { speed: 340, intensity: 0.6, sigma: 0.75, dash: 12 },
   event: { speed: 340, intensity: 0.6, sigma: 0.75, dash: 12 },
   result: { speed: 210, intensity: 1.7, sigma: 1.25, dash: 0 },
 } as const;
 
-export function rng(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+export { rng } from "./prng";
 
 const ORCH_WEIGHT: Record<string, number> = { me: 0.42, "claude-web-1": 0.24, "codex-2": 0.2, "claude-web-2": 0.14 };
 const PROGRESS = ["progress · reading files", "progress · cargo test", "progress · editing", "progress · npm run lint", "progress · writing summary"];
@@ -205,7 +197,7 @@ export function emit(m: Msg, ta: number, tb: number, out: Deposits, layout: Layo
 }
 
 /** Everything still visible at `t`, in one batch (the poster, and the first live frame). */
-export function exposure(traffic: ReturnType<typeof createTraffic>, layout: Layout, t: number, out: Deposits) {
+export function exposure(traffic: { live(t: number): Msg[] }, layout: Layout, t: number, out: Deposits) {
   out.reset();
   for (const m of traffic.live(t)) emit(m, t - HISTORY, t, out, layout);
   return out;

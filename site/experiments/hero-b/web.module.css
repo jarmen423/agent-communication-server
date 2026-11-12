@@ -46,7 +46,7 @@
   /* Near-portrait (band P): stacked copy, hub and strip need a taller hero; it may scroll. */
   .hero { padding-top: calc(64px + 72px); min-height: clamp(920px, 100svh, 1000px); }
 }
-@media (min-width: 768px) and (min-aspect-ratio: 13/10) {
+@media (min-width: 768px) and (min-aspect-ratio: 29/20) {
   .hero { min-height: clamp(760px, 100svh, 980px); }
 }
 
@@ -58,6 +58,7 @@
   .tall { display: none; }
 }
 .fill { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+.cover { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; }
 
 .stage { position: absolute; inset: 0; }
 .stagePoster, .stageCanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -68,7 +69,7 @@
 
 /*
  * The copy. No box behind it: the field yields around the copy block (its
- * measured rect dims lines and pulses in the light itself), and the text
+ * measured rect dims the tracks and rings in the light itself), and the text
  * wears cartographic halos in the ground colour, like the agent labels.
  */
 .copy { position: relative; z-index: 1; pointer-events: none; }
@@ -81,6 +82,13 @@
     0 0 14px color-mix(in oklch, var(--paper) 85%, transparent),
     0 0 32px color-mix(in oklch, var(--paper) 60%, transparent);
 }
+/* Geist Serif headline (web-font.ts), as the integration branch's display trial sets it. */
+.copyBlock :global(.hero-title) {
+  font-family: var(--font-geist-serif-hero), "Times New Roman", serif;
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 1;
+}
 .row { display: grid; gap: 24px; margin-top: 28px; }
 .row :global(.hero-sub) { max-width: 46ch; }
 .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -91,11 +99,11 @@
 /* Aspect bands: these query strings match BAND_QUERY in web-model.ts (the live layer uses matchMedia on them). */
 .bandP, .bandM, .bandW { position: absolute; inset: 0; }
 .bandM, .bandW { display: none; }
-@media (min-aspect-ratio: 13/10) {
+@media (min-aspect-ratio: 29/20) {
   .bandP { display: none; }
   .bandM { display: block; }
 }
-@media (min-aspect-ratio: 19/10) {
+@media (min-aspect-ratio: 39/20) {
   .bandM { display: none; }
   .bandW { display: block; }
 }
