@@ -9,7 +9,7 @@ import { createWebTraffic } from "./web-tracks";
  * clicks) lifts a character's alpha, the weights of each, and how far lifted
  * characters move from muted toward ink.
  */
-export const WEB_LOOK = { base: 0.06, liftAlpha: 0.24, ripple: 0.32, click: 1.4, torch: 0.4, ink: 0.9 };
+export const WEB_LOOK = { base: 0.06, liftAlpha: 0.24, ripple: 0.32, click: 1.4, torch: 1.0, ink: 0.9 };
 /** Around the copy the field yields: tracks, rings and the lamp fall to `floor` (the quiet texture stays). */
 export const YIELD = { floor: 0.15, radius: 40 };
 /**

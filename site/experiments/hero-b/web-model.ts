@@ -120,7 +120,7 @@ export const CLICKS = 4;
 export const FEATHER = 170;
 const CLICK_LIFE = 1.5;
 /** The pointer torch: radius (design units) and how fast it eases after the pointer and fades in / out (per second). */
-export const TORCH = { radius: 150, follow: 14, fade: 5 };
+export const TORCH = { radius: 180, follow: 14, fade: 5 };
 
 /** A visitor's click: one neutral ring out from the pointer, a little stronger than a hub ripple. */
 export function clickRings(clicks: readonly { x: number; y: number; t: number }[], t: number): WebFrame["clicks"] {
