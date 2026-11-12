@@ -23,6 +23,8 @@ import { createWebTraffic, railPath } from "./web-tracks";
 const INK = { muted: "#a3a9b0", ink: "#eef0ea", line: "#384049", paper: "#101317" };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** The coloured-logo variant (bake with HERO_ICONS=color); the committed poster is single-colour. */
+const COLOURED = typeof process !== "undefined" && process.env?.HERO_ICONS === "color";
 /** IBM Plex Mono advance, em. */
 const MONO_ADVANCE = 0.6;
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -75,15 +77,16 @@ function cards(l: WebLayout) {
         const rows = PLACES[pid].agents.slice(0, card.rows).map(([id, role], k) => {
           const y = slot.y + card.first + k * card.row;
           const tone = role === "orchestrator" ? INK.ink : INK.muted;
-          // The icon sits next to the port, the name beyond it.
-          const ix = r2(start ? slot.x + 11 : slot.x - 11 - s);
+          // Port, name, then the maker's mark beyond the name (mono type: the name's width is known).
+          const tx = r2(start ? slot.x + 11 : slot.x - 11);
+          const w = id.length * MONO_ADVANCE * card.name;
+          const ix = r2(start ? slot.x + 11 + w + gap : slot.x - 11 - w - gap - s);
           const iy = r2(y - s / 2);
-          const tx = r2(start ? slot.x + 11 + s + gap : slot.x - 11 - s - gap);
           return (
             `<circle cx="${slot.x}" cy="${y}" r="${r}" fill="${INK.paper}" stroke="${tone}" stroke-width="1.5"/>` +
+            `<text x="${tx}" y="${r2(y + card.name * 0.34)}" text-anchor="${anchor}" font-size="${card.name}" fill="${INK.muted}" ${halo}>${esc(id)}</text>` +
             plate(ix, iy, s) +
-            iconUse(agentIcon(id), ix, iy, s, tone) +
-            `<text x="${tx}" y="${r2(y + card.name * 0.34)}" text-anchor="${anchor}" font-size="${card.name}" fill="${INK.muted}" ${halo}>${esc(id)}</text>`
+            iconUse(agentIcon(id), ix, iy, s, COLOURED ? INK.ink : tone, COLOURED)
           );
         });
         // The place's icon reads before its name on both sides (mono type: the name's width is known).
