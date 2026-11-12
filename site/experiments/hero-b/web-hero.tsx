@@ -60,11 +60,11 @@ export function WebHero() {
       <div className={`container-page ${css.copy}`}>
         <div className={css.copyBlock} data-web-copy>
           <h1 id="hero-title" className="hero-title">
-            Many agents,
+            Agent agnostic,
             <br />
-            many machines,
+            location agnostic,
             <br />
-            one conversation.
+            agent coordination.
           </h1>
           <div className={css.row}>
             <p className="hero-sub">
