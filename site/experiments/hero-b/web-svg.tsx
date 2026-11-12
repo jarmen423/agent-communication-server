@@ -5,9 +5,9 @@
 //    few elements.
 //  - WebTrails: the tracks' long exposure at the poster moment, a baked PNG
 //    per band; only the band on screen is fetched.
-//  - WebOverlay: the hub (glass plate and the lens of the mark), agent ports,
+//  - WebOverlay: the hub (glass plate and the lens of the mark, hub-center.tsx), agent ports,
 //    a few haloed names and direction in words, per band.
-import { lensPath } from "@/components/hero/geometry";
+import { HubCenter } from "./hub-center";
 import { WEB, WEB_POSTER_T, type Band, type WebLayout } from "./web-model";
 import { placeAlpha } from "./web-places";
 import poster from "./posters/web.svg";
@@ -78,8 +78,7 @@ export function WebOverlay({ layout: l, className }: { layout: WebLayout; classN
       {l.slots.map((slot, i) =>
         slot.places.map((pid, j) => <use key={pid} data-rail={`${i}:${j}`} href={`${DOC.src}#rail-${l.band}-${i}-${j}`} opacity={alphaAt(i, j)} />),
       )}
-      <rect x={plate.x} y={plate.y} width={plate.w} height={plate.h} rx={plate.r} fill="var(--lane-raised)" fillOpacity={0.45} stroke="var(--lane-line)" strokeWidth={1.5} />
-      <path d={lensPath(hub.cx, hub.cy, hub.size)} fill="var(--lane-ink)" />
+      <HubCenter hub={hub} plate={plate} />
       <g className="dg-mono">
         {l.slots.map((slot, i) =>
           (slot.reach ? [] : slot.places).map((pid, j) => <use key={pid} data-place={`${i}:${j}`} href={`${DOC.src}#card-${l.band}-${i}-${j}`} opacity={alphaAt(i, j)} />),
